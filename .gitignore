@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+.vercel/
+*.log
+.idea/
+.DS_Store
+Thumbs.db
+dev_stdout.txt
+dev_stderr.txt

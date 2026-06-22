@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd C:\\\\Users\\\\Sergio\\\\Desktop\\\\wb-copilot; $proc = Start-Process -FilePath \"npx\" -ArgumentList \"tsx src/dev.ts\" -PassThru -RedirectStandardOutput \"dev_stdout.txt\" -RedirectStandardError \"dev_stderr.txt\" -NoNewWindow; Start-Sleep -Seconds 5; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Get-Content dev_stdout.txt; \"---STDERR---\"; Get-Content dev_stderr.txt)",
+      "Bash(timeout 8 npx tsx src/dev.ts)",
+      "Bash(npx tsc *)"
+    ]
+  }
+}
