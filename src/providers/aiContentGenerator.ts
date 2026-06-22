@@ -112,7 +112,7 @@ async function callModel(model: string, prompt: string, apiKey: string): Promise
       },
       body: JSON.stringify({
         model,
-        max_tokens: 2000,
+        max_tokens: 4000,
         temperature: 0.7,
         messages: [
           {
