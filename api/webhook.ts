@@ -3,6 +3,8 @@ import { bot } from '../src/bot';
 
 export const config = { maxDuration: 60 };
 
+const processed = new Set<number>();
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).end();
@@ -14,6 +16,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (incoming !== secret) {
       return res.status(403).end();
     }
+  }
+
+  // Дедупликация: Telegram может повторить запрос при таймауте
+  const updateId = req.body?.update_id;
+  if (updateId && processed.has(updateId)) {
+    return res.status(200).json({ ok: true, duplicate: true });
+  }
+  if (updateId) {
+    processed.add(updateId);
+    // Чистим старые ID (serverless может переиспользовать инстанс)
+    if (processed.size > 1000) processed.clear();
   }
 
   try {
