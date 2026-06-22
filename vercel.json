@@ -9,11 +9,5 @@
     "api/send-results.ts": {
       "maxDuration": 30
     }
-  },
-  "crons": [
-    {
-      "path": "/api/send-results",
-      "schedule": "* * * * *"
-    }
-  ]
+  }
 }
