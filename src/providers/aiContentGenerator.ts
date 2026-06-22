@@ -10,6 +10,7 @@ const MODELS = [
 const AiResponseSchema = z.object({
   titleRu: z.string().min(10).max(200),
   description: z.string().min(100).max(3000),
+  bullets: z.array(z.string()).min(3).max(5),
   keywords: z.array(z.string()).min(1).max(10),
   characteristics: z.record(z.string()),
 });
@@ -17,7 +18,8 @@ const AiResponseSchema = z.object({
 function buildFallback(req: AiContentRequest): AiContentResult {
   return {
     titleRu: req.titleCn,
-    description: `Товар с 1688. Цена: ${req.priceYuan} юаней. MOQ: ${req.moq} шт. Вес: ${req.weightKg} кг.`,
+    description: `Товар с 1688. Цена: ${req.priceYuan} юаней. Мин. заказ: ${req.moq} шт. Вес: ${req.weightKg} кг.`,
+    bullets: [],
     keywords: [],
     characteristics: {
       'Цена поставщика': `${req.priceYuan} юаней`,
@@ -29,24 +31,49 @@ function buildFallback(req: AiContentRequest): AiContentResult {
 }
 
 function buildPrompt(req: AiContentRequest): string {
+  let productInfo = `- Название (кит.): ${req.titleCn}`;
+  if (req.titleEn) productInfo += `\n- Название (англ.): ${req.titleEn}`;
+  if (req.categoryName) productInfo += `\n- Категория: ${req.categoryName}`;
+  productInfo += `\n- Цена: ${req.priceYuan} юаней`;
+  productInfo += `\n- Минимальный заказ: ${req.moq} шт.`;
+  productInfo += `\n- Вес: ${req.weightKg || 'не указан'} кг`;
+  productInfo += `\n- Поставщик: ${req.supplierName}${req.supplierRating ? ` (рейтинг: ${req.supplierRating})` : ''}`;
+
+  if (req.attributes?.length) {
+    productInfo += '\n\nХарактеристики от поставщика:';
+    req.attributes.slice(0, 20).forEach((a) => {
+      productInfo += `\n- ${a.name}: ${a.value}`;
+    });
+  }
+
+  if (req.description) {
+    productInfo += `\n\nОписание от поставщика (кит./англ.):\n${req.description.slice(0, 500)}`;
+  }
+
   return `Ты эксперт по маркетплейсу Wildberries. Создай SEO-оптимизированный контент для карточки товара.
 
-Данные товара с 1688.com:
-- Название (кит.): ${req.titleCn}
-- Цена закупки: ${req.priceYuan} юаней
-- Минимальный заказ: ${req.moq} шт.
-- Вес: ${req.weightKg} кг
-- Поставщик: ${req.supplierName}${req.supplierRating ? ` (рейтинг: ${req.supplierRating})` : ''}
+Данные товара:
+${productInfo}
+
+Используй характеристики от поставщика для заполнения полей. Переведи и адаптируй для российского рынка.
 
 Верни ТОЛЬКО JSON (без Markdown, без пояснений):
 {
-  "titleRu": "Название для WB до 100 символов с ключевыми словами",
-  "description": "SEO-описание 1000-2000 символов с ключевыми фразами для Wildberries",
-  "keywords": ["фраза 1", "фраза 2", "до 10 поисковых запросов"],
+  "titleRu": "Коммерческое название для WB до 200 символов с ключевыми словами",
+  "description": "SEO-описание 1000-2000 символов для карточки Wildberries",
+  "bullets": [
+    "Ключевое преимущество 1 — короткий тезис для инфографики",
+    "Ключевое преимущество 2",
+    "Ключевое преимущество 3",
+    "Ключевое преимущество 4",
+    "Ключевое преимущество 5"
+  ],
+  "keywords": ["поисковая фраза 1", "фраза 2", "до 10 запросов"],
   "characteristics": {
     "Материал": "...",
     "Размер": "...",
-    "другие важные характеристики": "..."
+    "Цвет": "...",
+    "другие характеристики для карточки WB": "..."
   }
 }`;
 }

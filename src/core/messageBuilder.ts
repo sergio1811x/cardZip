@@ -1,66 +1,105 @@
 import { Markup } from 'telegraf';
 import type { ProductWithContent, SubscriptionStatus } from '../types';
 
-function formatPrice(n: number): string {
+const FALLBACK_RATE = 11.8;
+
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fP(n: number): string {
   return n.toLocaleString('ru-RU') + ' ₽';
 }
 
-/**
- * Сообщение 1: аналитика + юнит-экономика
- */
-export function buildMessage1(product: ProductWithContent): string {
-  const { wbData, economics } = product;
-  const lines: string[] = [];
-
-  lines.push(`📦 <b>${escHtml(product.titleRu)}</b>`);
-  lines.push('');
-
-  // Данные поставщика
-  lines.push('🏭 <b>Поставщик (1688)</b>');
-  lines.push(`Название (кит.): ${escHtml(product.titleCn)}`);
-  lines.push(`Цена: <b>${product.priceYuan} ¥</b>`);
-  lines.push(`MOQ: ${product.moq} шт.`);
-  lines.push(`Вес: ${product.weightKg} кг`);
-  if (product.supplierName) lines.push(`Поставщик: ${escHtml(product.supplierName)}`);
-  if (product.supplierRating) lines.push(`Рейтинг: ${product.supplierRating}/5`);
-  lines.push('');
-  lines.push('⚠️ <i>Размерная сетка может отличаться от российской. Уточняй у поставщика.</i>');
-  lines.push('');
-
-  // WB статистика
-  if (wbData) {
-    lines.push('📊 <b>Wildberries — похожие товары</b>');
-    lines.push(`Средняя цена: <b>${formatPrice(wbData.avgPrice)}</b>`);
-    lines.push(`Диапазон: ${formatPrice(wbData.minPrice)} — ${formatPrice(wbData.maxPrice)}`);
-    lines.push(`Карточек в выдаче: ${wbData.totalCards.toLocaleString('ru-RU')}`);
-    if (wbData.topExamples.length) {
-      lines.push('');
-      lines.push('Топ примеры:');
-      wbData.topExamples.forEach((ex, i) => {
-        lines.push(`${i + 1}. <a href="${ex.url}">${escHtml(ex.title.slice(0, 50))}</a> — ${formatPrice(ex.price)}`);
-      });
-    }
-  } else {
-    lines.push('📊 <i>Данные WB временно недоступны</i>');
-  }
-  lines.push('');
-
-  // Юнит-экономика
-  lines.push('💰 <b>Предварительная юнит-экономика</b>');
-  lines.push(`Себестоимость в РФ: <b>${formatPrice(economics.costRub)}</b>`);
-  lines.push(`Ср. цена продажи: <b>${formatPrice(economics.avgSaleRub)}</b>`);
-  const profit = economics.grossProfitRub;
-  const profitStr = formatPrice(Math.abs(profit));
-  lines.push(`Валовая прибыль: <b>${profit >= 0 ? '+' : '−'}${profitStr}</b>`);
-  lines.push('');
-  lines.push(`<i>${escHtml(economics.disclaimer)}</i>`);
-
-  return lines.join('\n');
+function fN(n: number): string {
+  return n.toLocaleString('ru-RU');
 }
 
-/**
- * Сообщение 3: счётчик + кнопки
- */
+export function buildMessage1(product: ProductWithContent): string {
+  const { wbData, economics, verdict } = product;
+  const L: string[] = [];
+  const rate = isFinite(economics.yuanToRub) && economics.yuanToRub > 0 ? economics.yuanToRub : FALLBACK_RATE;
+
+  // ─── Заголовок ─────────────────────────────────────────────────────────────
+  L.push(`📦 <b>${esc(product.titleRu)}</b>`);
+  L.push('');
+
+  // ─── Вердикт ───────────────────────────────────────────────────────────────
+  L.push(`<b>${verdict.label}</b>`);
+  verdict.reasons.forEach((r) => L.push(`• ${r}`));
+  L.push('');
+
+  // ─── Фабрика ───────────────────────────────────────────────────────────────
+  const pName = product.platform === '1688' ? '1688' : product.platform === 'taobao' ? 'Taobao' : 'Tmall';
+  L.push(`🏭 <b>Фабрика ${pName}</b>`);
+  if (product.supplierName) L.push(`• ${esc(product.supplierName)}`);
+  if (product.supplierType) {
+    const t = { factory: '🏭 Фабрика', merchant: '🏪 Торговая компания', seller: '👤 Продавец' };
+    L.push(`• Тип: ${t[product.supplierType]}`);
+  }
+  if (product.sold) L.push(`• Заказов: ${fN(product.sold)}+`);
+  if (product.supplierRating) L.push(`• Рейтинг: ${product.supplierRating}/5`);
+
+  // extra_info бейджи
+  const badges: string[] = [];
+  if (product.supplierExtra?.dropshipping) badges.push('дропшиппинг');
+  if (product.supplierExtra?.freeReturn7d) badges.push('возврат 7 дней');
+  if (product.supplierExtra?.selectedSource) badges.push('отобранный источник');
+  if (badges.length) L.push(`• ${badges.join(' | ')}`);
+  L.push('');
+
+  // ─── Закупка ───────────────────────────────────────────────────────────────
+  L.push('📦 <b>Закупка</b>');
+  const priceRub = Math.round(product.priceYuan * rate);
+  L.push(`Цена: <b>${product.priceYuan} ¥</b> (~${fP(priceRub)})`);
+
+  if (product.priceRange?.length) {
+    const valid = product.priceRange.filter((r) => r.minQty > 0);
+    if (valid.length) {
+      const ranges = valid.slice(0, 3).map((r) => `от ${r.minQty} шт. → ${r.price} ¥`);
+      L.push(`Опт: ${ranges.join(' | ')}`);
+    }
+  }
+
+  L.push(`Мин. заказ: ${product.moq} шт.`);
+  L.push(`Вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : 'лёгкий товар (до 0.1 кг)'}`);
+  if (product.stock) L.push(`На складе: ${fN(product.stock)} шт.`);
+  L.push('');
+
+  L.push('⚠️ <i>Размерная сетка поставщика отличается от РФ. Уточняйте таблицу размеров у фабрики перед закупкой.</i>');
+  L.push('');
+
+  // ─── WB аналитика ─────────────────────────────────────────────────────────
+  if (wbData) {
+    L.push('🔍 <b>Рынок Wildberries</b>');
+    L.push(`Найдено карточек: <b>${fN(wbData.totalCards)}</b>`);
+    L.push(`Средняя цена: <b>${fP(wbData.avgPrice)}</b>`);
+    L.push(`Диапазон: ${fP(wbData.minPrice)} — ${fP(wbData.maxPrice)}`);
+    L.push('');
+    if (wbData.topExamples.length) {
+      L.push('Топ похожих:');
+      wbData.topExamples.forEach((ex) => {
+        L.push(`• <a href="${ex.url}">${fP(ex.price)}</a>`);
+      });
+      L.push('');
+    }
+  } else {
+    L.push('🔍 <i>Данные WB временно недоступны</i>');
+    L.push('');
+  }
+
+  // ─── Юнит-экономика ───────────────────────────────────────────────────────
+  L.push('📊 <b>Предварительная экономика</b>');
+  L.push(`Себестоимость в РФ: ~<b>${fP(economics.costRub)}</b>`);
+  L.push(`Средняя цена продажи: ~<b>${fP(economics.avgSaleRub)}</b>`);
+  const p = economics.grossProfitRub;
+  L.push(`Потенциальная валовая прибыль: <b>${p >= 0 ? '≈+' : '≈−'}${fP(Math.abs(p))}</b>`);
+  L.push('');
+  L.push(`<i>${esc(economics.disclaimer)}</i>`);
+
+  return L.join('\n');
+}
+
 export function buildMessage3(status: SubscriptionStatus): {
   text: string;
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
@@ -70,25 +109,20 @@ export function buildMessage3(status: SubscriptionStatus): {
   if (status.plan === 'free') {
     const remaining = status.generationsLimit - status.generationsUsed;
     text = remaining > 0
-      ? `🎁 Осталось бесплатных генераций: <b>${remaining}</b> из ${status.generationsLimit}`
-      : `❌ Бесплатные генерации исчерпаны`;
+      ? `⚠️ Осталось: <b>${remaining} из ${status.generationsLimit}</b> бесплатных генераций.`
+      : '❌ Бесплатные генерации исчерпаны.';
+    text += '\n\n❓ Хотите проверить ещё один товар?';
   } else {
     text = `✅ <b>${status.plan === 'seller' ? 'Seller' : 'Business'}</b> подписка активна`;
-    if (status.activeUntil) {
-      const until = status.activeUntil.toLocaleDateString('ru-RU');
-      text += ` до ${until}`;
-    }
+    if (status.activeUntil) text += ` до ${status.activeUntil.toLocaleDateString('ru-RU')}`;
+    text += '\n\n❓ Хотите проверить ещё один товар?';
   }
 
-  const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('🔍 Проверить другой товар', 'new_search')],
-    ...(status.plan === 'free' ? [[Markup.button.callback('🚀 Снять лимиты', 'upgrade')]] : []),
-    [Markup.button.callback('📋 Последний товар /last', 'last')],
-  ]);
+  const buttons = [
+    [Markup.button.callback('🔄 Да, отправить ссылку', 'new_search')],
+    ...(status.plan === 'free' ? [[Markup.button.callback('🔥 Снять лимиты', 'upgrade')]] : []),
+    [Markup.button.callback('📋 Последний анализ', 'last')],
+  ];
 
-  return { text, keyboard };
-}
-
-function escHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return { text, keyboard: Markup.inlineKeyboard(buttons) };
 }

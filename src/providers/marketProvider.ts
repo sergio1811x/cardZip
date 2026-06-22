@@ -21,7 +21,16 @@ interface WbSearchResponse {
 async function searchSimilar(query: string): Promise<WbSearchResult | null> {
   if (!query.trim()) return null;
 
-  const encoded = encodeURIComponent(query.slice(0, 100));
+  // Берём первые 5 значимых слов для поиска — длинные названия дают 0 результатов
+  const shortQuery = query
+    .replace(/['"«»]/g, '')
+    .split(/\s+/)
+    .filter((w) => w.length > 2)
+    .slice(0, 5)
+    .join(' ');
+
+  console.log(`[wb] Поиск: "${shortQuery}"`);
+  const encoded = encodeURIComponent(shortQuery);
   const url = `https://search.wb.ru/exactmatch/ru/common/v9/search?query=${encoded}&resultset=catalog&limit=20&sort=popular&dest=-1257786`;
 
   let res: Response;
@@ -51,6 +60,7 @@ async function searchSimilar(query: string): Promise<WbSearchResult | null> {
   }
 
   const products = data.data?.products ?? [];
+  console.log(`[wb] Найдено: ${products.length} товаров, total: ${data.data?.total ?? '?'}`);
   if (!products.length) return null;
 
   const prices = products.map((p) => p.salePriceU / 100);

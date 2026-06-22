@@ -77,6 +77,7 @@ interface ElimResponse {
   mp_id?: string;
   title?: string;
   titleEn?: string;
+  description?: string;
   price?: number;
   price_range?: Array<{ min_quantity?: number; max_quantity?: number; price?: number }>;
   promotion_price?: number;
@@ -85,11 +86,14 @@ interface ElimResponse {
   shop_name?: string;
   shop_id?: string;
   img_urls?: string[];
-  seller_type?: string;
+  seller_type?: 'factory' | 'merchant' | 'seller';
   level?: number;
   sold?: number;
+  category_name?: string;
   attributes?: Array<{ name?: string; value?: string }>;
+  skus?: Array<{ name?: string; price?: number; quantity?: number; pic_url?: string }>;
   shipping_info?: Array<{ weight?: number }>;
+  extra_info?: Array<Record<string, unknown>>;
   code?: number;
   message?: string;
 }
@@ -116,34 +120,48 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
   const apiKey = process.env.ELIM_API_KEY;
   if (!apiKey) throw new Error('ELIM_API_KEY не задан');
 
-  let res: Response;
-  try {
-    res = await fetch('https://openapi.elim.asia/v1/products/find', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        id: productId,
-        platform: toElimPlatform(platform),
-        lang: 'en',
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch {
-    throw new AppError(
-      'PROVIDER_DOWN',
-      `Elim таймаут: ${platform}/${productId}`,
-      '⏱ Сервис не отвечает. Попробуй через 1–2 минуты.'
-    );
+  const doFetch = () => fetch('https://openapi.elim.asia/v1/products/find', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      id: productId,
+      platform: toElimPlatform(platform),
+      lang: 'en',
+    }),
+    signal: AbortSignal.timeout(120_000),
+  });
+
+  const MAX_RETRIES = 2;
+  let res: Response | undefined;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      res = await doFetch();
+      break;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[elim] Попытка ${attempt}/${MAX_RETRIES} не удалась: ${msg}`);
+      if (attempt === MAX_RETRIES) {
+        throw new AppError(
+          'PROVIDER_DOWN',
+          `Elim недоступен после ${MAX_RETRIES} попыток: ${platform}/${productId}`,
+          '⏱ Сервис не отвечает. Попробуйте через 1–2 минуты.'
+        );
+      }
+    }
+  }
+
+  if (!res) {
+    throw new AppError('PROVIDER_DOWN', 'Elim: res undefined', '⏱ Сервис не отвечает. Попробуйте позже.');
   }
 
   if (!res.ok) {
     throw new AppError(
       'PROVIDER_DOWN',
       `Elim HTTP ${res.status}`,
-      `⚠️ Не удалось получить данные товара (HTTP ${res.status}). Попробуй позже.`
+      `⚠️ Не удалось получить данные товара (HTTP ${res.status}). Попробуйте позже.`
     );
   }
 
@@ -170,19 +188,58 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
   // Цена: promotion_price → price → первый элемент price_range
   const price = json.promotion_price ?? json.price ?? json.price_range?.[0]?.price ?? 0;
 
-  console.log(`[import] Elim success: ${platform}/${productId}`);
+  // Оптовые цены
+  const priceRange = (json.price_range ?? [])
+    .filter((r) => r.price != null)
+    .map((r) => ({
+      minQty: r.min_quantity ?? 0,
+      maxQty: r.max_quantity ?? 0,
+      price: r.price!,
+    }));
+
+  // Характеристики
+  const attributes = (json.attributes ?? [])
+    .filter((a) => a.name && a.value)
+    .map((a) => ({ name: a.name!, value: a.value! }));
+
+  // SKU варианты
+  const skus = (json.skus ?? [])
+    .filter((s) => s.name)
+    .map((s) => ({
+      name: s.name!,
+      price: s.price,
+      stock: s.quantity,
+      image: s.pic_url,
+    }));
+
+  console.log(`[import] Elim success: ${platform}/${productId} | attrs:${attributes.length} skus:${skus.length} sold:${json.sold ?? '?'}`);
 
   return {
     productId: String(json.id ?? json.mp_id ?? productId),
     platform,
     titleCn: json.title,
+    titleEn: json.titleEn,
+    description: json.description,
     priceYuan: price,
+    priceRange: priceRange.length > 0 ? priceRange : undefined,
     moq: json.moq ?? 1,
     weightKg,
     images,
     mainImageUrl: images[0] ?? '',
     supplierName: json.shop_name ?? '',
     supplierRating: json.level,
+    supplierType: json.seller_type,
+    sold: json.sold,
+    stock: json.quantity,
+    categoryName: json.category_name,
+    attributes: attributes.length > 0 ? attributes : undefined,
+    skus: skus.length > 0 ? skus : undefined,
+    supplierExtra: json.extra_info ? {
+      dropshipping: (json.extra_info as any[]).some((e: any) => e.isOnePsale),
+      mixOrder: (json.extra_info as any[]).some((e: any) => e.isSupportMix),
+      freeReturn7d: (json.extra_info as any[]).some((e: any) => e.noReason7DReturn),
+      selectedSource: (json.extra_info as any[]).some((e: any) => e['1688_yx']),
+    } : undefined,
   };
 }
 

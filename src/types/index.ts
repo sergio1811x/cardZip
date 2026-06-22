@@ -2,18 +2,59 @@
 
 export type Platform = '1688' | 'taobao' | 'tmall';
 
+export interface PriceRange {
+  minQty: number;
+  maxQty: number;
+  price: number;
+}
+
+export interface ProductAttribute {
+  name: string;
+  value: string;
+}
+
+export interface ProductSku {
+  name: string;
+  price?: number;
+  stock?: number;
+  image?: string;
+}
+
+export interface SupplierExtra {
+  dropshipping?: boolean;
+  mixOrder?: boolean;
+  freeReturn7d?: boolean;
+  selectedSource?: boolean;
+}
+
 export interface RawProduct1688 {
   productId: string;
   platform: Platform;
   titleCn: string;
+  titleEn?: string;
+  description?: string;
   priceYuan: number;
+  priceRange?: PriceRange[];
   moq: number;
   weightKg: number;
   images: string[];
   supplierName: string;
   supplierRating?: number;
+  supplierType?: 'factory' | 'merchant' | 'seller';
   mainImageUrl: string;
+  sold?: number;
+  stock?: number;
+  categoryName?: string;
+  attributes?: ProductAttribute[];
+  skus?: ProductSku[];
+  supplierExtra?: SupplierExtra;
 }
+
+export type Verdict = {
+  signal: 'green' | 'yellow' | 'red';
+  label: string;
+  reasons: string[];
+};
 
 export interface ProductWithContent extends RawProduct1688 {
   cacheKey: string;
@@ -21,6 +62,7 @@ export interface ProductWithContent extends RawProduct1688 {
   seoContent: AiContentResult;
   wbData: WbSearchResult | null;
   economics: EconomicsResult;
+  verdict: Verdict;
   cachedAt?: Date;
 }
 
@@ -50,16 +92,21 @@ export interface MarketProvider {
 
 export interface AiContentRequest {
   titleCn: string;
+  titleEn?: string;
+  description?: string;
   priceYuan: number;
   moq: number;
   weightKg: number;
   supplierName: string;
   supplierRating?: number;
+  categoryName?: string;
+  attributes?: ProductAttribute[];
 }
 
 export interface AiContentResult {
   titleRu: string;
   description: string;
+  bullets: string[];
   keywords: string[];
   characteristics: Record<string, string>;
   isFallback?: boolean;
@@ -124,6 +171,7 @@ export interface EconomicsInput {
 }
 
 export interface EconomicsResult {
+  yuanToRub: number;
   costRub: number;
   avgSaleRub: number;
   grossProfitRub: number;

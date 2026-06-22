@@ -1,63 +1,70 @@
 import type { AiContentResult, RawProduct1688 } from '../types';
 
-/**
- * Форматирует содержимое wb_seo.txt для отправки в Telegram как документ.
- */
 export function formatSeoText(
   product: RawProduct1688,
   content: AiContentResult
 ): string {
-  const lines: string[] = [];
+  const L: string[] = [];
 
-  lines.push('═══════════════════════════════════');
-  lines.push('   cardZip — МАТЕРИАЛЫ ДЛЯ WB');
-  lines.push('═══════════════════════════════════');
-  lines.push('');
+  L.push('═══════════════════════════════════');
+  L.push('   cardZip — МАТЕРИАЛЫ ДЛЯ WB');
+  L.push('═══════════════════════════════════');
+  L.push('');
 
-  lines.push('📌 НАЗВАНИЕ КАРТОЧКИ');
-  lines.push('─────────────────────');
-  lines.push(content.titleRu);
-  lines.push('');
+  L.push('📌 НАЗВАНИЕ КАРТОЧКИ');
+  L.push('─────────────────────');
+  L.push(content.titleRu);
+  L.push('');
 
-  lines.push('📝 ОПИСАНИЕ');
-  lines.push('─────────────────────');
-  lines.push(content.description);
-  lines.push('');
+  L.push('📝 ОПИСАНИЕ');
+  L.push('─────────────────────');
+  L.push(content.description);
+  L.push('');
 
-  lines.push('🔍 КЛЮЧЕВЫЕ СЛОВА (для поиска)');
-  lines.push('─────────────────────');
+  if (content.bullets?.length) {
+    L.push('🎯 5 БУЛЛЕТОВ ДЛЯ ИНФОГРАФИКИ');
+    L.push('─────────────────────');
+    content.bullets.forEach((b, i) => {
+      L.push(`${i + 1}. ${b}`);
+    });
+    L.push('');
+  }
+
+  L.push('🔍 КЛЮЧЕВЫЕ СЛОВА');
+  L.push('─────────────────────');
   content.keywords.forEach((kw, i) => {
-    lines.push(`${i + 1}. ${kw}`);
+    L.push(`${i + 1}. ${kw}`);
   });
-  lines.push('');
+  L.push('');
 
   if (Object.keys(content.characteristics).length > 0) {
-    lines.push('📋 ХАРАКТЕРИСТИКИ КАРТОЧКИ');
-    lines.push('─────────────────────');
+    L.push('📋 ХАРАКТЕРИСТИКИ КАРТОЧКИ');
+    L.push('─────────────────────');
     Object.entries(content.characteristics).forEach(([key, value]) => {
-      lines.push(`${key}: ${value}`);
+      L.push(`${key}: ${value}`);
     });
-    lines.push('');
+    L.push('');
   }
 
-  lines.push('📦 ДАННЫЕ ПОСТАВЩИКА (1688)');
-  lines.push('─────────────────────');
-  lines.push(`Поставщик: ${product.supplierName}`);
-  if (product.supplierRating) lines.push(`Рейтинг: ${product.supplierRating}`);
-  lines.push(`Цена: ${product.priceYuan} ¥`);
-  lines.push(`MOQ: ${product.moq} шт.`);
-  lines.push(`Вес: ${product.weightKg} кг`);
-  lines.push('');
+  L.push('📦 ДАННЫЕ ПОСТАВЩИКА');
+  L.push('─────────────────────');
+  if (product.supplierName) L.push(`Поставщик: ${product.supplierName}`);
+  if (product.supplierRating) L.push(`Рейтинг: ${product.supplierRating}/5`);
+  L.push(`Цена: ${product.priceYuan} ¥`);
+  L.push(`Мин. заказ: ${product.moq} шт.`);
+  L.push(`Вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : 'лёгкий товар (до 0.1 кг)'}`);
+  if (product.sold) L.push(`Продажи: ${product.sold}+ заказов`);
+  L.push('');
 
   if (content.isFallback) {
-    lines.push('⚠️  Примечание: SEO-контент сгенерирован в упрощённом режиме.');
-    lines.push('    Рекомендуем отредактировать описание перед публикацией.');
-    lines.push('');
+    L.push('⚠️ SEO-контент сгенерирован в упрощённом режиме.');
+    L.push('   Рекомендуем отредактировать описание перед публикацией.');
+    L.push('');
   }
 
-  lines.push('─────────────────────');
-  lines.push(`Сгенерировано: ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}`);
-  lines.push('cardZip | @cardzip_bot');
+  L.push('─────────────────────');
+  L.push(`Сгенерировано: ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}`);
+  L.push('cardZip | @cardzip_bot');
 
-  return lines.join('\n');
+  return L.join('\n');
 }
