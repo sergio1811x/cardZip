@@ -131,6 +131,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     // Проверяем кэш
     const cached = await findProductByKey(cacheKey);
     let product: ProductWithContent;
+    let zipResult: Buffer | null = null;
 
     // Нормализуем китайский текст перед отправкой в AI
     rawProduct.titleCn = normalizeCnText(rawProduct.titleCn);
@@ -150,45 +151,52 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         cachedAt: new Date(cached.created_at),
       };
     } else {
-      // ─── Шаг 2: AI SEO ───────────────────────────────────────────────────
+      // ─── Шаги 2-4 ПАРАЛЛЕЛЬНО: AI + WB + ZIP ─────────────────────────────
       progress.step('ai');
-      const seoContent = await aiContentGenerator.generate({
-        titleCn: rawProduct.titleCn,
-        titleEn: rawProduct.titleEn,
-        description: rawProduct.description,
-        priceYuan: rawProduct.priceYuan,
-        moq: rawProduct.moq,
-        weightKg: rawProduct.weightKg,
-        supplierName: rawProduct.supplierName,
-        supplierRating: rawProduct.supplierRating,
-        categoryName: rawProduct.categoryName,
-        attributes: rawProduct.attributes,
-      }).catch(() => ({
-        titleRu: rawProduct.titleEn || rawProduct.titleCn,
-        description: '',
-        bullets: [] as string[],
-        keywords: [] as string[],
-        characteristics: {} as Record<string, string>,
-        isFallback: true,
-      }));
 
-      // Для WB поиска: русский от AI, или английский от Elim, или китайский
-      const wbQuery = seoContent.isFallback
-        ? (rawProduct.titleEn || rawProduct.titleCn)
-        : seoContent.titleRu;
-
-      // ─── Шаг 3: WB поиск ─────────────────────────────────────────────────
-      progress.step('wb');
-      // Для поиска по фото берём 2-е или 3-е изображение (1-е часто маркетинговый баннер с текстом)
       const searchImage = rawProduct.images[1] || rawProduct.images[2] || rawProduct.mainImageUrl;
-      const wbData = await marketProvider.searchSimilar(wbQuery, searchImage).catch(() => null);
+      const wbQuery = rawProduct.titleEn || rawProduct.titleCn;
 
-      // ─── Экономика + вердикт ──────────────────────────────────────────────
-      const economics = await calcEconomics({
-        priceYuan: rawProduct.priceYuan,
-        weightKg: rawProduct.weightKg,
-        wbAvgPrice: wbData?.avgPrice,
-      });
+      // Запускаем всё параллельно — все зависят только от rawProduct
+      const [seoContent, wbData, economicsResult, zipResult] = await Promise.all([
+        // AI SEO
+        aiContentGenerator.generate({
+          titleCn: rawProduct.titleCn,
+          titleEn: rawProduct.titleEn,
+          description: rawProduct.description,
+          priceYuan: rawProduct.priceYuan,
+          moq: rawProduct.moq,
+          weightKg: rawProduct.weightKg,
+          supplierName: rawProduct.supplierName,
+          supplierRating: rawProduct.supplierRating,
+          categoryName: rawProduct.categoryName,
+          attributes: rawProduct.attributes,
+        }).catch(() => ({
+          titleRu: rawProduct.titleEn || rawProduct.titleCn,
+          description: '',
+          bullets: [] as string[],
+          keywords: [] as string[],
+          characteristics: {} as Record<string, string>,
+          isFallback: true,
+        })),
+
+        // WB поиск по фото (fallback на текст)
+        marketProvider.searchSimilar(wbQuery, searchImage).catch(() => null),
+
+        // Экономика (курс ЦБ — без wbAvgPrice, добавим после)
+        calcEconomics({
+          priceYuan: rawProduct.priceYuan,
+          weightKg: rawProduct.weightKg,
+        }),
+
+        // ZIP фото
+        zipBuilder.buildFromUrls(rawProduct.images, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }),
+      ]);
+
+      // Пересчитаем экономику с ценой WB если есть
+      const economics = wbData?.avgPrice
+        ? await calcEconomics({ priceYuan: rawProduct.priceYuan, weightKg: rawProduct.weightKg, wbAvgPrice: wbData.avgPrice })
+        : economicsResult;
 
       const verdict = buildVerdict(economics, wbData, rawProduct.sold);
 
@@ -205,12 +213,11 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
       upsertProduct(userId, product).catch((e) => console.error('[pipeline] upsert failed:', e));
     }
 
-    // ─── Шаг 5: Сборка материалов ───────────────────────────────────────
+    // ─── SEO текст (мгновенно) ──────────────────────────────────────────
     progress.step('zip');
-    const [zipBuffer, seoText] = await Promise.all([
-      zipBuilder.buildFromUrls(product.images, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }),
-      Promise.resolve(formatSeoText(product, product.seoContent)),
-    ]);
+    const seoText = formatSeoText(product, product.seoContent);
+    // zipResult уже готов из параллельного блока, или собираем для cached
+    const zipBuffer = zipResult ?? await zipBuilder.buildFromUrls(product.images, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 });
 
     // ─── Стоп прогресс, удаляем сообщение ─────────────────────────────────
     progress.stop();
