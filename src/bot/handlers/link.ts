@@ -161,7 +161,9 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
 
       // ─── Шаг 3: WB поиск ─────────────────────────────────────────────────
       progress.step('wb');
-      const wbData = await marketProvider.searchSimilar(wbQuery, rawProduct.mainImageUrl).catch(() => null);
+      // Для поиска по фото берём 2-е или 3-е изображение (1-е часто маркетинговый баннер с текстом)
+      const searchImage = rawProduct.images[1] || rawProduct.images[2] || rawProduct.mainImageUrl;
+      const wbData = await marketProvider.searchSimilar(wbQuery, searchImage).catch(() => null);
 
       // ─── Экономика + вердикт ──────────────────────────────────────────────
       const economics = await calcEconomics({
