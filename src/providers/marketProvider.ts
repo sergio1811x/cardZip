@@ -34,9 +34,8 @@ async function detectCategory(imageBuffer: Buffer): Promise<string | null> {
     const boundary = '----WebKitFormBoundarybaqpMM8p2H37B2R7';
     const qid = 'qid' + Date.now() + Math.floor(Math.random() * 1e10);
 
-    // WB отправляет фото как бинарные данные в multipart
     const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="photo.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image_file"; filename="photo.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
       imageBuffer,
       Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);
@@ -80,7 +79,7 @@ async function searchByPhoto(imageBuffer: Buffer, label: string): Promise<number
     const boundary = '----WebKitFormBoundarybaqpMM8p2H37B2R7';
 
     const body = Buffer.concat([
-      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="photo.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="photo.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
       imageBuffer,
       Buffer.from(`\r\n--${boundary}--\r\n`),
     ]);
