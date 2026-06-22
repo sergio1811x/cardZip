@@ -146,7 +146,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         categoryName: rawProduct.categoryName,
         attributes: rawProduct.attributes,
       }).catch(() => ({
-        titleRu: rawProduct.titleCn,
+        titleRu: rawProduct.titleEn || rawProduct.titleCn,
         description: '',
         bullets: [] as string[],
         keywords: [] as string[],
@@ -154,9 +154,14 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         isFallback: true,
       }));
 
+      // Для WB поиска: русский от AI, или английский от Elim, или китайский
+      const wbQuery = seoContent.isFallback
+        ? (rawProduct.titleEn || rawProduct.titleCn)
+        : seoContent.titleRu;
+
       // ─── Шаг 3: WB поиск ─────────────────────────────────────────────────
       progress.step('wb');
-      const wbData = await marketProvider.searchSimilar(seoContent.titleRu).catch(() => null);
+      const wbData = await marketProvider.searchSimilar(wbQuery, rawProduct.mainImageUrl).catch(() => null);
 
       // ─── Экономика + вердикт ──────────────────────────────────────────────
       const economics = await calcEconomics({

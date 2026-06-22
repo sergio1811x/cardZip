@@ -87,7 +87,7 @@ export interface WbSearchResult {
 }
 
 export interface MarketProvider {
-  searchSimilar(query: string): Promise<WbSearchResult | null>;
+  searchSimilar(query: string, imageUrl?: string): Promise<WbSearchResult | null>;
 }
 
 export interface AiContentRequest {

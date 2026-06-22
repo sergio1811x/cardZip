@@ -102,7 +102,7 @@ async function callModel(model: string, prompt: string, apiKey: string): Promise
         temperature: 0.7,
         messages: [{ role: 'user', content: prompt }],
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(60_000),
     });
 
     if (!res.ok) {
