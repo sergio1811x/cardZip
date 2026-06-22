@@ -11,7 +11,7 @@ import { buildVerdict } from '../../core/verdict';
 import { normalizeCnText } from '../../core/cnNormalize';
 import { buildCacheKey } from '../../lib/cache';
 import { findProductByKey, upsertProduct } from '../../db/queries/products';
-import { getStatus } from '../../services/subscriptionService';
+import { getStatus, consumeGeneration } from '../../services/subscriptionService';
 import { track } from '../../services/analyticsService';
 import { AppError, isAppError } from '../../lib/errors';
 import { Input } from 'telegraf';
@@ -223,6 +223,10 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     progress.stop();
     await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
 
+    // ─── Записываем generation_done ДО отправки (Vercel может убить после) ─
+    const durationMs = Date.now() - startTime;
+    await track(userId, 'generation_done', { durationMs, cacheHit: !!cached, url });
+
     // ─── Отправляем 3 сообщения ───────────────────────────────────────────
     await ctx.reply(buildMessage1(product), {
       parse_mode: 'HTML',
@@ -240,13 +244,6 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     const freshStatus = await getStatus(userId);
     const { text, keyboard } = buildMessage3(freshStatus);
     await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
-
-    // ─── Аналитика ────────────────────────────────────────────────────────
-    const durationMs = Date.now() - startTime;
-    track(userId, 'generation_done', { durationMs, cacheHit: !!cached, url });
-    if (durationMs > 25_000) {
-      track(userId, 'slow_generation', { durationMs });
-    }
   } catch (e) {
     progress.stop();
     const durationMs = Date.now() - startTime;
