@@ -188,8 +188,14 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     const raw = weightAttrs[0].value ?? '';
     const kgMatch = raw.match(/([\d.]+)\s*(kg|千克|公斤)/i);
     const gMatch = raw.match(/([\d.]+)\s*(g|克)/i);
+    const numOnly = raw.match(/^([\d.]+)$/);
     if (kgMatch) weightKg = parseFloat(kgMatch[1]);
     else if (gMatch) weightKg = parseFloat(gMatch[1]) / 1000;
+    else if (numOnly) {
+      const val = parseFloat(numOnly[1]);
+      // Если число < 100, считаем кг; если >= 100, считаем граммы
+      weightKg = val >= 100 ? val / 1000 : val;
+    }
     console.log(`[import] Вес из атрибутов: "${raw}" → ${weightKg}кг`);
   }
 

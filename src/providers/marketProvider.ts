@@ -22,7 +22,14 @@ async function downloadImage(imageUrl: string): Promise<Buffer | null> {
   try {
     const res = await fetch(imageUrl, { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    const raw = Buffer.from(await res.arrayBuffer());
+    // Оптимизируем: resize до 800px и конвертируем в JPEG (WB лучше понимает JPEG)
+    const optimized = await sharp(raw)
+      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+    console.log(`[wb] Фото оптимизировано: ${raw.length} → ${optimized.length} bytes`);
+    return optimized;
   } catch {
     return null;
   }
@@ -54,7 +61,7 @@ async function detectCategory(imageBuffer: Buffer): Promise<CategoryResult | nul
         'Query_id': qid,
       },
       body,
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(20_000),
     });
 
     if (!res.ok) {

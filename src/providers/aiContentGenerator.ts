@@ -12,7 +12,7 @@ const AiResponseSchema = z.object({
   description: z.string().min(100).max(3000),
   bullets: z.array(z.string()).min(3).max(5),
   keywords: z.array(z.string()).min(1).max(10),
-  characteristics: z.record(z.string()),
+  characteristics: z.record(z.union([z.string(), z.number()]).transform(String)),
 });
 
 function buildFallback(req: AiContentRequest): AiContentResult {
@@ -122,7 +122,7 @@ async function callModel(model: string, prompt: string, apiKey: string): Promise
           { role: 'user', content: prompt },
         ],
       }),
-      signal: AbortSignal.timeout(25_000),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!res.ok) {
