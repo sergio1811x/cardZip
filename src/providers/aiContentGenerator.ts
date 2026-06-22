@@ -4,7 +4,7 @@ import type { AiContentGenerator, AiContentRequest, AiContentResult } from '../t
 const MODELS = [
   process.env.CONTENT_MODEL || 'deepseek/deepseek-v4-flash',
   process.env.FALLBACK_MODEL || 'deepseek/deepseek-v3.2',
-  process.env.SECONDARY_FALLBACK_MODEL || 'qwen/qwen3.5-flash',
+  process.env.SECONDARY_FALLBACK_MODEL || 'qwen/qwen3-235b-a22b-instruct-2507',
 ];
 
 const AiResponseSchema = z.object({
