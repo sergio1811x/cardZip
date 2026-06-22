@@ -19,26 +19,45 @@ import type { ProductWithContent } from '../../types';
 
 // ─── Прогресс-сообщения ──────────────────────────────────────────────────────
 
-const PIPELINE_STEPS: Record<string, string> = {
-  fetch: '🔄 Анализирую товар: <b>Шаг 1/4</b>. Получаю данные с площадки...',
-  ai: '🔄 Анализирую товар: <b>Шаг 2/4</b>. Генерирую SEO-контент и буллеты...',
-  wb: '🔄 Анализирую товар: <b>Шаг 3/4</b>. Собираю цены конкурентов на WB...',
-  zip: '🔄 Анализирую товар: <b>Шаг 4/4</b>. Собираю материалы и архив...',
+const STEP_MESSAGES: Record<string, string[]> = {
+  fetch: [
+    '📡 <b>Шаг 1/4</b> — Получаем данные с площадки...',
+    '📡 <b>Шаг 1/4</b> — Загружаем карточку товара...',
+    '📡 <b>Шаг 1/4</b> — Читаем характеристики поставщика...',
+    '📡 <b>Шаг 1/4</b> — Обрабатываем данные фабрики...',
+    '📡 <b>Шаг 1/4</b> — Извлекаем цены и фотографии...',
+    '📡 <b>Шаг 1/4</b> — Почти загрузили, ещё немного...',
+  ],
+  ai: [
+    '🤖 <b>Шаг 2/4</b> — Генерируем SEO-контент...',
+    '🤖 <b>Шаг 2/4</b> — Подбираем ключевые слова для WB...',
+    '🤖 <b>Шаг 2/4</b> — Составляем описание карточки...',
+    '🤖 <b>Шаг 2/4</b> — Формируем 5 буллетов для инфографики...',
+    '🤖 <b>Шаг 2/4</b> — Адаптируем под российский рынок...',
+    '🤖 <b>Шаг 2/4</b> — Дорабатываем характеристики товара...',
+  ],
+  wb: [
+    '🔍 <b>Шаг 3/4</b> — Ищем похожие товары на Wildberries...',
+    '🔍 <b>Шаг 3/4</b> — Анализируем цены конкурентов...',
+    '🔍 <b>Шаг 3/4</b> — Загружаем фото для поиска на WB...',
+    '🔍 <b>Шаг 3/4</b> — Сравниваем с карточками на маркетплейсе...',
+    '🔍 <b>Шаг 3/4</b> — Считаем среднюю цену в нише...',
+    '🔍 <b>Шаг 3/4</b> — Собираем топ похожих товаров...',
+    '🔍 <b>Шаг 3/4</b> — Оцениваем уровень конкуренции...',
+  ],
+  zip: [
+    '📦 <b>Шаг 4/4</b> — Собираем архив с фотографиями...',
+    '📦 <b>Шаг 4/4</b> — Скачиваем изображения товара...',
+    '📦 <b>Шаг 4/4</b> — Формируем SEO-файл для карточки...',
+    '📦 <b>Шаг 4/4</b> — Упаковываем материалы...',
+    '📦 <b>Шаг 4/4</b> — Почти готово, отправляем результат...',
+  ],
 };
 
-const WAIT_PHRASES = [
-  '⏳ Запрашиваем данные у китайского сервера, это может занять время...',
-  '🔄 Сервер обрабатывает запрос, пожалуйста, подождите...',
-  '🌏 Получаем информацию от поставщика, почти готово...',
-  '☕ Осталось совсем немного, формируем результат...',
-  '🚀 Финализируем данные, спасибо за ожидание...',
-];
-
 function createProgressUpdater(ctx: Context, chatId: number, msgId: number) {
-  let currentStep = '';
-  let waitIndex = 0;
+  let currentKey = '';
+  let msgIndex = 0;
   let timer: ReturnType<typeof setInterval> | null = null;
-  let seconds = 0;
 
   const edit = async (text: string) => {
     try {
@@ -47,20 +66,19 @@ function createProgressUpdater(ctx: Context, chatId: number, msgId: number) {
   };
 
   timer = setInterval(() => {
-    seconds += 15;
-    if (seconds >= 15) {
-      const phrase = WAIT_PHRASES[waitIndex % WAIT_PHRASES.length];
-      edit(`${currentStep}\n\n<i>${phrase}</i>`);
-      waitIndex++;
-    }
-  }, 15_000);
+    const messages = STEP_MESSAGES[currentKey];
+    if (!messages) return;
+    msgIndex++;
+    const text = messages[msgIndex % messages.length];
+    edit(text);
+  }, 10_000);
 
   return {
     step(key: string) {
-      currentStep = PIPELINE_STEPS[key] ?? key;
-      seconds = 0;
-      waitIndex = 0;
-      edit(currentStep);
+      currentKey = key;
+      msgIndex = 0;
+      const messages = STEP_MESSAGES[key];
+      if (messages) edit(messages[0]);
     },
     stop() {
       if (timer) clearInterval(timer);
@@ -99,7 +117,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
 
   track(userId, 'sent_link', { url });
 
-  const progressMsg = await ctx.reply(PIPELINE_STEPS.fetch, { parse_mode: 'HTML' });
+  const progressMsg = await ctx.reply(STEP_MESSAGES.fetch[0], { parse_mode: 'HTML' });
   const progressMsgId = (progressMsg as Message.TextMessage).message_id;
   const chatId = ctx.chat!.id;
   const progress = createProgressUpdater(ctx, chatId, progressMsgId);
