@@ -6,6 +6,7 @@ import { getStatus } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { buildMessage1, buildMessage3 } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
+import { zipBuilder } from '../src/core/zipBuilder';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 30 };
@@ -30,7 +31,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
 
         if (job.status === 'failed') {
           await bot.telegram.sendMessage(chatId,
-            `❌ Не удалось обработать товар.\n\n${job.error || 'Попробуйте ещё раз через минуту.'}`,
+            `❌ Не удалось обработать товар.\n\n${job.error || 'Попробуйте ещё раз.'}`,
           );
           await markSent(job.id);
           sent++;
@@ -53,18 +54,23 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
           link_preview_options: { is_disabled: true },
         });
 
-        // Сообщение 2: файлы
+        // Сообщение 2: SEO файл
         const seoText = formatSeoText(product, product.seoContent);
         const seoBuffer = Buffer.from(seoText, 'utf-8');
         await bot.telegram.sendDocument(chatId, Input.fromBuffer(seoBuffer, 'wb_seo.txt'), {
           caption: '📄 SEO-материалы для карточки WB',
         });
 
-        if (result.zipBase64) {
-          const zipBuffer = Buffer.from(result.zipBase64, 'base64');
-          await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'), {
-            caption: `🖼 Фото товара`,
-          });
+        // ZIP собираем на лету по imageUrls
+        if (result.imageUrls?.length) {
+          try {
+            const zipBuffer = await zipBuilder.buildFromUrls(result.imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 });
+            await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'), {
+              caption: `🖼 Фото товара (${result.imageUrls.length} шт.)`,
+            });
+          } catch {
+            console.warn('[send] ZIP failed, skipping');
+          }
         }
 
         // Сообщение 3: счётчик + кнопки
@@ -80,6 +86,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
 
         await markSent(job.id);
         sent++;
+        console.log(`[send] Job ${job.id} sent to Telegram`);
       } catch (e) {
         console.error(`[send] Job ${job.id} failed:`, e);
         await markSent(job.id);
