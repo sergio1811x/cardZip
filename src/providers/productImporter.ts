@@ -177,10 +177,27 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
 
   const images = (json.img_urls ?? []).slice(0, 15);
 
-  // Вес: Elim часто возвращает вес партии/упаковки, а не штуки
-  // Если вес > 50кг — точно ошибка, сбрасываем
-  // Если вес > 5кг и цена < 200¥ — скорее всего вес партии
-  let weightKg = json.shipping_info?.[0]?.weight ?? 0;
+  // Вес: приоритет — из атрибутов товара (вес штуки), потом shipping_info (часто вес партии)
+  const weightAttrs = (json.attributes ?? []).filter((a) =>
+    a.name && /重量|净重|毛重|weight|вес/i.test(a.name)
+  );
+  let weightKg = 0;
+
+  if (weightAttrs.length) {
+    // Парсим вес из атрибутов: "0.35kg", "350g", "0.5千克" и т.д.
+    const raw = weightAttrs[0].value ?? '';
+    const kgMatch = raw.match(/([\d.]+)\s*(kg|千克|公斤)/i);
+    const gMatch = raw.match(/([\d.]+)\s*(g|克)/i);
+    if (kgMatch) weightKg = parseFloat(kgMatch[1]);
+    else if (gMatch) weightKg = parseFloat(gMatch[1]) / 1000;
+    console.log(`[import] Вес из атрибутов: "${raw}" → ${weightKg}кг`);
+  }
+
+  if (!weightKg) {
+    weightKg = json.shipping_info?.[0]?.weight ?? 0;
+  }
+
+  // Санитарная проверка
   const priceRaw = json.promotion_price ?? json.price ?? json.price_range?.[0]?.price ?? 0;
   if (weightKg > 50 || (weightKg > 5 && priceRaw < 200)) {
     console.warn(`[import] Подозрительный вес ${weightKg}кг при цене ${priceRaw}¥, сбрасываем`);
