@@ -2,8 +2,8 @@ import { z } from 'zod';
 import type { AiContentGenerator, AiContentRequest, AiContentResult } from '../types';
 
 const MODELS = [
-  process.env.CONTENT_MODEL || 'deepseek/deepseek-v4-flash',
-  process.env.FALLBACK_MODEL || 'deepseek/deepseek-v3.2',
+  process.env.CONTENT_MODEL || 'google/gemini-2.5-flash-preview',
+  process.env.FALLBACK_MODEL || 'deepseek/deepseek-v4-flash',
   process.env.SECONDARY_FALLBACK_MODEL || 'qwen/qwen3-235b-a22b-instruct-2507',
 ];
 
@@ -17,7 +17,7 @@ const AiResponseSchema = z.object({
 
 function buildFallback(req: AiContentRequest): AiContentResult {
   return {
-    titleRu: req.titleCn,
+    titleRu: req.titleEn || req.titleCn,
     description: `Товар с 1688. Цена: ${req.priceYuan} юаней. Мин. заказ: ${req.moq} шт. Вес: ${req.weightKg} кг.`,
     bullets: [],
     keywords: [],
@@ -47,33 +47,47 @@ function buildPrompt(req: AiContentRequest): string {
   }
 
   if (req.description) {
-    productInfo += `\n\nОписание от поставщика (кит./англ.):\n${req.description.slice(0, 500)}`;
+    productInfo += `\n\nОписание от поставщика:\n${req.description.slice(0, 500)}`;
   }
 
-  return `Ты эксперт по маркетплейсу Wildberries. Создай SEO-оптимизированный контент для карточки товара.
+  return `Ты — SEO-копирайтер для маркетплейса Wildberries. Твоя задача — создать готовый контент для карточки товара на WB на основе данных от китайского поставщика.
 
-Данные товара:
+КОНТЕКСТ:
+Селлер закупает товар в Китае (1688/Taobao) и продаёт на Wildberries в России. Ему нужен:
+1. Коммерческое название карточки — с ключевыми словами, по которым покупатели ищут на WB
+2. SEO-описание — чтобы карточка поднималась в поиске WB
+3. 5 буллетов — короткие тезисы о преимуществах для инфографики на главном фото
+4. Ключевые слова — поисковые запросы, по которым товар найдут на WB
+5. Характеристики — для заполнения карточки (материал, размер, цвет и т.д.)
+
+ДАННЫЕ ТОВАРА:
 ${productInfo}
 
-Используй характеристики от поставщика для заполнения полей. Переведи и адаптируй для российского рынка.
+ПРАВИЛА:
+- Пиши на русском языке, грамотно, без китайского маркетингового жаргона
+- Название должно содержать категорию товара + ключевые свойства + для кого (если применимо)
+- Описание: 1000-2000 символов, естественный текст с ключевыми фразами, не спам
+- Буллеты: 5 штук, каждый 5-10 слов, начинается с эмодзи или ключевого слова
+- Ключевые слова: реальные поисковые запросы покупателей на WB (не выдуманные)
+- Характеристики: переведи с китайского, адаптируй размеры под РФ если возможно
 
-Верни ТОЛЬКО JSON (без Markdown, без пояснений):
+Верни ТОЛЬКО JSON (без Markdown, без комментариев, без пояснений):
 {
-  "titleRu": "Коммерческое название для WB до 200 символов с ключевыми словами",
-  "description": "SEO-описание 1000-2000 символов для карточки Wildberries",
+  "titleRu": "Название для карточки WB до 200 символов",
+  "description": "SEO-описание 1000-2000 символов",
   "bullets": [
-    "Ключевое преимущество 1 — короткий тезис для инфографики",
-    "Ключевое преимущество 2",
-    "Ключевое преимущество 3",
-    "Ключевое преимущество 4",
-    "Ключевое преимущество 5"
+    "✅ Преимущество 1 — короткий тезис",
+    "📦 Преимущество 2",
+    "💪 Преимущество 3",
+    "🔥 Преимущество 4",
+    "⭐ Преимущество 5"
   ],
-  "keywords": ["поисковая фраза 1", "фраза 2", "до 10 запросов"],
+  "keywords": ["запрос 1", "запрос 2", "до 10 поисковых фраз"],
   "characteristics": {
     "Материал": "...",
     "Размер": "...",
     "Цвет": "...",
-    "другие характеристики для карточки WB": "..."
+    "другие характеристики": "..."
   }
 }`;
 }
@@ -100,7 +114,13 @@ async function callModel(model: string, prompt: string, apiKey: string): Promise
         model,
         max_tokens: 2000,
         temperature: 0.7,
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          {
+            role: 'system',
+            content: 'Ты SEO-копирайтер для Wildberries. Отвечаешь ТОЛЬКО валидным JSON. Никакого Markdown, никаких пояснений — только JSON-объект.',
+          },
+          { role: 'user', content: prompt },
+        ],
       }),
       signal: AbortSignal.timeout(25_000),
     });
