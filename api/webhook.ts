@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { bot } from '../src/bot';
 
-export const config = { maxDuration: 10 };
+export const config = { maxDuration: 60 };
 
 const processed = new Set<number>();
 
@@ -21,16 +22,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (processed.size > 1000) processed.clear();
   }
 
-  // Мгновенно отвечаем Telegram — не ждём обработку
-  res.status(200).json({ ok: true });
-
-  // Fire-and-forget: вызываем процессинг в отдельной функции
-  const host = req.headers.host || 'card-zip.vercel.app';
   try {
-    fetch(`https://${host}/api/process`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body),
-    }).catch(() => {});
-  } catch {}
+    await bot.handleUpdate(req.body);
+  } catch (e) {
+    console.error('[webhook] Error:', e);
+  }
+
+  res.status(200).json({ ok: true });
 }
