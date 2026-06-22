@@ -1,29 +1,23 @@
-import 'dotenv/config';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { bot } from '../src/bot';
 
 export const config = { maxDuration: 60 };
 
-export default async function handler(
-  req: { method: string; headers: Record<string, string | string[] | undefined>; json: () => Promise<unknown> },
-  res: { status: (code: number) => { end: () => void; json: (data: unknown) => void } }
-): Promise<void> {
+export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
-    res.status(405).end();
-    return;
+    return res.status(405).end();
   }
 
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
   if (secret) {
     const incoming = req.headers['x-telegram-bot-api-secret-token'];
     if (incoming !== secret) {
-      res.status(403).end();
-      return;
+      return res.status(403).end();
     }
   }
 
   try {
-    const update = await req.json();
-    await bot.handleUpdate(update as any);
+    await bot.handleUpdate(req.body);
     res.status(200).json({ ok: true });
   } catch (e) {
     console.error('[webhook] Error:', e);
