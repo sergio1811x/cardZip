@@ -8,7 +8,7 @@ const MODELS = [
 ];
 
 const AiResponseSchema = z.object({
-  titleRu: z.string().min(10).max(100),
+  titleRu: z.string().min(10).max(200),
   description: z.string().min(100).max(3000),
   keywords: z.array(z.string()).min(1).max(10),
   characteristics: z.record(z.string()),
@@ -66,8 +66,8 @@ async function callModel(model: string, prompt: string, apiKey: string): Promise
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://github.com/wb-copilot',
-        'X-Title': 'WB Copilot',
+        'HTTP-Referer': 'https://github.com/sergio1811x/cardZip',
+        'X-Title': 'cardZip',
       },
       body: JSON.stringify({
         model,

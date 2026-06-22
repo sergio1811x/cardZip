@@ -82,26 +82,26 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
       // ─── Шаг 2: Параллельно AI + WB ───────────────────────────────────────
       await updateProgress(1);
 
-      const [aiResult, wbResult] = await Promise.allSettled([
-        aiContentGenerator.generate({
-          titleCn: rawProduct.titleCn,
-          priceYuan: rawProduct.priceYuan,
-          moq: rawProduct.moq,
-          weightKg: rawProduct.weightKg,
-          supplierName: rawProduct.supplierName,
-          supplierRating: rawProduct.supplierRating,
-        }),
-        marketProvider.searchSimilar(rawProduct.titleCn),
-      ]);
+      // Сначала AI — нужен русский заголовок для поиска на WB
+      const seoContent = await aiContentGenerator.generate({
+        titleCn: rawProduct.titleCn,
+        priceYuan: rawProduct.priceYuan,
+        moq: rawProduct.moq,
+        weightKg: rawProduct.weightKg,
+        supplierName: rawProduct.supplierName,
+        supplierRating: rawProduct.supplierRating,
+      }).catch(() => ({
+        titleRu: rawProduct.titleCn,
+        description: '',
+        keywords: [] as string[],
+        characteristics: {} as Record<string, string>,
+        isFallback: true,
+      }));
 
       await updateProgress(2);
 
-      const seoContent =
-        aiResult.status === 'fulfilled'
-          ? aiResult.value
-          : { titleRu: rawProduct.titleCn, description: '', keywords: [], characteristics: {}, isFallback: true };
-
-      const wbData = wbResult.status === 'fulfilled' ? wbResult.value : null;
+      // Теперь WB поиск по русскому заголовку
+      const wbData = await marketProvider.searchSimilar(seoContent.titleRu).catch(() => null);
 
       // ─── Шаг 3: Экономика ─────────────────────────────────────────────────
       const economics = calcEconomics({
@@ -169,7 +169,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
 
     if (isAppError(e)) {
-      await ctx.reply(`${e.userMessage}`, { parse_mode: 'HTML' });
+      await ctx.reply(`${e.userMessage}`, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
       if (e.code !== 'RATE_LIMITED' && e.code !== 'LIMIT_REACHED') {
         track(userId, 'generation_failed', { error: e.code, durationMs });
       }

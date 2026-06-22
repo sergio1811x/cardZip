@@ -1,7 +1,10 @@
 // ─── Product ──────────────────────────────────────────────────────────────────
 
+export type Platform = '1688' | 'taobao' | 'tmall';
+
 export interface RawProduct1688 {
   productId: string;
+  platform: Platform;
   titleCn: string;
   priceYuan: number;
   moq: number;
@@ -23,9 +26,14 @@ export interface ProductWithContent extends RawProduct1688 {
 
 // ─── Provider interfaces ──────────────────────────────────────────────────────
 
+export interface ParsedUrl {
+  productId: string;
+  platform: Platform;
+}
+
 export interface ProductImporter {
   fetchProduct(url: string): Promise<RawProduct1688>;
-  extractProductId(url: string): string | null;
+  parseUrl(url: string): ParsedUrl | null;
 }
 
 export interface WbSearchResult {

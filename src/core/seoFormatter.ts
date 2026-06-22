@@ -10,7 +10,7 @@ export function formatSeoText(
   const lines: string[] = [];
 
   lines.push('═══════════════════════════════════');
-  lines.push('   WB COPILOT — МАТЕРИАЛЫ ДЛЯ WB   ');
+  lines.push('   cardZip — МАТЕРИАЛЫ ДЛЯ WB');
   lines.push('═══════════════════════════════════');
   lines.push('');
 
@@ -57,7 +57,7 @@ export function formatSeoText(
 
   lines.push('─────────────────────');
   lines.push(`Сгенерировано: ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}`);
-  lines.push('1688→WB Copilot | @wb_copilot_bot');
+  lines.push('cardZip | @cardzip_bot');
 
   return lines.join('\n');
 }

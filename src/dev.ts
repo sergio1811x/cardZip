@@ -9,7 +9,7 @@ for (const key of required) {
   }
 }
 
-const optional = ['UPSTASH_REDIS_REST_URL', 'OPENROUTER_API_KEY', 'TOPSAPI_KEY'];
+const optional = ['UPSTASH_REDIS_REST_URL', 'OPENROUTER_API_KEY', 'ELIM_API_KEY'];
 for (const key of optional) {
   if (!process.env[key]) console.warn(`⚠️  ${key} не задан — часть функций не будет работать`);
 }

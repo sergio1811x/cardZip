@@ -1,4 +1,4 @@
-# 1688 → WB Copilot
+# cardZip
 
 Telegram-бот для анализа товаров с 1688.com и подготовки материалов для Wildberries.
 

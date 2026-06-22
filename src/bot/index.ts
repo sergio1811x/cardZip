@@ -44,17 +44,20 @@ bot.action('last', async (ctx) => {
 // ─── Успешная оплата ──────────────────────────────────────────────────────────
 bot.on('successful_payment', handleSuccessPayment);
 
-// ─── Текстовые сообщения: определяем 1688 URL ─────────────────────────────────
+// ─── Текстовые сообщения: определяем URL площадки ────────────────────────────
 bot.on('text', async (ctx) => {
   const text = ctx.message.text.trim();
   const userId = (ctx as any).dbUserId as string | undefined;
 
-  // Ищем 1688 URL в тексте
-  const urlMatch = text.match(/https?:\/\/[^\s]*1688\.com[^\s]*/);
+  const urlMatch = text.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/);
   if (!urlMatch) {
     await ctx.reply(
-      'Пришли ссылку на товар с 1688.com.\n\nПример:\n<code>https://detail.1688.com/offer/XXXXXXXX.html</code>',
-      { parse_mode: 'HTML' }
+      'Пришли ссылку на товар с 1688 или Taobao.\n\n' +
+      'Примеры:\n' +
+      '<code>https://detail.1688.com/offer/XXX.html</code>\n' +
+      '<code>https://item.taobao.com/item.htm?id=XXX</code>\n' +
+      'Также поддерживаются короткие ссылки из приложения 1688.',
+      { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
     );
     return;
   }

@@ -11,7 +11,7 @@ const PRICES = {
 export async function sendInvoice(ctx: Context, plan: 'seller' | 'business'): Promise<void> {
   const price = PRICES[plan];
   await ctx.replyWithInvoice({
-    title: `1688→WB Copilot — ${price.label}`,
+    title: `cardZip — ${price.label}`,
     description:
       plan === 'seller'
         ? 'Безлимитный анализ товаров + готовые WB материалы + история /last'
