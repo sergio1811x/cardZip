@@ -124,31 +124,39 @@ interface WbProduct {
   feedbacks: number;
 }
 
+const WB_PARSER_URL = process.env.WB_PARSER_URL || 'http://50fc4ca33bd1.vps.myjino.ru';
+const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || 'cardzip-wb-2024';
+
 async function getProductDetails(ids: number[]): Promise<WbProduct[]> {
-  const batch = ids.slice(0, 50);
-  const nmList = batch.join(';');
+  const batch = ids.slice(0, 100);
 
   try {
-    const url = `https://card.wb.ru/cards/v2/list?appType=1&curr=rub&dest=-1257786&spp=30&nm=${nmList}`;
-    const res = await fetch(url, {
-      headers: { 'User-Agent': MOBILE_UA },
-      signal: AbortSignal.timeout(10_000),
-    });
+    const url = `${WB_PARSER_URL}/prices?secret=${WB_PARSER_SECRET}&ids=${batch.join(',')}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
 
     if (!res.ok) {
-      console.warn(`[wb] Card list HTTP ${res.status}`);
+      console.warn(`[wb] Prices API HTTP ${res.status}`);
       return [];
     }
 
     const data = (await res.json()) as {
-      data?: { products?: WbProduct[] };
+      success: boolean;
+      products: Array<{ id: number; name: string; brand: string; price: number; rating: number; feedbacks: number }>;
     };
 
-    const products = data.data?.products ?? [];
-    console.log(`[wb] Card list: ${products.length} products with details`);
-    return products;
+    if (!data.success) return [];
+
+    console.log(`[wb] Prices: ${data.products.length} products`);
+    return data.products.map((p) => ({
+      id: p.id,
+      name: p.name,
+      brand: p.brand,
+      salePriceU: p.price * 100,
+      reviewRating: p.rating,
+      feedbacks: p.feedbacks,
+    }));
   } catch (e) {
-    console.warn('[wb] Card list failed:', e instanceof Error ? e.message : e);
+    console.warn('[wb] Prices failed:', e instanceof Error ? e.message : e);
     return [];
   }
 }
