@@ -1,3 +1,4 @@
+import sharp from 'sharp';
 import type { MarketProvider, WbSearchResult } from '../types';
 
 const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
@@ -29,7 +30,12 @@ async function downloadImage(imageUrl: string): Promise<Buffer | null> {
 
 // ─── Шаг 1: Определить категорию по фото ─────────────────────────────────────
 
-async function detectCategory(imageBuffer: Buffer): Promise<string | null> {
+interface CategoryResult {
+  label: string;
+  bbox: [number, number, number, number]; // x1, y1, x2, y2
+}
+
+async function detectCategory(imageBuffer: Buffer): Promise<CategoryResult | null> {
   try {
     const boundary = '----WebKitFormBoundarybaqpMM8p2H37B2R7';
     const qid = 'qid' + Date.now() + Math.floor(Math.random() * 1e10);
@@ -57,13 +63,13 @@ async function detectCategory(imageBuffer: Buffer): Promise<string | null> {
     }
 
     const data = (await res.json()) as {
-      predictions?: Array<{ label?: string; confidence?: number }>;
+      predictions?: Array<{ label?: string; confidence?: number; bbox?: number[] }>;
     };
 
     const pred = data.predictions?.[0];
-    if (pred?.label) {
-      console.log(`[wb] Category: "${pred.label}" (${((pred.confidence ?? 0) * 100).toFixed(0)}%)`);
-      return pred.label;
+    if (pred?.label && pred.bbox?.length === 4) {
+      console.log(`[wb] Category: "${pred.label}" (${((pred.confidence ?? 0) * 100).toFixed(0)}%) bbox: [${pred.bbox.map(n => Math.round(n)).join(',')}]`);
+      return { label: pred.label, bbox: pred.bbox as [number, number, number, number] };
     }
     return null;
   } catch (e) {
@@ -203,15 +209,40 @@ async function searchSimilar(query: string, imageUrl?: string): Promise<WbSearch
   }
   console.log(`[wb] Фото скачано: ${imgBuffer.length} bytes`);
 
-  // Шаг 1: категория
-  const label = await detectCategory(imgBuffer);
-  if (!label) {
+  // Шаг 1: категория + bbox
+  const catResult = await detectCategory(imgBuffer);
+  if (!catResult) {
     console.warn('[wb] Категория не определена');
     return null;
   }
 
-  // Шаг 2: поиск по фото
-  const ids = await searchByPhoto(imgBuffer, label);
+  // Шаг 1.5: кроп по bbox (как WB делает в UI "Выберите область с товаром")
+  let croppedBuffer = imgBuffer;
+  try {
+    const [x1, y1, x2, y2] = catResult.bbox;
+    const metadata = await sharp(imgBuffer).metadata();
+    const imgW = metadata.width ?? 800;
+    const imgH = metadata.height ?? 800;
+
+    // bbox в координатах модели (может быть масштабирован), приводим к пикселям
+    const left = Math.max(0, Math.round(x1));
+    const top = Math.max(0, Math.round(y1));
+    const width = Math.min(Math.round(x2 - x1), imgW - left);
+    const height = Math.min(Math.round(y2 - y1), imgH - top);
+
+    if (width > 50 && height > 50) {
+      croppedBuffer = await sharp(imgBuffer)
+        .extract({ left, top, width, height })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+      console.log(`[wb] Cropped: ${imgW}x${imgH} → ${width}x${height} (${croppedBuffer.length} bytes)`);
+    }
+  } catch (e) {
+    console.warn('[wb] Crop failed, using original:', e instanceof Error ? e.message : e);
+  }
+
+  // Шаг 2: поиск по кропнутому фото
+  const ids = await searchByPhoto(croppedBuffer, catResult.label);
   if (!ids.length) {
     console.warn('[wb] Нет результатов поиска по фото');
     return null;
