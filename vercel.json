@@ -4,7 +4,16 @@
   "outputDirectory": ".",
   "functions": {
     "api/webhook.ts": {
-      "maxDuration": 60
+      "maxDuration": 10
+    },
+    "api/send-results.ts": {
+      "maxDuration": 30
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/send-results",
+      "schedule": "* * * * *"
+    }
+  ]
 }
