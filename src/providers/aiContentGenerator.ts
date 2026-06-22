@@ -3,7 +3,7 @@ import type { AiContentGenerator, AiContentRequest, AiContentResult } from '../t
 
 const MODELS = [
   process.env.CONTENT_MODEL || 'deepseek/deepseek-v4-flash',
-  process.env.FALLBACK_MODEL || 'qwen/qwen3.5-flash-02-23',
+  process.env.FALLBACK_MODEL || 'xiaomi/mimo-v2.5',
   process.env.SECONDARY_FALLBACK_MODEL || 'google/gemini-2.5-flash-lite-preview-09-2025',
 ];
 

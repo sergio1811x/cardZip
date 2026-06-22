@@ -105,7 +105,7 @@ async function searchByPhoto(imageBuffer: Buffer, label: string): Promise<number
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
       },
       body,
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(20_000),
     });
 
     if (!res.ok) {
