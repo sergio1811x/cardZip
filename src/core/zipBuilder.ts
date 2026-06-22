@@ -30,12 +30,13 @@ async function buildFromUrls(
 
   const urls = imageUrls.slice(0, maxImages);
 
-  const results = await Promise.race([
-    Promise.all(urls.map(downloadImage)),
-    new Promise<(Buffer | null)[]>((_, reject) =>
-      setTimeout(() => reject(new Error('ZIP build timeout')), 30_000)
-    ),
-  ]).catch(() => urls.map(() => null as Buffer | null));
+  // Скачиваем по 5 штук параллельно, не все сразу
+  const results: (Buffer | null)[] = [];
+  for (let i = 0; i < urls.length; i += 5) {
+    const batch = urls.slice(i, i + 5);
+    const batchResults = await Promise.all(batch.map(downloadImage));
+    results.push(...batchResults);
+  }
 
   const zip = new AdmZip();
   let totalSize = 0;

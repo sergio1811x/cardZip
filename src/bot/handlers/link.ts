@@ -154,7 +154,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
       // ─── Шаги 2-4 ПАРАЛЛЕЛЬНО: AI + WB + ZIP ─────────────────────────────
       progress.step('ai');
 
-      const searchImage = rawProduct.images[1] || rawProduct.images[2] || rawProduct.mainImageUrl;
+      const searchImage = rawProduct.mainImageUrl || rawProduct.images[0];
       const wbQuery = rawProduct.titleEn || rawProduct.titleCn;
 
       // Запускаем всё параллельно — все зависят только от rawProduct

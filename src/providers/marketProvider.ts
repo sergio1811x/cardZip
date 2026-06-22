@@ -237,12 +237,19 @@ async function searchSimilar(query: string, imageUrl?: string): Promise<WbSearch
     const width = Math.min(Math.round(x2 - x1), imgW - left);
     const height = Math.min(Math.round(y2 - y1), imgH - top);
 
-    if (width > 50 && height > 50) {
+    const bboxArea = width * height;
+    const imgArea = imgW * imgH;
+    const bboxRatio = bboxArea / imgArea;
+
+    // Кропаем только если bbox > 20% площади фото (иначе объект слишком маленький)
+    if (width > 50 && height > 50 && bboxRatio > 0.2) {
       croppedBuffer = await sharp(imgBuffer)
         .extract({ left, top, width, height })
         .jpeg({ quality: 85 })
         .toBuffer();
-      console.log(`[wb] Cropped: ${imgW}x${imgH} → ${width}x${height} (${croppedBuffer.length} bytes)`);
+      console.log(`[wb] Cropped: ${imgW}x${imgH} → ${width}x${height} (${(bboxRatio * 100).toFixed(0)}% area, ${croppedBuffer.length} bytes)`);
+    } else {
+      console.log(`[wb] Skip crop: bbox ${(bboxRatio * 100).toFixed(0)}% area (< 20%), using full image`);
     }
   } catch (e) {
     console.warn('[wb] Crop failed, using original:', e instanceof Error ? e.message : e);
