@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AiContentGenerator, AiContentRequest, AiContentResult } from '../types';
 
 const MODELS = [
-  process.env.CONTENT_MODEL || 'google/gemini-2.5-flash-preview',
+  process.env.CONTENT_MODEL || 'google/gemini-2.5-flash-preview-05-20',
   process.env.FALLBACK_MODEL || 'deepseek/deepseek-v4-flash',
   process.env.SECONDARY_FALLBACK_MODEL || 'qwen/qwen3-235b-a22b-instruct-2507',
 ];
