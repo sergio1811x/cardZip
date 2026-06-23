@@ -1,6 +1,7 @@
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import { getUserTariffs, saveUserTariffs } from '../../db/queries/userSettings';
+import { redis } from '../../lib/redis';
 import type { UserTariffs } from '../../types';
 
 const TARIFF_FIELDS: Array<{ key: keyof UserTariffs; label: string; unit: string; hint: string }> = [
@@ -10,7 +11,10 @@ const TARIFF_FIELDS: Array<{ key: keyof UserTariffs; label: string; unit: string
   { key: 'targetMarginPercent', label: 'Целевая маржа', unit: '%', hint: 'Желаемая маржинальность для расчёта рекомендуемой цены. Обычно 25–40%.' },
 ];
 
-// Показать текущие настройки + кнопки
+function pendingKey(chatId: number): string {
+  return `tariff_pending:${chatId}`;
+}
+
 export async function handleTariffsMenu(ctx: Context) {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) {
@@ -44,19 +48,6 @@ export async function handleTariffsMenu(ctx: Context) {
   });
 }
 
-// Состояние ожидания ввода (в памяти — serverless, поэтому через jobs/temp)
-// Для serverless используем простой подход: callback ставит флаг, следующее текстовое сообщение — значение
-const pendingEdits = new Map<number, { field: keyof UserTariffs; userId: string }>();
-
-export function getPendingEdit(chatId: number) {
-  return pendingEdits.get(chatId);
-}
-
-export function clearPendingEdit(chatId: number) {
-  pendingEdits.delete(chatId);
-}
-
-// Обработчик нажатия на конкретный тариф
 export async function handleEditTariff(ctx: Context) {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) return;
@@ -71,7 +62,10 @@ export async function handleEditTariff(ctx: Context) {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
-  pendingEdits.set(chatId, { field: fieldKey, userId });
+  // Сохраняем в Redis что ожидаем ввод
+  if (redis) {
+    await redis.set(pendingKey(chatId), JSON.stringify({ field: fieldKey, userId }), { ex: 120 });
+  }
 
   await ctx.reply(
     `📝 <b>${field.label}</b>\n${field.hint}\n\nВведите новое значение (${field.unit}):`,
@@ -79,12 +73,22 @@ export async function handleEditTariff(ctx: Context) {
   );
 }
 
-// Обработчик текстового ввода значения
+export async function getPendingEdit(chatId: number): Promise<{ field: keyof UserTariffs; userId: string } | null> {
+  if (!redis) return null;
+  const raw = await redis.get(pendingKey(chatId));
+  if (!raw) return null;
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw) : raw as any;
+  } catch {
+    return null;
+  }
+}
+
 export async function handleTariffInput(ctx: Context, text: string): Promise<boolean> {
   const chatId = ctx.chat?.id;
   if (!chatId) return false;
 
-  const pending = pendingEdits.get(chatId);
+  const pending = await getPendingEdit(chatId);
   if (!pending) return false;
 
   const value = parseFloat(text.replace(',', '.').replace(/[^0-9.]/g, ''));
@@ -97,18 +101,19 @@ export async function handleTariffInput(ctx: Context, text: string): Promise<boo
   tariffs[pending.field] = value;
   await saveUserTariffs(pending.userId, tariffs);
 
+  // Очищаем pending
+  if (redis) await redis.del(pendingKey(chatId));
+
   const field = TARIFF_FIELDS.find((f) => f.key === pending.field);
-  pendingEdits.delete(chatId);
 
   await ctx.reply(
-    `✅ ${field?.label ?? pending.field} установлен: <b>${value} ${field?.unit ?? ''}</b>\n\nНовые тарифы будут использоваться во всех следующих расчётах.`,
+    `✅ ${field?.label ?? pending.field} установлен: <b>${value} ${field?.unit ?? ''}</b>\n\nНовые тарифы применятся к следующим расчётам.`,
     { parse_mode: 'HTML' }
   );
 
   return true;
 }
 
-// Сброс всех тарифов
 export async function handleResetTariffs(ctx: Context) {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) return;

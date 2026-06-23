@@ -74,9 +74,12 @@ bot.on('text', async (ctx) => {
   const chatId = ctx.chat?.id;
 
   // Сначала проверяем: ожидает ли бот ввода тарифа
-  if (chatId && getPendingEdit(chatId)) {
-    const handled = await handleTariffInput(ctx, text);
-    if (handled) return;
+  if (chatId) {
+    const pending = await getPendingEdit(chatId);
+    if (pending) {
+      const handled = await handleTariffInput(ctx, text);
+      if (handled) return;
+    }
   }
 
   const urlMatch = text.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/);

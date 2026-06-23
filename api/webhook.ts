@@ -6,16 +6,23 @@ import { createJob } from '../src/db/queries/jobs';
 import { getStatus } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { supabase } from '../src/db/supabase';
+import { redis } from '../src/lib/redis';
 
 export const config = { maxDuration: 10 };
-const processed = new Set<number>();
+
+async function isDuplicate(updateId: number): Promise<boolean> {
+  if (!redis) return false;
+  const key = `dedup:${updateId}`;
+  const exists = await redis.set(key, '1', { nx: true, ex: 60 });
+  return exists === null;
+}
 
 async function callWithRetry(url: string, body: object): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const ac = new AbortController();
       setTimeout(() => ac.abort(), 4000);
-      const res = await fetch(url, {
+      await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -32,38 +39,41 @@ async function callWithRetry(url: string, body: object): Promise<boolean> {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
+  // Telegram ждёт 200 как можно раньше, иначе ретраит
+  res.status(200).json({ ok: true });
+
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (secret && req.headers['x-telegram-bot-api-secret-token'] !== secret) {
-    return res.status(403).end();
-  }
+  if (secret && req.headers['x-telegram-bot-api-secret-token'] !== secret) return;
 
   const updateId = req.body?.update_id;
-  if (updateId && processed.has(updateId)) return res.status(200).json({ ok: true });
-  if (updateId) { processed.add(updateId); if (processed.size > 1000) processed.clear(); }
+  if (!updateId) return;
+
+  // Дедупликация через Redis
+  if (await isDuplicate(updateId)) {
+    console.log(`[webhook] Duplicate update ${updateId}, skip`);
+    return;
+  }
 
   try {
     const msg = req.body?.message;
     const cbq = req.body?.callback_query;
 
-    // Callback queries и команды — через bot.handleUpdate
     if (cbq || !msg?.text || !msg.from?.id || !msg.chat?.id) {
       await bot.handleUpdate(req.body);
-      return res.status(200).json({ ok: true });
+      return;
     }
 
     const text = msg.text.trim();
     if (text.startsWith('/')) {
       await bot.handleUpdate(req.body);
-      return res.status(200).json({ ok: true });
+      return;
     }
 
     const urlMatch = text.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/);
     if (!urlMatch) {
-      await bot.telegram.sendMessage(msg.chat.id,
-        'Пришлите ссылку на товар с 1688 или Taobao.\n\n<code>https://detail.1688.com/offer/XXX.html</code>',
-        { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-      );
-      return res.status(200).json({ ok: true });
+      // Может быть ввод тарифа или другой текст — отдаём в bot.handleUpdate
+      await bot.handleUpdate(req.body);
+      return;
     }
 
     const dbUser = await getOrCreateUser(msg.from.id);
@@ -74,7 +84,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         `❌ <b>Бесплатные генерации исчерпаны</b>\n\n/upgrade для продолжения`,
         { parse_mode: 'HTML' }
       );
-      return res.status(200).json({ ok: true });
+      return;
+    }
+
+    // Дедупликация по URL: не создавать 2 job для одного URL за 60с
+    if (redis) {
+      const urlKey = `job:${dbUser.id}:${urlMatch[0].slice(0, 80)}`;
+      const dup = await redis.set(urlKey, '1', { nx: true, ex: 60 });
+      if (dup === null) {
+        console.log(`[webhook] Duplicate URL job for user ${dbUser.id}, skip`);
+        return;
+      }
     }
 
     const progressMsg = await bot.telegram.sendMessage(msg.chat.id,
@@ -100,6 +120,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (e) {
     console.error('[webhook]', e);
   }
-
-  res.status(200).json({ ok: true });
 }
