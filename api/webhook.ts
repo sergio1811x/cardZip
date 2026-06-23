@@ -17,12 +17,12 @@ async function isDuplicate(updateId: number): Promise<boolean> {
   return result === null;
 }
 
-async function callWithRetry(url: string, body: object): Promise<boolean> {
+async function callStep(host: string, path: string, body: object): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const ac = new AbortController();
       setTimeout(() => ac.abort(), 4000);
-      await fetch(url, {
+      await fetch(`https://${host}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -52,14 +52,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const msg = req.body?.message;
-  const cbq = req.body?.callback_query;
 
-  // ─── URL pipeline: ранний 200, fire-and-forget step1 ──────────────────────
-  const isUrlMessage = msg?.text && !msg.text.trim().startsWith('/') &&
-    /https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com/i.test(msg.text);
+  // ─── URL pipeline: early 200 + fire step1 ─────────────────────────────────
+  const urlText = msg?.text?.trim() ?? '';
+  const urlMatch = !urlText.startsWith('/') ? urlText.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/i) : null;
 
-  if (isUrlMessage && msg.from?.id && msg.chat?.id) {
-    // Отвечаем Telegram сразу — дальше работаем async
+  if (urlMatch && msg?.from?.id && msg?.chat?.id) {
     res.status(200).json({ ok: true });
 
     try {
@@ -74,10 +72,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return;
       }
 
-      const urlMatch = msg.text.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/);
-      if (!urlMatch) return;
-
-      // Дедупликация по URL
       if (redis) {
         const urlKey = `job:${dbUser.id}:${urlMatch[0].slice(0, 80)}`;
         const dup = await redis.set(urlKey, '1', { nx: true, ex: 60 });
@@ -92,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
 
       const host = req.headers.host || 'card-zip.vercel.app';
-      const sent = await callWithRetry(`https://${host}/api/step1-elim`, { jobId: job.id });
+      const sent = await callStep(host, '/api/step1-elim', { jobId: job.id });
 
       if (!sent) {
         await bot.telegram.editMessageText(
@@ -103,18 +97,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await supabase.from('jobs').update({ status: 'failed', error: 'step1_trigger_failed' }).eq('id', job.id);
       }
     } catch (e) {
-      console.error('[webhook] URL pipeline error:', e);
+      console.error('[webhook] URL pipeline:', e);
     }
     return;
   }
 
-  // ─── Всё остальное: callbacks, команды, текст, tariff input ────────────────
-  // Отвечаем Telegram сразу, потом обрабатываем
-  res.status(200).json({ ok: true });
-
+  // ─── Всё остальное: callbacks, /команды, текст (tariff input) ─────────────
   try {
     await bot.handleUpdate(req.body);
   } catch (e) {
-    console.error('[webhook] handleUpdate error:', e);
+    console.error('[webhook] handleUpdate:', e);
   }
+  res.status(200).json({ ok: true });
 }
