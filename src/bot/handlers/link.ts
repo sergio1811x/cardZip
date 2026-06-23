@@ -3,11 +3,11 @@ import type { Message } from 'telegraf/typings/core/types/typegram';
 import { productImporter } from '../../providers/productImporter';
 import { aiContentGenerator } from '../../providers/aiContentGenerator';
 import { marketProvider } from '../../providers/marketProvider';
-import { calcEconomics, calcTestPurchase } from '../../core/economicsCalc';
+import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../../core/economicsCalc';
 import { zipBuilder } from '../../core/zipBuilder';
 import { formatSeoText } from '../../core/seoFormatter';
-import { buildMessage1, buildMessage3 } from '../../core/messageBuilder';
-import { buildVerdict } from '../../core/verdict';
+import { buildMessage1, buildMessage2, buildMessage3 } from '../../core/messageBuilder';
+import { buildConclusion } from '../../core/verdict';
 import { buildRiskFlags } from '../../core/riskFlags';
 import { filterWbData } from '../../core/wbFilter';
 import { normalizeCnText } from '../../core/cnNormalize';
@@ -141,7 +141,11 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
       const wbFiltered = d.wbFiltered ?? null;
       const riskFlags = d.riskFlags ?? buildRiskFlags(rawProduct, wbFiltered);
       const economics = d.economics;
-      const testPurchase = d.testPurchase ?? calcTestPurchase(economics.costRub, economics.weightMissing);
+      const budgets = d.budgets ?? calcBudgetScenarios(economics.costRub, economics.weightMissing, rawProduct.moq);
+      const maxPurchasePrice = d.maxPurchasePrice ?? (wbFiltered?.medianPrice
+        ? calcMaxPurchasePrice(wbFiltered.medianPrice, rawProduct.weightKg, economics.yuanToRub, undefined, rawProduct.priceYuan)
+        : null);
+      const conclusion = d.conclusion ?? buildConclusion(rawProduct.platform, economics, wbFiltered, riskFlags);
 
       product = {
         ...rawProduct,
@@ -152,11 +156,9 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         wbFiltered,
         riskFlags,
         economics,
-        testPurchase,
-        ...(d.score ? { score: d.score } : {}),
-        ...(d.verdict?.verdict
-          ? { score: d.score ?? buildVerdict(economics, wbFiltered, riskFlags).score, verdict: d.verdict }
-          : buildVerdict(economics, wbFiltered, riskFlags)),
+        budgets,
+        maxPurchasePrice,
+        conclusion,
         cachedAt: new Date(cached.created_at),
       };
     } else {
@@ -190,6 +192,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         marketProvider.searchSimilar(wbQuery, searchImage).catch(() => null),
 
         calcEconomics({
+          platform: rawProduct.platform,
           priceYuan: rawProduct.priceYuan,
           weightKg: rawProduct.weightKg,
         }),
@@ -208,6 +211,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
       // Пересчёт экономики с медианой WB
       const economics = wbFiltered && wbFiltered.medianPrice > 0
         ? await calcEconomics({
+            platform: rawProduct.platform,
             priceYuan: rawProduct.priceYuan,
             weightKg: rawProduct.weightKg,
             wbMedianPrice: wbFiltered.medianPrice,
@@ -215,8 +219,11 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         : initialEconomics;
 
       const riskFlags = buildRiskFlags(rawProduct, wbFiltered);
-      const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing);
-      const { score, verdict } = buildVerdict(economics, wbFiltered, riskFlags);
+      const budgets = calcBudgetScenarios(economics.costRub, economics.weightMissing, rawProduct.moq);
+      const maxPurchasePrice = wbFiltered?.medianPrice
+        ? calcMaxPurchasePrice(wbFiltered.medianPrice, rawProduct.weightKg, economics.yuanToRub, undefined, rawProduct.priceYuan)
+        : null;
+      const conclusion = buildConclusion(rawProduct.platform, economics, wbFiltered, riskFlags);
 
       product = {
         ...rawProduct,
@@ -227,9 +234,9 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         wbFiltered,
         riskFlags,
         economics,
-        testPurchase,
-        score,
-        verdict,
+        budgets,
+        maxPurchasePrice,
+        conclusion,
       };
 
       upsertProduct(userId, product).catch((e) => console.error('[pipeline] upsert failed:', e));

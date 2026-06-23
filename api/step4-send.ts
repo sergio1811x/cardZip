@@ -5,7 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { markSent } from '../src/db/queries/jobs';
 import { getStatus } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
-import { buildMessage1, buildMessage3, buildEconomicsKeyboard } from '../src/core/messageBuilder';
+import { buildMessage1, buildMessage2, buildMessage3 } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
 import { zipBuilder } from '../src/core/zipBuilder';
@@ -34,8 +34,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, chatId, job.tg_message_id, 'send')
       : null;
 
-    const [seoText, zipBuffer, freshStatus] = await Promise.all([
+    const [seoText, briefText, zipBuffer, freshStatus] = await Promise.all([
       Promise.resolve(formatSeoText(product, product.seoContent, product.riskFlags)),
+      Promise.resolve(formatOrderBrief(product, product.seoContent, product.economics, product.riskFlags, job.input_url)),
       result.imageUrls?.length
         ? zipBuilder.buildFromUrls(result.imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null as Buffer | null)
         : Promise.resolve(null as Buffer | null),
@@ -49,26 +50,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
-    // Сообщение 1: Анализ + inline кнопки экономики
-    const econKeyboard = buildEconomicsKeyboard(job.id);
+    // Сообщение 1: Товар + WB ориентир + Экономика + Вывод
     await bot.telegram.sendMessage(chatId, buildMessage1(product), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      ...econKeyboard,
     });
 
-    // Сообщение 2a: SEO файл
+    // Сообщение 2: Риски + Бюджеты + Кнопки
+    const msg2 = buildMessage2(product, job.id);
+    await bot.telegram.sendMessage(chatId, msg2.text, {
+      parse_mode: 'HTML',
+      ...msg2.keyboard,
+    });
+
+    // Файлы
     await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'seo_content.md'), {
       caption: '📄 SEO-материалы для карточки WB',
     });
-
-    // Сообщение 2b: Байерский бриф
-    const briefText = formatOrderBrief(product, product.seoContent, product.economics, product.riskFlags, job.input_url);
     await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), 'order_brief.md'), {
       caption: '📋 ТЗ для байера / карго',
     });
-
-    // Сообщение 2b: ZIP
     if (zipBuffer) {
       await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'), {
         caption: `🖼 Фото товара (${result.imageUrls.length} шт.)`,
@@ -80,7 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...keyboard });
 
     await markSent(job.id);
-    console.log(`[step4] Job ${job.id} sent to Telegram`);
+    console.log(`[step4] Job ${job.id} sent`);
 
     res.status(200).json({ ok: true });
   } catch (e: any) {

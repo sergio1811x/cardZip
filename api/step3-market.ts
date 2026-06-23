@@ -2,8 +2,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { calcEconomics, calcTestPurchase } from '../src/core/economicsCalc';
-import { buildVerdict } from '../src/core/verdict';
+import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../src/core/economicsCalc';
+import { buildConclusion } from '../src/core/verdict';
 import { buildRiskFlags } from '../src/core/riskFlags';
 import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
@@ -90,6 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Экономика
     const economicsInput = {
+      platform: raw.platform,
       priceYuan: raw.priceYuan,
       weightKg: raw.weightKg,
       categoryHint: raw.categoryName,
@@ -99,12 +100,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const economics = await calcEconomics(economicsInput);
 
     const riskFlags = buildRiskFlags(raw, wbFiltered);
-    const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing, raw.moq);
-    const { score, verdict } = buildVerdict(economics, wbFiltered, riskFlags);
+    const budgets = calcBudgetScenarios(economics.costRub, economics.weightMissing, raw.moq);
+    const maxPurchasePrice = wbFiltered?.medianPrice
+      ? calcMaxPurchasePrice(wbFiltered.medianPrice, raw.weightKg, economics.yuanToRub, userTariffs ?? undefined, raw.priceYuan)
+      : null;
+    const conclusion = buildConclusion(raw.platform, economics, wbFiltered, riskFlags);
 
     progress?.stop();
 
-    console.log(`[step3-market] WB: ${wbFiltered?.quality ?? 'null'} (${wbFiltered?.relevantCount ?? 0} relevant) | score: ${score.total}/100 | verdict: ${verdict.verdict}`);
+    console.log(`[step3-market] WB: ${wbFiltered?.quality ?? 'null'} (${wbFiltered?.relevantCount ?? 0} relevant) | ${conclusion.icon} ${conclusion.headline.slice(0, 40)}`);
 
     await supabase.from('jobs').update({
       status: 'done',
@@ -118,9 +122,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           wbFiltered,
           riskFlags,
           economics,
-          testPurchase,
-          score,
-          verdict,
+          budgets,
+          maxPurchasePrice,
+          conclusion,
         },
       },
       finished_at: new Date().toISOString(),

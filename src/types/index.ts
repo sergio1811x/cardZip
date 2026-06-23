@@ -50,15 +50,13 @@ export interface RawProduct1688 {
   supplierExtra?: SupplierExtra;
 }
 
-// ─── Verdict ─────────────────────────────────────────────────────────────────
+// ─── Platform Conclusion (replaces Score/Verdict) ────────────────────────────
 
-export type ProductVerdict = 'test_candidate' | 'manual_check' | 'high_risk' | 'no_data';
-
-export interface Verdict {
-  signal: 'green' | 'yellow' | 'red';
-  verdict: ProductVerdict;
-  label: string;
-  reasons: string[];
+export interface PlatformConclusion {
+  platform: Platform;
+  icon: string;
+  headline: string;
+  disclaimers: string[];
 }
 
 export interface ProductWithContent extends RawProduct1688 {
@@ -69,9 +67,9 @@ export interface ProductWithContent extends RawProduct1688 {
   wbFiltered: WbFilteredResult | null;
   riskFlags: RiskFlags;
   economics: EconomicsResult;
-  testPurchase: TestPurchaseResult | null;
-  score: MarketScore;
-  verdict: Verdict;
+  budgets: BudgetScenarios | null;
+  maxPurchasePrice: MaxPurchasePrice | null;
+  conclusion: PlatformConclusion;
   cachedAt?: Date;
 }
 
@@ -131,19 +129,6 @@ export interface WbFilteredResult {
   raw: WbSearchResult;
 }
 
-// ─── Market Score ────────────────────────────────────────────────────────────
-
-export interface MarketScore {
-  total: number | null;
-  demandScore: number | null;
-  competitionScore: number | null;
-  marginScore: number | null;
-  reliabilityScore: number;
-  verdict: ProductVerdict;
-  label: string;
-  reasons: string[];
-}
-
 export interface MarketProvider {
   searchSimilar(query: string, imageUrl?: string): Promise<WbSearchResult | null>;
 }
@@ -165,6 +150,7 @@ export interface AiContentRequest {
   model?: string;
   riskFlags?: RiskFlags;
   wbTopKeywords?: string[];
+  platform?: Platform;
 }
 
 export interface AiContentResult {
@@ -203,14 +189,30 @@ export interface RiskFlags {
   marketDataUnreliable: boolean;
 }
 
-// ─── Test Purchase ───────────────────────────────────────────────────────────
+// ─── Budget Scenarios (replaces TestPurchaseResult) ──────────────────────────
 
-export interface TestPurchaseResult {
+export interface BudgetScenario {
+  label: string;
   quantity: number;
-  goodsAndCargoRub: number;
-  reservePercent: number;
+  goodsCostRub: number;
   reserveRub: number;
-  testBudgetRub: number;
+  totalRub: number;
+}
+
+export interface BudgetScenarios {
+  sample: BudgetScenario;
+  test: BudgetScenario;
+  firstBatch: BudgetScenario;
+  weightMissing: boolean;
+}
+
+// ─── Max Purchase Price ──────────────────────────────────────────────────────
+
+export interface MaxPurchasePrice {
+  maxYuan: number;
+  currentYuan: number;
+  allowed: boolean;
+  targetMarginPercent: number;
 }
 
 export interface AiContentGenerator {
@@ -275,7 +277,10 @@ export interface UserTariffs {
 
 // ─── Economics ────────────────────────────────────────────────────────────────
 
+export type PlatformMode = 'full' | 'sample_only' | 'reference_only';
+
 export interface EconomicsInput {
+  platform: Platform;
   priceYuan: number;
   weightKg: number;
   wbAvgPrice?: number;
@@ -299,13 +304,13 @@ export interface EconomicsBreakdown {
 
 export interface EconomicsResult {
   yuanToRub: number;
+  platformMode: PlatformMode;
   breakdown: EconomicsBreakdown;
   costRub: number;
   avgSaleRub: number;
   grossProfitRub: number;
   grossMarginPercent: number;
   roiPercent: number;
-  recommendedPriceRub: number;
   weightMissing: boolean;
   isCustomTariffs: boolean;
   isSyntheticPrice: boolean;

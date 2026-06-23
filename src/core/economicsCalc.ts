@@ -1,4 +1,8 @@
-import type { EconomicsInput, EconomicsResult, EconomicsBreakdown, TestPurchaseResult, UserTariffs } from '../types';
+import type {
+  EconomicsInput, EconomicsResult, EconomicsBreakdown,
+  BudgetScenarios, BudgetScenario, MaxPurchasePrice,
+  UserTariffs, PlatformMode,
+} from '../types';
 
 // ─── Smart Defaults ──────────────────────────────────────────────────────────
 
@@ -16,9 +20,9 @@ const DEFAULTS = {
 };
 
 const CATEGORY_CARGO: Record<string, number> = {
-  light: 4.0,   // одежда, пластик, объёмные
-  dense: 3.5,   // бижутерия, электроника, мелкое плотное
-  heavy: 5.0,   // инструменты, металл
+  light: 4.0,
+  dense: 3.5,
+  heavy: 5.0,
 };
 
 const LIGHT_CATEGORIES = /одежд|cloth|текстил|textile|пластик|plastic|игрушк|toy|сумк|bag|обувь|shoe|шапк|hat/i;
@@ -52,7 +56,6 @@ async function fetchYuanRate(): Promise<number> {
       const rate = cny.Value / cny.Nominal;
       if (isFinite(rate) && rate > 0) {
         cachedRate = { value: rate, fetchedAt: Date.now() };
-        console.log(`[fx] Курс ЦБ: 1 CNY = ${rate.toFixed(2)} RUB`);
         return rate;
       }
     }
@@ -66,13 +69,22 @@ export async function getYuanRate(): Promise<number> {
   return fetchYuanRate();
 }
 
+// ─── Platform Mode ───────────────────────────────────────────────────────────
+
+function getPlatformMode(platform: string): PlatformMode {
+  if (platform === '1688') return 'full';
+  if (platform === 'taobao') return 'sample_only';
+  return 'reference_only';
+}
+
 // ─── Main Calculation ────────────────────────────────────────────────────────
 
 export async function calcEconomics(input: EconomicsInput): Promise<EconomicsResult> {
-  const { priceYuan, weightKg, wbMedianPrice, wbAvgPrice, categoryHint, tariffs } = input;
+  const { platform, priceYuan, weightKg, wbMedianPrice, wbAvgPrice, categoryHint, tariffs } = input;
   const yuanToRub = await fetchYuanRate();
   const weightMissing = !weightKg || weightKg <= 0;
-  const isCustom = !!(tariffs?.cargoPerKgUsd || tariffs?.fulfillmentRub || tariffs?.taxPercent || tariffs?.targetMarginPercent);
+  const isCustom = !!(tariffs?.cargoPerKgUsd || tariffs?.fulfillmentRub || tariffs?.taxPercent || tariffs?.targetMarginPercent || tariffs?.drrPercent);
+  const platformMode = getPlatformMode(platform);
 
   const cargoPerKgUsd = tariffs?.cargoPerKgUsd ?? getSmartCargoRate(categoryHint);
   const fulfillmentRub = tariffs?.fulfillmentRub ?? DEFAULTS.fulfillmentRub;
@@ -80,15 +92,32 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   const targetMargin = tariffs?.targetMarginPercent ?? DEFAULTS.targetMarginPercent;
   const drrPercent = tariffs?.drrPercent ?? DEFAULTS.drrPercent;
 
-  // Декомпозиция
+  // Себестоимость (одинаково для всех платформ)
   const purchaseRub = Math.round(priceYuan * yuanToRub);
   const bankMarkupRub = Math.round(purchaseRub * DEFAULTS.bankMarkupPercent / 100);
   const cargoRub = weightMissing ? 0 : Math.round(weightKg * cargoPerKgUsd * USD_TO_RUB);
   const internalLogisticsRub = weightMissing ? 0 : fulfillmentRub;
-
   const costRub = purchaseRub + bankMarkupRub + cargoRub + internalLogisticsRub;
 
-  // Цена продажи
+  // Для Taobao/Tmall — только себестоимость, без расчёта прибыли
+  if (platformMode !== 'full') {
+    const breakdown: EconomicsBreakdown = {
+      purchaseYuan: priceYuan, purchaseRub, bankMarkupRub, cargoRub,
+      internalLogisticsRub, wbCommissionRub: 0, wbLogisticsRub: 0, taxRub: 0, drrRub: 0, drrPercent: 0,
+    };
+    const disclaimer = platformMode === 'sample_only'
+      ? 'Taobao — розничная площадка. Рассчитана ориентировочная стоимость образца. Для партии найдите аналог на 1688.'
+      : 'Tmall — брендовый маркетплейс. Проверьте права на товарный знак. Для OEM-закупки найдите аналог на 1688.';
+
+    return {
+      yuanToRub, platformMode, breakdown, costRub,
+      avgSaleRub: 0, grossProfitRub: 0, grossMarginPercent: 0, roiPercent: 0,
+      weightMissing, isCustomTariffs: isCustom, isSyntheticPrice: true,
+      disclaimer,
+    };
+  }
+
+  // 1688: полный расчёт
   const salePrice = wbMedianPrice ?? wbAvgPrice;
   const isSyntheticPrice = !salePrice;
   const avgSaleRub = salePrice
@@ -102,75 +131,88 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   const grossMarginPercent = avgSaleRub > 0 ? Math.round((grossProfitRub / avgSaleRub) * 100) : 0;
   const roiPercent = costRub > 0 ? Math.round((grossProfitRub / costRub) * 100) : 0;
 
-  // Рекомендуемая цена при целевой марже
-  const denominator = 1 - DEFAULTS.wbCommissionPercent / 100 - taxPercent / 100 - drrPercent / 100 - targetMargin / 100;
-  const recommendedPriceRub = denominator > 0
-    ? Math.round((costRub + DEFAULTS.wbLogisticsRub) / denominator)
-    : 0;
-
   const breakdown: EconomicsBreakdown = {
-    purchaseYuan: priceYuan,
-    purchaseRub,
-    bankMarkupRub,
-    cargoRub,
-    internalLogisticsRub,
-    wbCommissionRub,
-    wbLogisticsRub: DEFAULTS.wbLogisticsRub,
-    taxRub,
-    drrRub,
-    drrPercent,
+    purchaseYuan: priceYuan, purchaseRub, bankMarkupRub, cargoRub,
+    internalLogisticsRub, wbCommissionRub, wbLogisticsRub: DEFAULTS.wbLogisticsRub,
+    taxRub, drrRub, drrPercent,
   };
 
-  let disclaimer = isCustom
-    ? 'Расчёт по вашим тарифам.'
-    : `Карго $${cargoPerKgUsd}/кг, фулфилмент ${fulfillmentRub}₽, налог ${taxPercent}%. Настройте под себя → ⚙️`;
+  let disclaimer = 'Расчёт ориентировочный. Комиссии, логистика, реклама, возвраты и фактическая цена продажи могут отличаться.';
+  if (isSyntheticPrice) {
+    disclaimer = `Цена продажи рассчитана при целевой марже ${targetMargin}%, а не взята с рынка. ` + disclaimer;
+  }
   if (weightMissing) {
     disclaimer = '⚠️ Вес не указан — карго не учтено. ' + disclaimer;
   }
-
-  if (isSyntheticPrice) {
-    disclaimer = `⚠️ Цена продажи рассчитана математически (при марже ${targetMargin}%), а не взята с рынка. ` + disclaimer;
+  if (isCustom) {
+    disclaimer = 'Расчёт по вашим тарифам. ' + disclaimer;
   }
 
   return {
-    yuanToRub,
-    breakdown,
-    costRub,
-    avgSaleRub,
-    grossProfitRub,
-    grossMarginPercent,
-    roiPercent,
-    recommendedPriceRub,
-    weightMissing,
-    isCustomTariffs: isCustom,
-    isSyntheticPrice,
+    yuanToRub, platformMode, breakdown, costRub, avgSaleRub,
+    grossProfitRub, grossMarginPercent, roiPercent,
+    weightMissing, isCustomTariffs: isCustom, isSyntheticPrice,
     disclaimer,
   };
 }
 
-// ─── Test Purchase ───────────────────────────────────────────────────────────
+// ─── Max Purchase Price ──────────────────────────────────────────────────────
 
-const DEFAULT_TEST_QUANTITY = 20;
-const DEFAULT_RESERVE_PERCENT = 15;
+export function calcMaxPurchasePrice(
+  wbMedianPrice: number,
+  weightKg: number,
+  yuanToRub: number,
+  tariffs?: UserTariffs,
+  currentPriceYuan?: number
+): MaxPurchasePrice | null {
+  if (!wbMedianPrice || wbMedianPrice <= 0) return null;
 
-export function calcTestPurchase(
-  unitCostRub: number,
-  weightMissing: boolean,
-  moq?: number,
-  quantity: number = DEFAULT_TEST_QUANTITY
-): TestPurchaseResult | null {
-  if (weightMissing) return null;
+  const targetMargin = tariffs?.targetMarginPercent ?? DEFAULTS.targetMarginPercent;
+  const drrPercent = tariffs?.drrPercent ?? DEFAULTS.drrPercent;
+  const taxPercent = tariffs?.taxPercent ?? DEFAULTS.taxPercent;
+  const cargoPerKgUsd = tariffs?.cargoPerKgUsd ?? DEFAULTS.cargoPerKgUsd;
+  const fulfillmentRub = tariffs?.fulfillmentRub ?? DEFAULTS.fulfillmentRub;
 
-  const actualQty = moq && moq > quantity ? moq : quantity;
-  const goodsAndCargoRub = unitCostRub * actualQty;
-  const reserveRub = Math.round(goodsAndCargoRub * DEFAULT_RESERVE_PERCENT / 100);
-  const testBudgetRub = goodsAndCargoRub + reserveRub;
+  const targetProfitRub = wbMedianPrice * targetMargin / 100;
+  const wbCommRub = wbMedianPrice * DEFAULTS.wbCommissionPercent / 100;
+  const drrRub = wbMedianPrice * drrPercent / 100;
+  const taxRub = wbMedianPrice * taxPercent / 100;
+
+  const allowedCostRub = wbMedianPrice - wbCommRub - DEFAULTS.wbLogisticsRub - drrRub - taxRub - targetProfitRub;
+  const cargoRub = weightKg > 0 ? weightKg * cargoPerKgUsd * USD_TO_RUB : 0;
+  const maxProductRub = allowedCostRub - cargoRub - fulfillmentRub;
+  const maxYuan = maxProductRub / (yuanToRub * (1 + DEFAULTS.bankMarkupPercent / 100));
 
   return {
-    quantity: actualQty,
-    goodsAndCargoRub,
-    reservePercent: DEFAULT_RESERVE_PERCENT,
-    reserveRub,
-    testBudgetRub,
+    maxYuan: Math.round(maxYuan * 100) / 100,
+    currentYuan: currentPriceYuan ?? 0,
+    allowed: (currentPriceYuan ?? 0) <= maxYuan,
+    targetMarginPercent: targetMargin,
+  };
+}
+
+// ─── Budget Scenarios ────────────────────────────────────────────────────────
+
+export function calcBudgetScenarios(
+  unitCostRub: number,
+  weightMissing: boolean,
+  moq?: number
+): BudgetScenarios {
+  const reservePercent = 15;
+
+  function scenario(label: string, qty: number): BudgetScenario {
+    const goodsCostRub = unitCostRub * qty;
+    const reserveRub = Math.round(goodsCostRub * reservePercent / 100);
+    return { label, quantity: qty, goodsCostRub, reserveRub, totalRub: goodsCostRub + reserveRub };
+  }
+
+  const testQty = moq && moq > 20 ? moq : 20;
+  const batchQty = moq && moq > 50 ? moq : 50;
+
+  return {
+    sample: scenario('Образец', 1),
+    test: scenario('Тест', testQty),
+    firstBatch: scenario('Первая партия', batchQty),
+    weightMissing,
   };
 }

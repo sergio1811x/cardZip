@@ -9,7 +9,7 @@ import { formatSeoText } from '../src/core/seoFormatter';
 import { zipBuilder } from '../src/core/zipBuilder';
 import { aiContentGenerator } from '../src/providers/aiContentGenerator';
 import { calcEconomics } from '../src/core/economicsCalc';
-import { buildVerdict } from '../src/core/verdict';
+import { buildConclusion } from '../src/core/verdict';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -74,7 +74,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
           }),
         ]);
 
-        const verdict = buildVerdict(economics, wbData, raw.sold);
+        const conclusion = buildConclusion(raw.platform ?? '1688', economics, null, { hasBrand: false, isElectrical: false, isChildren: false, isCosmetic: false, isFood: false, isMedical: false, supplierOrdersLow: false, supplierTypeUnknown: false, weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: true });
 
         const product = {
           ...raw,
