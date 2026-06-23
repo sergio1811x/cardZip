@@ -68,15 +68,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     }).eq('id', jobId);
 
-    // Вызываем step2
+    // Отвечаем и вызываем step2
+    res.status(200).json({ ok: true });
     const host = req.headers.host || 'card-zip.vercel.app';
-    fetch(`https://${host}/api/step2-process`, {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 1000);
+    await fetch(`https://${host}/api/step2-process`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jobId }),
+      signal: ac.signal,
     }).catch(() => {});
-
-    res.status(200).json({ ok: true });
+    return;
   } catch (e: any) {
     console.error('[step1]', e.message);
     await supabase.from('jobs').update({ status: 'failed', error: e.message, finished_at: new Date().toISOString() }).eq('id', jobId);
