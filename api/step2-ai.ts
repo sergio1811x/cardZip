@@ -1,0 +1,97 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import 'dotenv/config';
+import { Telegraf } from 'telegraf';
+import { supabase } from '../src/db/supabase';
+import { aiContentGenerator } from '../src/providers/aiContentGenerator';
+import { createStepProgress } from '../src/core/progress';
+import type { AiContentResult } from '../src/types';
+
+export const config = { maxDuration: 60 };
+
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'POST') return res.status(405).end();
+
+  const { jobId } = req.body ?? {};
+  if (!jobId) return res.status(400).json({ error: 'jobId required' });
+
+  try {
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
+    if (!job || job.status !== 'elim_done') return res.status(200).json({ ok: true, skip: true });
+
+    await supabase.from('jobs').update({ status: 'ai_processing' }).eq('id', jobId);
+
+    const raw = (job.result_json as any).rawProduct;
+
+    const progress = job.tg_message_id
+      ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'ai')
+      : null;
+
+    const seoContent = await aiContentGenerator.generate({
+      titleCn: raw.titleCn,
+      titleEn: raw.titleEn,
+      description: raw.description,
+      priceYuan: raw.priceYuan,
+      moq: raw.moq,
+      weightKg: raw.weightKg,
+      supplierName: raw.supplierName,
+      supplierRating: raw.supplierRating,
+      categoryName: raw.categoryName,
+      attributes: raw.attributes,
+    }).catch((): AiContentResult => ({
+      titleRu: raw.titleEn || raw.titleCn,
+      description: '', bullets: [], keywords: [],
+      characteristics: {}, isFallback: true,
+    }));
+
+    progress?.stop();
+
+    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | fallback: ${!!seoContent.isFallback}`);
+
+    await supabase.from('jobs').update({
+      status: 'ai_done',
+      result_json: {
+        ...(job.result_json as any),
+        seoContent,
+      },
+    }).eq('id', jobId);
+
+    // Chain → step3-market
+    const host = req.headers.host || 'card-zip.vercel.app';
+    let sent = false;
+    for (let i = 0; i < 2 && !sent; i++) {
+      try {
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 4000);
+        await fetch(`https://${host}/api/step3-market`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+          signal: ac.signal,
+        });
+        sent = true;
+      } catch {
+        if (i === 0) await new Promise(r => setTimeout(r, 500));
+      }
+    }
+
+    if (!sent) {
+      console.error(`[step2-ai] Failed to trigger step3-market for job ${jobId}`);
+      await supabase.from('jobs').update({ status: 'failed', error: 'step3_trigger_failed', finished_at: new Date().toISOString() }).eq('id', jobId);
+      if (job.tg_message_id) {
+        await bot.telegram.editMessageText(
+          job.tg_chat_id, job.tg_message_id, undefined,
+          '❌ Сервер перегружен. Попробуйте ещё раз через минуту.',
+          { parse_mode: 'HTML' }
+        ).catch(() => {});
+      }
+    }
+
+    res.status(200).json({ ok: true });
+  } catch (e: any) {
+    console.error('[step2-ai]', e.message);
+    await supabase.from('jobs').update({ status: 'failed', error: e.message, finished_at: new Date().toISOString() }).eq('id', jobId);
+    res.status(200).json({ ok: false });
+  }
+}

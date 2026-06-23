@@ -75,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step2-process`, {
+        await fetch(`https://${host}/api/step2-ai`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }),
@@ -89,7 +89,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!step2Sent) {
       console.error(`[step1] Failed to trigger step2 for job ${jobId}`);
-      await supabase.from('jobs').update({ status: 'failed', error: 'step2_trigger_failed', finished_at: new Date().toISOString() }).eq('id', jobId);
+      await supabase.from('jobs').update({ status: 'failed', error: 'step2ai_trigger_failed', finished_at: new Date().toISOString() }).eq('id', jobId);
       if (job.tg_message_id) {
         await bot.telegram.editMessageText(
           job.tg_chat_id, job.tg_message_id, undefined,

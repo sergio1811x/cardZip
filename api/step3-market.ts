@@ -2,13 +2,12 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { aiContentGenerator } from '../src/providers/aiContentGenerator';
 import { calcEconomics, calcTestPurchase } from '../src/core/economicsCalc';
 import { buildVerdict } from '../src/core/verdict';
 import { buildRiskFlags } from '../src/core/riskFlags';
 import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
-import type { AiContentResult, WbFilterKeywords } from '../src/types';
+import type { WbFilterKeywords } from '../src/types';
 
 export const config = { maxDuration: 60 };
 
@@ -24,7 +23,7 @@ async function searchWbByImage(imageUrl: string, query?: string) {
     if (query) params.set('query', query);
 
     const url = `${WB_PARSER_URL}/search-by-image?${params}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(45_000) });
     if (!res.ok) return null;
     const data = await res.json() as any;
     if (!data.success || !data.products?.length) return null;
@@ -48,7 +47,7 @@ async function searchWbByImage(imageUrl: string, query?: string) {
       photoSearchConfirmed: data.photoSearchConfirmed ?? false,
     };
   } catch (e: any) {
-    console.warn('[step2] WB failed:', e.message);
+    console.warn('[step3-market] WB failed:', e.message);
     return null;
   }
 }
@@ -63,59 +62,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (!job || job.status !== 'elim_done') return res.status(200).json({ ok: true, skip: true });
+    if (!job || job.status !== 'ai_done') return res.status(200).json({ ok: true, skip: true });
 
-    await supabase.from('jobs').update({ status: 'processing' }).eq('id', jobId);
+    await supabase.from('jobs').update({ status: 'market_processing' }).eq('id', jobId);
 
     const raw = (job.result_json as any).rawProduct;
-    const imageUrls = (job.result_json as any).imageUrls;
+    const seoContent = (job.result_json as any).seoContent;
 
     const progress = job.tg_message_id
-      ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'process')
+      ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
+    // WB поиск — полные 45с, функция своя
     const wbQuery = raw.titleEn || raw.titleCn;
+    const wbData = await searchWbByImage(raw.mainImageUrl, wbQuery);
 
-    const [seoContent, wbData, initialEconomics] = await Promise.all([
-      aiContentGenerator.generate({
-        titleCn: raw.titleCn,
-        titleEn: raw.titleEn,
-        description: raw.description,
-        priceYuan: raw.priceYuan,
-        moq: raw.moq,
-        weightKg: raw.weightKg,
-        supplierName: raw.supplierName,
-        supplierRating: raw.supplierRating,
-        categoryName: raw.categoryName,
-        attributes: raw.attributes,
-      }).catch((): AiContentResult => ({
-        titleRu: raw.titleEn || raw.titleCn,
-        description: '', bullets: [], keywords: [],
-        characteristics: {}, isFallback: true,
-      })),
-
-      searchWbByImage(raw.mainImageUrl, wbQuery),
-
-      calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg }),
-    ]);
-
-    // Фильтрация WB
-    const filterKeywords = seoContent.filterKeywords ?? DEFAULT_FILTER_KEYWORDS;
-    const searchQueries = seoContent.searchQueries ?? seoContent.keywords?.slice(0, 3) ?? [];
+    // Фильтрация
+    const filterKeywords = seoContent?.filterKeywords ?? DEFAULT_FILTER_KEYWORDS;
+    const searchQueries = seoContent?.searchQueries ?? seoContent?.keywords?.slice(0, 3) ?? [];
     const wbFiltered = filterWbData(wbData, filterKeywords, searchQueries);
 
-    // Пересчёт экономики с медианой
+    // Экономика
     const economics = wbFiltered && wbFiltered.medianPrice > 0
       ? await calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg, wbMedianPrice: wbFiltered.medianPrice })
-      : initialEconomics;
+      : await calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg });
 
     const riskFlags = buildRiskFlags(raw, wbFiltered);
     const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing);
-
-    progress?.stop();
     const verdict = buildVerdict(economics, wbFiltered, riskFlags);
 
-    console.log(`[step2] AI: ${seoContent.titleRu?.slice(0, 30)} | WB: ${wbFiltered?.quality ?? 'null'} (${wbFiltered?.relevantCount ?? 0} relevant)`);
+    progress?.stop();
+
+    console.log(`[step3-market] WB: ${wbFiltered?.quality ?? 'null'} (${wbFiltered?.relevantCount ?? 0} relevant) | verdict: ${verdict.verdict}`);
 
     await supabase.from('jobs').update({
       status: 'done',
@@ -123,7 +101,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...(job.result_json as any),
         product: {
           ...raw,
-          titleRu: seoContent.titleRu,
+          titleRu: seoContent?.titleRu ?? raw.titleEn ?? raw.titleCn,
           seoContent,
           wbData,
           wbFiltered,
@@ -136,26 +114,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       finished_at: new Date().toISOString(),
     }).eq('id', jobId);
 
+    // Chain → step4-send
     const host = req.headers.host || 'card-zip.vercel.app';
-    let step3Sent = false;
-    for (let i = 0; i < 2 && !step3Sent; i++) {
+    let sent = false;
+    for (let i = 0; i < 2 && !sent; i++) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step3-send`, {
+        await fetch(`https://${host}/api/step4-send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }),
           signal: ac.signal,
         });
-        step3Sent = true;
+        sent = true;
       } catch {
         if (i === 0) await new Promise(r => setTimeout(r, 500));
       }
     }
 
-    if (!step3Sent) {
-      console.error(`[step2] Failed to trigger step3 for job ${jobId}`);
+    if (!sent) {
+      console.error(`[step3-market] Failed to trigger step4-send for job ${jobId}`);
       if (job.tg_message_id) {
         await bot.telegram.editMessageText(
           job.tg_chat_id, job.tg_message_id, undefined,
@@ -166,9 +145,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     res.status(200).json({ ok: true });
-    return;
   } catch (e: any) {
-    console.error('[step2]', e.message);
+    console.error('[step3-market]', e.message);
     await supabase.from('jobs').update({ status: 'failed', error: e.message, finished_at: new Date().toISOString() }).eq('id', jobId);
     res.status(200).json({ ok: false });
   }
