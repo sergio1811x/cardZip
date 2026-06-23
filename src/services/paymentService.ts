@@ -8,7 +8,7 @@ const PACKAGES: Record<string, { stars: number; label: string; plan: Plan; descr
   test: {
     stars: 1,
     label: 'Тест 3 разбора',
-    plan: 'pack10',
+    plan: 'pack10' as Plan,
     description: 'Тестовый пакет: 3 разбора за 1 звезду.',
   },
   pack10: {
@@ -38,7 +38,7 @@ export async function sendInvoice(ctx: Context, packageId: string): Promise<void
   await (ctx as any).replyWithInvoice({
     title: `CardZip — ${pkg.label}`,
     description: pkg.description,
-    payload: JSON.stringify({ plan: pkg.plan, userId: (ctx as any).dbUserId }),
+    payload: JSON.stringify({ plan: pkg.plan, credits: pkg.stars === 1 ? 3 : undefined, userId: (ctx as any).dbUserId }),
     provider_token: '',
     currency: 'XTR',
     prices: [{ label: pkg.label, amount: pkg.stars }],
@@ -53,12 +53,14 @@ export async function handleSuccessfulPayment(
   if (!payment) return;
 
   let plan: Plan = 'pack10';
+  let creditsOverride: number | undefined;
   try {
     const payloadData = JSON.parse(payment.invoice_payload);
     if (payloadData.plan) plan = payloadData.plan as Plan;
+    if (payloadData.credits) creditsOverride = payloadData.credits;
   } catch {}
 
-  await subscriptionService.activate(userId, plan);
+  await subscriptionService.activate(userId, plan, creditsOverride);
   track(userId, 'paid', { plan, stars: payment.total_amount, currency: payment.currency });
 
   const labels: Record<string, string> = {

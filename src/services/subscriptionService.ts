@@ -96,8 +96,8 @@ export async function consumeCredit(userId: string): Promise<void> {
     .eq('user_id', userId);
 }
 
-export async function activate(userId: string, plan: Plan): Promise<void> {
-  const totalCredits = PLAN_CREDITS[plan] ?? 0;
+export async function activate(userId: string, plan: Plan, creditsOverride?: number): Promise<void> {
+  const totalCredits = creditsOverride ?? PLAN_CREDITS[plan] ?? 0;
   const now = new Date();
 
   let activeUntil: Date | null = null;
