@@ -214,7 +214,6 @@ export function buildMessage2(product: ProductWithContent, jobId: string): {
 
   // Бюджеты
   if (budgets && economics.platformMode === 'full') {
-    L.push('🧪 <b>Бюджет закупки</b>');
     if (wm) {
       L.push('🧪 <b>Бюджет — без карго</b>');
       [budgets.sample, budgets.test, budgets.firstBatch].forEach((s) => {
@@ -222,6 +221,7 @@ export function buildMessage2(product: ProductWithContent, jobId: string): {
       });
       L.push('  <i>Карго не включено: нет веса.</i>');
     } else {
+      L.push('🧪 <b>Бюджет закупки</b>');
       [budgets.sample, budgets.test, budgets.firstBatch].forEach((s) => {
         L.push(`  ${s.label} — ${s.quantity} шт: ~<b>${fP(s.totalRub)}</b>${s.quantity > 1 ? ' (вкл. 15% резерв)' : ''}`);
       });
