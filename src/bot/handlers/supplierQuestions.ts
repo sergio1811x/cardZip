@@ -1,9 +1,21 @@
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
-import { findLastProductByUser } from '../../db/queries/products';
+import { supabase } from '../../db/supabase';
 import { buildRiskFlags } from '../../core/riskFlags';
 import { buildFallbackQuestions, formatQuestionsRu, formatQuestionsCn } from '../../core/supplierQuestions';
 import type { RawProduct1688, SupplierQuestions, WbFilteredResult } from '../../types';
+
+async function findLastJob(userId: string) {
+  const { data } = await supabase
+    .from('jobs')
+    .select('result_json')
+    .eq('user_id', userId)
+    .in('status', ['done', 'sent'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+  return data;
+}
 
 export async function handleSupplierQuestions(ctx: Context) {
   const userId = (ctx as any).dbUserId as string | undefined;
@@ -33,27 +45,27 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
   if (!lang) return;
 
   try {
-    const lastProduct = await findLastProductByUser(userId);
-    if (!lastProduct) {
+    const lastJob = await findLastJob(userId);
+    if (!lastJob?.result_json) {
       await ctx.reply('Нет сохранённых товаров. Отправь ссылку на товар с 1688.');
       return;
     }
 
-    const data = lastProduct.data_json as any;
+    const data = lastJob.result_json as any;
+    const product = data.product;
 
-    // Приоритет: AI-сгенерированные вопросы из seoContent
+    // Приоритет: AI-сгенерированные вопросы
     const aiQuestions: SupplierQuestions | undefined =
-      data?.seoContent?.supplierQuestions ??
-      data?.product?.seoContent?.supplierQuestions;
+      product?.seoContent?.supplierQuestions ??
+      data.seoContent?.supplierQuestions;
 
     let questions: SupplierQuestions;
 
     if (aiQuestions?.ru?.length && aiQuestions?.cn?.length) {
       questions = aiQuestions;
     } else {
-      // Fallback: генерируем из riskFlags
-      const raw: Partial<RawProduct1688> = data?.rawProduct ?? data ?? {};
-      const wbFiltered: WbFilteredResult | null = data?.wbFiltered ?? data?.product?.wbFiltered ?? null;
+      const raw: Partial<RawProduct1688> = product ?? data.rawProduct ?? {};
+      const wbFiltered: WbFilteredResult | null = product?.wbFiltered ?? null;
       const flags = buildRiskFlags(raw as RawProduct1688, wbFiltered);
       questions = buildFallbackQuestions(flags);
     }

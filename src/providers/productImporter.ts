@@ -210,8 +210,24 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     weightKg = 0;
   }
 
-  // Цена: promotion_price → price → первый элемент price_range
-  const price = json.promotion_price ?? json.price ?? json.price_range?.[0]?.price ?? 0;
+  // Цена: если есть несколько SKU с разной ценой — берём медианную (основной товар),
+  // а не минимальную (аксессуар/запчасть)
+  const skuPrices = (json.skus ?? [])
+    .map((s) => s.price)
+    .filter((p): p is number => p != null && p > 0)
+    .sort((a, b) => a - b);
+
+  let price: number;
+  if (skuPrices.length >= 3) {
+    // Медиана SKU — основной товар, не аксессуар
+    const mid = Math.floor(skuPrices.length / 2);
+    price = skuPrices.length % 2 ? skuPrices[mid] : (skuPrices[mid - 1] + skuPrices[mid]) / 2;
+    if (skuPrices[0] < price * 0.5) {
+      console.log(`[import] SKU разброс: min ${skuPrices[0]}¥ → median ${price}¥ → max ${skuPrices[skuPrices.length - 1]}¥ (дешёвый SKU = аксессуар?)`);
+    }
+  } else {
+    price = json.promotion_price ?? json.price ?? json.price_range?.[0]?.price ?? 0;
+  }
 
   // Оптовые цены
   const priceRange = (json.price_range ?? [])
