@@ -39,8 +39,11 @@ async function callStep(host: string, path: string, body: object): Promise<boole
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
+  console.log(`[webhook] update_id=${req.body?.update_id} type=${req.body?.callback_query ? 'cbq' : req.body?.message?.text ? 'text' : 'other'}`);
+
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
   if (secret && req.headers['x-telegram-bot-api-secret-token'] !== secret) {
+    console.log('[webhook] SECRET MISMATCH');
     return res.status(200).json({ ok: true });
   }
 
@@ -48,14 +51,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!updateId) return res.status(200).json({ ok: true });
 
   if (await isDuplicate(updateId)) {
+    console.log(`[webhook] DEDUP blocked ${updateId}`);
     return res.status(200).json({ ok: true });
   }
 
   const msg = req.body?.message;
 
-  // ─── URL pipeline: early 200 + fire step1 ─────────────────────────────────
   const urlText = msg?.text?.trim() ?? '';
   const urlMatch = !urlText.startsWith('/') ? urlText.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/i) : null;
+
+  console.log(`[webhook] urlMatch=${!!urlMatch} text="${urlText.slice(0, 50)}"`);
 
   if (urlMatch && msg?.from?.id && msg?.chat?.id) {
     try {
