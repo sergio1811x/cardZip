@@ -16,6 +16,7 @@ import { handleRewrite } from './handlers/rewrite';
 import { handleQuickTariff } from './handlers/quickTariff';
 import { handleSearch1688 } from './handlers/search1688';
 import { handleSkuSelect } from './handlers/skuSelect';
+import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -73,6 +74,12 @@ bot.action(/^(cargo|ff)_(\d+)_(.+)$/, async (ctx) => {
   return handleQuickTariff(ctx);
 });
 
+// ─── Подтверждение от поставщика ─────────────────────────────────────────────
+bot.action('supplier_confirm', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleSupplierConfirmStart(ctx);
+});
+
 // ─── Выбор SKU ──────────────────────────────────────────────────────────────
 bot.action(/^sku_(all|\d+)_(.+)$/, async (ctx) => {
   return handleSkuSelect(ctx);
@@ -99,10 +106,15 @@ bot.on('text', async (ctx) => {
   const userId = (ctx as any).dbUserId as string | undefined;
   const chatId = ctx.chat?.id;
 
-  // Сначала проверяем: ожидает ли бот ввода тарифа
+  // Проверяем pending states: подтверждение поставщика → тариф
   if (chatId) {
-    const pending = await getPendingEdit(chatId);
-    if (pending) {
+    const confirmPending = await getPendingConfirm(chatId);
+    if (confirmPending) {
+      const handled = await handleSupplierConfirmText(ctx, text);
+      if (handled) return;
+    }
+    const tariffPending = await getPendingEdit(chatId);
+    if (tariffPending) {
       const handled = await handleTariffInput(ctx, text);
       if (handled) return;
     }
