@@ -137,14 +137,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }).eq('id', jobId);
 
     const host = req.headers.host || 'card-zip.vercel.app';
-    const ac = new AbortController();
-    setTimeout(() => ac.abort(), 3000);
-    await fetch(`https://${host}/api/step3-send`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId }),
-      signal: ac.signal,
-    }).catch(() => {});
+    let step3Sent = false;
+    for (let i = 0; i < 2 && !step3Sent; i++) {
+      try {
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 4000);
+        await fetch(`https://${host}/api/step3-send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+          signal: ac.signal,
+        });
+        step3Sent = true;
+      } catch {
+        if (i === 0) await new Promise(r => setTimeout(r, 500));
+      }
+    }
+
+    if (!step3Sent) {
+      console.error(`[step2] Failed to trigger step3 for job ${jobId}`);
+      if (job.tg_message_id) {
+        await bot.telegram.editMessageText(
+          job.tg_chat_id, job.tg_message_id, undefined,
+          '❌ Не удалось отправить результат. Попробуйте ещё раз.',
+          { parse_mode: 'HTML' }
+        ).catch(() => {});
+      }
+    }
+
     res.status(200).json({ ok: true });
     return;
   } catch (e: any) {

@@ -5,11 +5,31 @@ import { getOrCreateUser } from '../src/db/queries/users';
 import { createJob } from '../src/db/queries/jobs';
 import { getStatus } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
+import { supabase } from '../src/db/supabase';
 
 export const config = { maxDuration: 10 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const processed = new Set<number>();
+
+async function callWithRetry(url: string, body: object): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 4000);
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      });
+      return true;
+    } catch {
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  return false;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -25,7 +45,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const msg = req.body?.message;
-    if (!msg?.text || !msg.from?.id || !msg.chat?.id) {
+    const cbq = req.body?.callback_query;
+
+    // Callback queries и команды — через bot.handleUpdate
+    if (cbq || !msg?.text || !msg.from?.id || !msg.chat?.id) {
       await bot.handleUpdate(req.body);
       return res.status(200).json({ ok: true });
     }
@@ -63,16 +86,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const job = await createJob(dbUser.id, msg.chat.id, progressMsg.message_id, urlMatch[0]);
     await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
 
-    // Вызываем step1 ДО ответа — Vercel не убьёт функцию пока res не отправлен
     const host = req.headers.host || 'card-zip.vercel.app';
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 3000);
-    await fetch(`https://${host}/api/step1-elim`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: job.id }),
-      signal: controller.signal,
-    }).catch(() => {});
+    const sent = await callWithRetry(`https://${host}/api/step1-elim`, { jobId: job.id });
+
+    if (!sent) {
+      console.error('[webhook] Failed to trigger step1');
+      await bot.telegram.editMessageText(
+        msg.chat.id, progressMsg.message_id, undefined,
+        '❌ Не удалось запустить обработку. Попробуй ещё раз.',
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+      await supabase.from('jobs').update({ status: 'failed', error: 'step1_trigger_failed' }).eq('id', job.id);
+    }
 
   } catch (e) {
     console.error('[webhook]', e);

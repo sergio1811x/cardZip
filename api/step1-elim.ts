@@ -68,16 +68,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     }).eq('id', jobId);
 
-    // Вызываем step2 ДО ответа — Vercel не убьёт функцию пока res не отправлен
+    // Вызываем step2 — 2 попытки с увеличенным таймаутом
     const host = req.headers.host || 'card-zip.vercel.app';
-    const ac = new AbortController();
-    setTimeout(() => ac.abort(), 3000);
-    await fetch(`https://${host}/api/step2-process`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId }),
-      signal: ac.signal,
-    }).catch(() => {});
+    let step2Sent = false;
+    for (let i = 0; i < 2 && !step2Sent; i++) {
+      try {
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 4000);
+        await fetch(`https://${host}/api/step2-process`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+          signal: ac.signal,
+        });
+        step2Sent = true;
+      } catch {
+        if (i === 0) await new Promise(r => setTimeout(r, 500));
+      }
+    }
+
+    if (!step2Sent) {
+      console.error(`[step1] Failed to trigger step2 for job ${jobId}`);
+      await supabase.from('jobs').update({ status: 'failed', error: 'step2_trigger_failed', finished_at: new Date().toISOString() }).eq('id', jobId);
+      if (job.tg_message_id) {
+        await bot.telegram.editMessageText(
+          job.tg_chat_id, job.tg_message_id, undefined,
+          '❌ Сервер перегружен. Попробуйте ещё раз через минуту.',
+          { parse_mode: 'HTML' }
+        ).catch(() => {});
+      }
+    }
+
     res.status(200).json({ ok: true });
     return;
   } catch (e: any) {

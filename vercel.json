@@ -6,10 +6,6 @@
     "api/webhook.ts": { "maxDuration": 10 },
     "api/step1-elim.ts": { "maxDuration": 60 },
     "api/step2-process.ts": { "maxDuration": 60 },
-    "api/step3-send.ts": { "maxDuration": 60 },
-    "api/poll-stuck.ts": { "maxDuration": 10 }
-  },
-  "crons": [
-    { "path": "/api/poll-stuck", "schedule": "* * * * *" }
-  ]
+    "api/step3-send.ts": { "maxDuration": 60 }
+  }
 }
