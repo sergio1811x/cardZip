@@ -1,17 +1,26 @@
-import type { RawProduct1688, AiContentResult, EconomicsResult, RiskFlags } from '../types';
+import type { RawProduct1688, AiContentResult, EconomicsResult, RiskFlags, BudgetScenarios, PlatformConclusion } from '../types';
+
+const PLATFORM_STATUS: Record<string, string> = {
+  '1688': 'закупочная гипотеза',
+  taobao: 'розничная витрина / цена образца',
+  tmall: 'брендовая розничная витрина',
+};
 
 export function formatOrderBrief(
   product: RawProduct1688,
   content: AiContentResult,
   economics: EconomicsResult,
   riskFlags: RiskFlags,
-  sourceUrl: string
+  sourceUrl: string,
+  budgets?: BudgetScenarios | null,
+  conclusion?: PlatformConclusion | null
 ): string {
   const L: string[] = [];
 
   L.push('# ТЗ для байера / карго');
   L.push('');
   L.push(`**Дата:** ${new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}`);
+  L.push(`**Площадка:** ${product.platform.toUpperCase()} · ${PLATFORM_STATUS[product.platform] ?? product.platform}`);
   L.push(`**Бот:** @cardzip_bot`);
   L.push('');
 
@@ -36,6 +45,8 @@ export function formatOrderBrief(
   if (product.supplierType) {
     const types = { factory: 'Фабрика', merchant: 'Торговая компания', seller: 'Продавец' };
     L.push(`**Тип:** ${types[product.supplierType]}`);
+  } else {
+    L.push('**Тип:** неизвестен');
   }
   if (product.supplierRating) L.push(`**Рейтинг:** ${product.supplierRating}/5`);
   if (product.sold) L.push(`**Заказов:** ${product.sold}+`);
@@ -45,6 +56,7 @@ export function formatOrderBrief(
   L.push('## 💰 Параметры закупки');
   L.push('');
   L.push(`**Цена:** ${product.priceYuan} ¥ (~${economics.breakdown.purchaseRub} ₽)`);
+  L.push(`**Статус цены:** ${PLATFORM_STATUS[product.platform]}`);
   L.push(`**MOQ:** ${product.moq} шт.`);
   if (product.weightKg > 0) {
     L.push(`**Вес единицы:** ${product.weightKg} кг`);
@@ -66,7 +78,7 @@ export function formatOrderBrief(
     L.push('');
   }
 
-  // SKU / Варианты
+  // SKU
   if (product.skus?.length) {
     L.push('## 🎨 Варианты (SKU)');
     L.push('');
@@ -78,59 +90,102 @@ export function formatOrderBrief(
     L.push('');
   }
 
-  // Характеристики с оригиналом
+  // Характеристики с маркерами достоверности
   if (product.attributes?.length) {
-    L.push('## 📋 Характеристики (оригинал)');
+    L.push('## 📋 Характеристики (оригинал поставщика)');
     L.push('');
-    L.push('| Параметр | Значение |');
-    L.push('|----------|----------|');
+    L.push('| Параметр | Значение | Статус |');
+    L.push('|----------|----------|--------|');
     product.attributes.slice(0, 15).forEach((a) => {
-      L.push(`| ${a.name} | ${a.value} |`);
+      L.push(`| ${a.name} | ${a.value} | ✓ от поставщика |`);
     });
     L.push('');
   }
 
-  // Переведённые характеристики
   if (Object.keys(content.characteristics).length) {
     L.push('## 📋 Характеристики (перевод)');
     L.push('');
-    L.push('| Параметр | Значение |');
-    L.push('|----------|----------|');
+    L.push('| Параметр | Значение | Статус |');
+    L.push('|----------|----------|--------|');
     Object.entries(content.characteristics).forEach(([k, v]) => {
-      L.push(`| ${k} | ${v} |`);
+      L.push(`| ${k} | ${v} | ~ перевод |`);
     });
     L.push('');
   }
 
-  // Алерты для байера
+  // Бюджеты
+  if (budgets && economics.platformMode === 'full') {
+    L.push('## 🧪 Бюджет закупки');
+    L.push('');
+    L.push(`| Сценарий | Кол-во | Товар+доставка | Резерв | Итого |`);
+    L.push('|----------|--------|----------------|--------|-------|');
+    [budgets.sample, budgets.test, budgets.firstBatch].forEach((s) => {
+      L.push(`| ${s.label} | ${s.quantity} шт | ${s.goodsCostRub} ₽ | ${s.reserveRub} ₽ | **${s.totalRub} ₽** |`);
+    });
+    L.push('');
+    if (budgets.weightMissing) L.push('> ⚠️ Вес не указан — карго не учтено в расчёте.');
+    L.push('');
+  } else if (economics.platformMode === 'sample_only') {
+    L.push('## 🧪 Стоимость образца');
+    L.push('');
+    L.push(`1 шт. по цене витрины: ~${economics.costRub} ₽`);
+    L.push('');
+    L.push('> Для партий 20/50/100 шт. запросите цену у продавца.');
+    L.push('');
+  }
+
+  // Алерты
   L.push('## ⚠️ Что проверить перед заказом');
   L.push('');
   const checks: string[] = [];
-  checks.push('Запросить реальные фото товара на складе в Гуанчжоу');
+  checks.push('Запросить реальные фото товара на складе');
   if (product.weightKg <= 0) checks.push('Уточнить точный вес единицы с упаковкой');
   if (riskFlags.isElectrical) checks.push('Проверить напряжение (220V), тип вилки, наличие аккумулятора');
   if (riskFlags.sizeGridRelevant) checks.push('Запросить размерную таблицу в сантиметрах');
   if (riskFlags.hasBrand) checks.push(`Уточнить возможность поставки без логотипа "${riskFlags.brand ?? ''}"`);
-  checks.push('Проверить качество швов / сборки на образце');
+  if (product.platform !== '1688') checks.push('Запросить оптовую цену на 20/50/100 шт.');
+  if (product.platform === 'tmall') checks.push('Проверить права на бренд и товарный знак');
   checks.push('Согласовать упаковку (нейтральная, без иероглифов)');
+  checks.push('Проверить качество на образце перед партией');
 
-  const warnings = content.warnings ?? [];
-  [...warnings, ...checks].forEach((c) => L.push(`- ${c}`));
+  const aiWarnings = content.warnings ?? [];
+  [...aiWarnings, ...checks].forEach((c) => L.push(`- ${c}`));
   L.push('');
+
+  // Вопросы поставщику (китайский)
+  if (content.supplierQuestions?.cn?.length) {
+    L.push('## 📩 Сообщение поставщику (中文)');
+    L.push('');
+    L.push('```');
+    content.supplierQuestions.cn.forEach((q) => L.push(q));
+    L.push('```');
+    L.push('');
+  }
 
   // Экономика
   L.push('## 📊 Расчёт (справочно)');
   L.push('');
-  L.push(`- Себестоимость в РФ: ~${economics.costRub} ₽`);
+  L.push(`- Себестоимость до WB: ~${economics.costRub} ₽`);
   L.push(`- Курс: 1 ¥ = ${economics.yuanToRub.toFixed(2)} ₽`);
-  if (!economics.isSyntheticPrice) {
-    L.push(`- Медианная цена WB: ${economics.avgSaleRub} ₽`);
+  if (economics.platformMode === 'full' && !economics.isSyntheticPrice) {
+    L.push(`- Цена продажи (медиана WB): ${economics.avgSaleRub} ₽`);
+    L.push(`- Ориентировочная прибыль: ${economics.grossProfitRub} ₽`);
+    L.push(`- ROI: ${economics.roiPercent}%`);
   }
-  L.push(`- ROI: ${economics.roiPercent}%`);
   L.push('');
 
+  // Вывод
+  if (conclusion) {
+    L.push(`## ${conclusion.icon} Вывод`);
+    L.push('');
+    L.push(conclusion.headline);
+    conclusion.disclaimers.forEach((d) => L.push(`> ⚠️ ${d}`));
+    L.push('');
+  }
+
   L.push('---');
-  L.push('*Сгенерировано CardZip | @cardzip_bot*');
+  L.push(`*Сгенерировано: ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}*`);
+  L.push('*CardZip | @cardzip_bot*');
 
   return L.join('\n');
 }

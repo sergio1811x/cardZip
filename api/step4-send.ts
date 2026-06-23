@@ -36,7 +36,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const [seoText, briefText, zipBuffer, freshStatus] = await Promise.all([
       Promise.resolve(formatSeoText(product, product.seoContent, product.riskFlags)),
-      Promise.resolve(formatOrderBrief(product, product.seoContent, product.economics, product.riskFlags, job.input_url)),
+      Promise.resolve(formatOrderBrief(product, product.seoContent, product.economics, product.riskFlags, job.input_url, product.budgets, product.conclusion)),
       result.imageUrls?.length
         ? zipBuilder.buildFromUrls(result.imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null as Buffer | null)
         : Promise.resolve(null as Buffer | null),
