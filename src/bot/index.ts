@@ -98,7 +98,8 @@ bot.action(/^rw_(short|aggressive|premium)_(.+)$/, async (ctx) => {
   return handleRewrite(ctx);
 });
 
-// ─── Успешная оплата ──────────────────────────────────────────────────────────
+// ─── Оплата ──────────────────────────────────────────────────────────────────
+bot.on('pre_checkout_query', (ctx) => ctx.answerPreCheckoutQuery(true));
 bot.on('successful_payment', handleSuccessPayment);
 
 // ─── Текстовые сообщения ────────────────────────────────────────────────────

@@ -19,9 +19,9 @@ export async function handleUpgrade(ctx: Context): Promise<void> {
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('10 разборов · 299 ₽', 'pay_pack10')],
-        [Markup.button.callback('30 разборов · 599 ₽ ⭐ Выгоднее', 'pay_pack30')],
-        [Markup.button.callback('Безлимит 7 дней · 990 ₽', 'pay_week')],
+        [Markup.button.callback('10 разборов · 165 ⭐', 'pay_pack10')],
+        [Markup.button.callback('30 разборов · 335 ⭐ Выгоднее', 'pay_pack30')],
+        [Markup.button.callback('7 дней безлимит · 550 ⭐', 'pay_week')],
       ]),
     }
   );

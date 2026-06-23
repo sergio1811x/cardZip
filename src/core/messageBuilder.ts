@@ -284,9 +284,9 @@ export function buildMessage3(status: SubscriptionStatus): {
 
   if (status.creditsRemaining <= 0 || status.plan === 'free') {
     buttons.push([
-      Markup.button.callback('10 · 299₽', 'pay_pack10'),
-      Markup.button.callback('30 · 599₽ ⭐', 'pay_pack30'),
-      Markup.button.callback('7дн · 990₽', 'pay_week'),
+      Markup.button.callback('10 · 165⭐', 'pay_pack10'),
+      Markup.button.callback('30 · 335⭐', 'pay_pack30'),
+      Markup.button.callback('7дн · 550⭐', 'pay_week'),
     ]);
   }
 
