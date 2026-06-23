@@ -109,12 +109,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // ─── Всё остальное: callbacks, команды, текст, tariff input ────────────────
-  // Ждём полной обработки перед ответом Telegram
+  // Отвечаем Telegram сразу, потом обрабатываем
+  res.status(200).json({ ok: true });
+
   try {
     await bot.handleUpdate(req.body);
   } catch (e) {
     console.error('[webhook] handleUpdate error:', e);
   }
-
-  return res.status(200).json({ ok: true });
 }
