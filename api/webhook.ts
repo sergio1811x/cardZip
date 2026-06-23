@@ -68,9 +68,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const status = await getStatus(dbUser.id);
       if (!status.canGenerate) {
         await track(dbUser.id, 'upgrade_shown');
+        const { Markup } = require('telegraf');
         await bot.telegram.sendMessage(msg.chat.id,
-          '❌ <b>Бесплатные генерации исчерпаны</b>\n\n/upgrade для продолжения',
-          { parse_mode: 'HTML' }
+          '🔎 <b>Лимит разборов исчерпан</b>\n\nВыберите формат работы:',
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('10 разборов · 299 ₽', 'pay_pack10')],
+              [Markup.button.callback('30 разборов · 599 ₽ ⭐', 'pay_pack30')],
+              [Markup.button.callback('Безлимит 7 дней · 990 ₽', 'pay_week')],
+            ]),
+          }
         );
         return res.status(200).json({ ok: true });
       }

@@ -8,32 +8,44 @@ export async function handleUpgrade(ctx: Context): Promise<void> {
   if (userId) track(userId, 'upgrade_clicked');
 
   await ctx.reply(
-    `🚀 <b>Выбери тариф</b>\n\n` +
-      `<b>Seller — 1 490 ₽/мес</b>\n` +
-      `• Безлимитный анализ товаров\n` +
-      `• Готовые WB материалы (SEO + фото)\n` +
-      `• История /last\n\n` +
-      `<b>Business — 2 990 ₽/мес</b>\n` +
-      `• Всё из Seller\n` +
-      `• Будущие функции: batch-импорт, сравнение поставщиков`,
+    '🔎 <b>Лимит бесплатных разборов закончился</b>\n\n' +
+    'Вы уже получили:\n' +
+    '✓ анализ поставщика из Китая\n' +
+    '✓ ориентир по рынку WB\n' +
+    '✓ расчёт закупочной экономики\n' +
+    '✓ SEO-карточку и материалы\n' +
+    '✓ ТЗ байеру и вопросы поставщику\n\n' +
+    'Выберите формат работы:',
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('💳 Seller — 1 490 ₽/мес', 'pay_seller')],
-        [Markup.button.callback('💎 Business — 2 990 ₽/мес', 'pay_business')],
+        [Markup.button.callback('10 разборов · 299 ₽', 'pay_pack10')],
+        [Markup.button.callback('30 разборов · 599 ₽ ⭐ Выгоднее', 'pay_pack30')],
+        [Markup.button.callback('Безлимит 7 дней · 990 ₽', 'pay_week')],
       ]),
     }
   );
 }
 
-export async function handlePaySeller(ctx: Context): Promise<void> {
+export async function handlePayPack10(ctx: Context): Promise<void> {
   await ctx.answerCbQuery();
-  await sendInvoice(ctx, 'seller');
+  const userId = (ctx as any).dbUserId as string | undefined;
+  if (userId) track(userId, 'upgrade_clicked', { package: 'pack10' });
+  await sendInvoice(ctx, 'pack10');
 }
 
-export async function handlePayBusiness(ctx: Context): Promise<void> {
+export async function handlePayPack30(ctx: Context): Promise<void> {
   await ctx.answerCbQuery();
-  await sendInvoice(ctx, 'business');
+  const userId = (ctx as any).dbUserId as string | undefined;
+  if (userId) track(userId, 'upgrade_clicked', { package: 'pack30' });
+  await sendInvoice(ctx, 'pack30');
+}
+
+export async function handlePayWeek(ctx: Context): Promise<void> {
+  await ctx.answerCbQuery();
+  const userId = (ctx as any).dbUserId as string | undefined;
+  if (userId) track(userId, 'upgrade_clicked', { package: 'week' });
+  await sendInvoice(ctx, 'week');
 }
 
 export async function handleSuccessPayment(ctx: Context): Promise<void> {

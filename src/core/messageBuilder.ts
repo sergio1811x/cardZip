@@ -261,13 +261,17 @@ export function buildMessage3(status: SubscriptionStatus): {
   let text: string;
 
   if (status.plan === 'free') {
-    const remaining = status.generationsLimit - status.generationsUsed;
-    text = remaining > 0
-      ? `Осталось: <b>${remaining} из ${status.generationsLimit}</b> бесплатных разборов.`
-      : '❌ Бесплатные разборы исчерпаны.';
-  } else {
-    text = `✅ <b>${status.plan === 'seller' ? 'Seller' : 'Business'}</b> подписка активна`;
+    if (status.creditsRemaining > 0) {
+      text = `🎁 Осталось: <b>${status.creditsRemaining} из ${status.creditsTotal}</b> бесплатных разборов.`;
+    } else {
+      text = '🔎 Бесплатные разборы использованы.';
+    }
+  } else if (status.plan === 'week') {
+    text = `⚡ <b>Неделя активной закупки</b>`;
     if (status.activeUntil) text += ` до ${status.activeUntil.toLocaleDateString('ru-RU')}`;
+    text += ` · осталось ${status.creditsRemaining} разборов`;
+  } else {
+    text = `📦 Осталось: <b>${status.creditsRemaining}</b> разборов`;
   }
 
   const buttons = [
@@ -276,8 +280,15 @@ export function buildMessage3(status: SubscriptionStatus): {
       Markup.button.callback('📩 Ответ поставщика', 'supplier_confirm'),
       Markup.button.callback('⚙️ Тарифы', 'edit_tariffs'),
     ],
-    ...(status.plan === 'free' ? [[Markup.button.callback('⚡ Получить больше разборов', 'upgrade')]] : []),
   ];
+
+  if (status.creditsRemaining <= 0 || status.plan === 'free') {
+    buttons.push([
+      Markup.button.callback('10 · 299₽', 'pay_pack10'),
+      Markup.button.callback('30 · 599₽ ⭐', 'pay_pack30'),
+      Markup.button.callback('7дн · 990₽', 'pay_week'),
+    ]);
+  }
 
   return { text, keyboard: Markup.inlineKeyboard(buttons) };
 }

@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { Telegraf, Input } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { markSent } from '../src/db/queries/jobs';
-import { getStatus } from '../src/services/subscriptionService';
+import { getStatus, consumeCredit } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { buildMessage1, buildMessage2, buildMessage3 } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
@@ -44,6 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ]);
 
     await track(job.user_id, 'generation_done', { url: job.input_url });
+    await consumeCredit(job.user_id);
 
     progress?.stop();
     if (job.tg_message_id) {

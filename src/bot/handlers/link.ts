@@ -13,7 +13,7 @@ import { filterWbData } from '../../core/wbFilter';
 import { normalizeCnText } from '../../core/cnNormalize';
 import { buildCacheKey } from '../../lib/cache';
 import { findProductByKey, upsertProduct } from '../../db/queries/products';
-import { getStatus, consumeGeneration } from '../../services/subscriptionService';
+import { getStatus } from '../../services/subscriptionService';
 import { track } from '../../services/analyticsService';
 import { AppError, isAppError } from '../../lib/errors';
 import { Input } from 'telegraf';
@@ -103,7 +103,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
   if (!status.canGenerate) {
     track(userId, 'upgrade_shown');
     await ctx.reply(
-      `❌ <b>Бесплатные генерации исчерпаны</b>\n\nТы использовал все ${status.generationsLimit} бесплатных анализа.\n\nДля продолжения — подключи подписку:`,
+      `🔎 <b>Лимит разборов исчерпан</b>\n\n/upgrade для продолжения`,
       {
         parse_mode: 'HTML',
         ...require('telegraf').Markup.inlineKeyboard([

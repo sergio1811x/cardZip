@@ -244,21 +244,20 @@ export interface ZipBuilder {
 
 // ─── Subscription ─────────────────────────────────────────────────────────────
 
-export type Plan = 'free' | 'seller' | 'business';
+export type Plan = 'free' | 'pack10' | 'pack30' | 'week';
 
 export interface SubscriptionStatus {
   plan: Plan;
-  isActive: boolean;
-  generationsUsed: number;
-  generationsLimit: number;
+  creditsRemaining: number;
+  creditsTotal: number;
   canGenerate: boolean;
   activeUntil?: Date;
 }
 
 export interface SubscriptionService {
   getStatus(userId: string): Promise<SubscriptionStatus>;
-  consumeGeneration(userId: string): Promise<void>;
-  activate(userId: string, plan: Plan, months: number): Promise<void>;
+  consumeCredit(userId: string): Promise<void>;
+  activate(userId: string, plan: Plan): Promise<void>;
 }
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
