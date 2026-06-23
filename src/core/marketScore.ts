@@ -1,9 +1,12 @@
 import type { WbFilteredResult, EconomicsResult, RiskFlags, MarketScore, ProductVerdict } from '../types';
 
-// Спрос (30%): proxy по суммарным отзывам в нише
-function scoreDemand(wbFiltered: WbFilteredResult | null): number {
-  if (!wbFiltered || wbFiltered.quality === 'unavailable') return 0;
-  const fb = wbFiltered.totalFeedbacks;
+function hasWbData(wbFiltered: WbFilteredResult | null): boolean {
+  return !!wbFiltered && wbFiltered.quality !== 'unavailable' && wbFiltered.relevantCount > 0;
+}
+
+function scoreDemand(wbFiltered: WbFilteredResult | null): number | null {
+  if (!hasWbData(wbFiltered)) return null;
+  const fb = wbFiltered!.totalFeedbacks;
   if (fb >= 5000) return 100;
   if (fb >= 2000) return 80;
   if (fb >= 500) return 60;
@@ -12,11 +15,10 @@ function scoreDemand(wbFiltered: WbFilteredResult | null): number {
   return 10;
 }
 
-// Конкуренция (30%): чем меньше карточек и отзывов на карточку — тем лучше для входа
-function scoreCompetition(wbFiltered: WbFilteredResult | null): number {
-  if (!wbFiltered || wbFiltered.quality === 'unavailable') return 0;
-  const n = wbFiltered.relevantCount;
-  const avgFb = n > 0 ? wbFiltered.totalFeedbacks / n : 0;
+function scoreCompetition(wbFiltered: WbFilteredResult | null): number | null {
+  if (!hasWbData(wbFiltered)) return null;
+  const n = wbFiltered!.relevantCount;
+  const avgFb = n > 0 ? wbFiltered!.totalFeedbacks / n : 0;
 
   let cardScore: number;
   if (n <= 10) cardScore = 100;
@@ -25,7 +27,6 @@ function scoreCompetition(wbFiltered: WbFilteredResult | null): number {
   else if (n <= 80) cardScore = 40;
   else cardScore = 20;
 
-  // Если средние отзывы на карточку > 500 — ниша забита сильными игроками
   let fbScore: number;
   if (avgFb <= 50) fbScore = 100;
   else if (avgFb <= 200) fbScore = 70;
@@ -35,8 +36,8 @@ function scoreCompetition(wbFiltered: WbFilteredResult | null): number {
   return Math.round(cardScore * 0.5 + fbScore * 0.5);
 }
 
-// Маржа (30%): на основе grossMarginPercent
-function scoreMargin(economics: EconomicsResult): number {
+function scoreMargin(economics: EconomicsResult, hasPriceFromWb: boolean): number | null {
+  if (!hasPriceFromWb) return null;
   const m = economics.grossMarginPercent;
   if (m >= 50) return 100;
   if (m >= 35) return 80;
@@ -46,7 +47,6 @@ function scoreMargin(economics: EconomicsResult): number {
   return 0;
 }
 
-// Надёжность (10%): качество данных + поставщик
 function scoreReliability(wbFiltered: WbFilteredResult | null, riskFlags: RiskFlags): number {
   let s = 50;
   if (wbFiltered?.quality === 'reliable') s += 30;
@@ -61,28 +61,30 @@ function scoreReliability(wbFiltered: WbFilteredResult | null, riskFlags: RiskFl
   return Math.max(0, Math.min(100, s));
 }
 
-function verdictFromScore(total: number, riskFlags: RiskFlags): { verdict: ProductVerdict; signal: 'green' | 'yellow' | 'red'; label: string } {
-  const hasCritical = riskFlags.hasBrand || riskFlags.isElectrical || riskFlags.isChildren ||
-    riskFlags.isCosmetic || riskFlags.isFood || riskFlags.isMedical;
-
-  if (total >= 65 && !hasCritical) {
-    return { verdict: 'test_candidate', signal: 'green', label: '🟢 GO — подходит для тестовой закупки' };
-  }
-  if (total >= 40) {
-    return { verdict: 'manual_check', signal: 'yellow', label: '🟡 TEST — требуется ручная проверка' };
-  }
-  return { verdict: 'high_risk', signal: 'red', label: '🔴 NO GO — высокий риск' };
-}
-
 export function calcMarketScore(
   wbFiltered: WbFilteredResult | null,
   economics: EconomicsResult,
   riskFlags: RiskFlags
 ): MarketScore {
+  const wbAvailable = hasWbData(wbFiltered);
   const demandScore = scoreDemand(wbFiltered);
   const competitionScore = scoreCompetition(wbFiltered);
-  const marginScore = scoreMargin(economics);
+  const marginScore = scoreMargin(economics, wbAvailable);
   const reliabilityScore = scoreReliability(wbFiltered, riskFlags);
+
+  // Если нет WB данных — score не вычисляется
+  if (demandScore === null || competitionScore === null || marginScore === null) {
+    return {
+      total: null,
+      demandScore,
+      competitionScore,
+      marginScore,
+      reliabilityScore,
+      verdict: 'no_data',
+      label: '⚪️ НОВИНКА ИЛИ НЕТ ДАННЫХ — на WB не найдено точных аналогов',
+      reasons: ['Скоринг заблокирован: нет данных с Wildberries для оценки рынка'],
+    };
+  }
 
   const total = Math.round(
     demandScore * 0.30 +
@@ -91,7 +93,21 @@ export function calcMarketScore(
     reliabilityScore * 0.10
   );
 
-  const { verdict, label } = verdictFromScore(total, riskFlags);
+  const hasCritical = riskFlags.hasBrand || riskFlags.isElectrical || riskFlags.isChildren ||
+    riskFlags.isCosmetic || riskFlags.isFood || riskFlags.isMedical;
+
+  let verdict: ProductVerdict;
+  let label: string;
+  if (total >= 65 && !hasCritical) {
+    verdict = 'test_candidate';
+    label = '🟢 GO — подходит для тестовой закупки';
+  } else if (total >= 40) {
+    verdict = 'manual_check';
+    label = '🟡 TEST — требуется ручная проверка';
+  } else {
+    verdict = 'high_risk';
+    label = '🔴 NO GO — высокий риск';
+  }
 
   const reasons: string[] = [];
   if (demandScore >= 60) reasons.push(`Спрос: высокий (${demandScore}/100)`);

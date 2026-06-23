@@ -8,9 +8,19 @@ export function buildVerdict(
 ): { score: MarketScore; verdict: Verdict } {
   const score = calcMarketScore(wbFiltered, economics, riskFlags);
 
+  let signal: 'green' | 'yellow' | 'red' | 'white';
+  if (score.total === null) {
+    signal = 'white';
+  } else if (score.total >= 65 && !hasCriticalRisks(riskFlags)) {
+    signal = 'green';
+  } else if (score.total >= 40) {
+    signal = 'yellow';
+  } else {
+    signal = 'red';
+  }
+
   const verdict: Verdict = {
-    signal: score.total >= 65 && !hasCriticalRisks(riskFlags) ? 'green'
-      : score.total >= 40 ? 'yellow' : 'red',
+    signal: signal === 'white' ? 'yellow' : signal,
     verdict: score.verdict,
     label: score.label,
     reasons: score.reasons,

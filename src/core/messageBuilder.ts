@@ -22,8 +22,13 @@ export function buildMessage1(product: ProductWithContent): string {
   // ─── Заголовок + Score ─────────────────────────────────────────────────────
   L.push(`📦 <b>${esc(product.titleRu)}</b>`);
   L.push('');
-  L.push(`📊 <b>Score: ${score.total}/100</b> → <b>${verdict.label}</b>`);
-  score.reasons.forEach((r) => L.push(`  • ${r}`));
+  if (score.total !== null) {
+    L.push(`📊 <b>Score: ${score.total}/100</b> → <b>${verdict.label}</b>`);
+    score.reasons.forEach((r) => L.push(`  • ${r}`));
+  } else {
+    L.push(`<b>${verdict.label}</b>`);
+    L.push('  Скоринг невозможен без данных с Wildberries.');
+  }
   L.push('');
 
   // ─── Поставщик (компактно) ─────────────────────────────────────────────────
@@ -66,10 +71,14 @@ export function buildMessage1(product: ProductWithContent): string {
   }
   L.push(`  <b>Себестоимость: ${fP(economics.costRub)}</b>`);
   L.push('');
-  L.push(`  Цена продажи: ${fP(economics.avgSaleRub)}`);
-  L.push(`  Комиссия WB ${20}%: −${fP(b.wbCommissionRub)}`);
+  if (economics.isSyntheticPrice) {
+    L.push(`  Целевая цена (при марже ~35%): ${fP(economics.avgSaleRub)} <i>⚠️ расчётная</i>`);
+  } else {
+    L.push(`  Цена продажи (медиана WB): ${fP(economics.avgSaleRub)}`);
+  }
+  L.push(`  Комиссия WB 20%: −${fP(b.wbCommissionRub)}`);
   L.push(`  Логистика WB: −${fP(b.wbLogisticsRub)}`);
-  L.push(`  Налог ~${7}%: −${fP(b.taxRub)}`);
+  L.push(`  Налог ~7%: −${fP(b.taxRub)}`);
   L.push('');
 
   const profitSign = economics.grossProfitRub >= 0 ? '+' : '';
@@ -87,11 +96,17 @@ export function buildMessage1(product: ProductWithContent): string {
     L.push('');
   }
 
-  // ─── Риски ─────────────────────────────────────────────────────────────────
-  const riskMessages = formatRiskMessages(riskFlags);
-  if (riskMessages.length) {
+  // ─── Риски и предупреждения ──────────────────────────────────────────────
+  const aiWarnings = product.seoContent?.warnings ?? [];
+  const staticRisks = formatRiskMessages(riskFlags);
+  // Приоритет: AI warnings (релевантные), потом static (бренд, поставщик, вес, WB)
+  const staticNonCategory = staticRisks.filter((r) =>
+    r.includes('бренд') || r.includes('поставщик') || r.includes('Вес') || r.includes('WB')
+  );
+  const allWarnings = [...aiWarnings, ...staticNonCategory];
+  if (allWarnings.length) {
     L.push('⚠️ <b>Проверить</b>');
-    riskMessages.forEach((r) => L.push(`  • ${r}`));
+    allWarnings.forEach((r) => L.push(`  • ${r}`));
     L.push('');
   }
 

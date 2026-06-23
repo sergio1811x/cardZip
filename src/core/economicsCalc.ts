@@ -88,6 +88,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
 
   // Цена продажи
   const salePrice = wbMedianPrice ?? wbAvgPrice;
+  const isSyntheticPrice = !salePrice;
   const avgSaleRub = salePrice
     ? Math.round(salePrice)
     : Math.round(costRub / (1 - DEFAULTS.wbCommissionPercent / 100 - targetMargin / 100));
@@ -122,6 +123,10 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
     disclaimer = '⚠️ Вес не указан — карго не учтено. ' + disclaimer;
   }
 
+  if (isSyntheticPrice) {
+    disclaimer = `⚠️ Цена продажи рассчитана математически (при марже ${targetMargin}%), а не взята с рынка. ` + disclaimer;
+  }
+
   return {
     yuanToRub,
     breakdown,
@@ -133,6 +138,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
     recommendedPriceRub,
     weightMissing,
     isCustomTariffs: isCustom,
+    isSyntheticPrice,
     disclaimer,
   };
 }

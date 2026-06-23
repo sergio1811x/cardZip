@@ -52,7 +52,7 @@ export interface RawProduct1688 {
 
 // ─── Verdict ─────────────────────────────────────────────────────────────────
 
-export type ProductVerdict = 'test_candidate' | 'manual_check' | 'high_risk';
+export type ProductVerdict = 'test_candidate' | 'manual_check' | 'high_risk' | 'no_data';
 
 export interface Verdict {
   signal: 'green' | 'yellow' | 'red';
@@ -134,10 +134,10 @@ export interface WbFilteredResult {
 // ─── Market Score ────────────────────────────────────────────────────────────
 
 export interface MarketScore {
-  total: number;
-  demandScore: number;
-  competitionScore: number;
-  marginScore: number;
+  total: number | null;
+  demandScore: number | null;
+  competitionScore: number | null;
+  marginScore: number | null;
   reliabilityScore: number;
   verdict: ProductVerdict;
   label: string;
@@ -176,6 +176,7 @@ export interface AiContentResult {
   characteristics: Record<string, string>;
   filterKeywords?: WbFilterKeywords;
   searchQueries?: string[];
+  warnings?: string[];
   supplierQuestions?: SupplierQuestions;
   isFallback?: boolean;
 }
@@ -304,6 +305,7 @@ export interface EconomicsResult {
   recommendedPriceRub: number;
   weightMissing: boolean;
   isCustomTariffs: boolean;
+  isSyntheticPrice: boolean;
   disclaimer: string;
 }
 
