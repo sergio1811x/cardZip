@@ -136,16 +136,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       finished_at: new Date().toISOString(),
     }).eq('id', jobId);
 
-    res.status(200).json({ ok: true });
     const host = req.headers.host || 'card-zip.vercel.app';
     const ac = new AbortController();
-    setTimeout(() => ac.abort(), 1000);
+    setTimeout(() => ac.abort(), 3000);
     await fetch(`https://${host}/api/step3-send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jobId }),
       signal: ac.signal,
     }).catch(() => {});
+    res.status(200).json({ ok: true });
     return;
   } catch (e: any) {
     console.error('[step2]', e.message);

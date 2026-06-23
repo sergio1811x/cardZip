@@ -68,17 +68,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     }).eq('id', jobId);
 
-    // Отвечаем и вызываем step2
-    res.status(200).json({ ok: true });
+    // Вызываем step2 ДО ответа — Vercel не убьёт функцию пока res не отправлен
     const host = req.headers.host || 'card-zip.vercel.app';
     const ac = new AbortController();
-    setTimeout(() => ac.abort(), 1000);
+    setTimeout(() => ac.abort(), 3000);
     await fetch(`https://${host}/api/step2-process`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jobId }),
       signal: ac.signal,
     }).catch(() => {});
+    res.status(200).json({ ok: true });
     return;
   } catch (e: any) {
     console.error('[step1]', e.message);

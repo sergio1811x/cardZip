@@ -63,16 +63,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const job = await createJob(dbUser.id, msg.chat.id, progressMsg.message_id, urlMatch[0]);
     await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
 
-    // Вызываем step1 — не ждём ответа, но ждём что fetch отправлен
+    // Вызываем step1 ДО ответа — Vercel не убьёт функцию пока res не отправлен
     const host = req.headers.host || 'card-zip.vercel.app';
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 500);
+    setTimeout(() => controller.abort(), 3000);
     await fetch(`https://${host}/api/step1-elim`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jobId: job.id }),
       signal: controller.signal,
-    }).catch(() => {}); // abort после 500ms — запрос уже ушёл
+    }).catch(() => {});
 
   } catch (e) {
     console.error('[webhook]', e);
