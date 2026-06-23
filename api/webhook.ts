@@ -67,13 +67,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           '❌ <b>Бесплатные генерации исчерпаны</b>\n\n/upgrade для продолжения',
           { parse_mode: 'HTML' }
         );
-        return;
+        return res.status(200).json({ ok: true });
       }
 
       if (redis) {
         const urlKey = `job:${dbUser.id}:${urlMatch[0].slice(0, 80)}`;
         const dup = await redis.set(urlKey, '1', { nx: true, ex: 60 });
-        if (dup === null) return;
+        if (dup === null) return res.status(200).json({ ok: true });
       }
 
       const progressMsg = await bot.telegram.sendMessage(msg.chat.id,
