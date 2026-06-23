@@ -52,7 +52,8 @@ async function buildFromUrls(
     }
 
     const ext = guessExtension(urls[i]);
-    zip.addFile(`image_${String(count + 1).padStart(2, '0')}.${ext}`, buf);
+    const label = count === 0 ? 'main_photo' : `detail_${count}`;
+    zip.addFile(`${count + 1}_${label}.${ext}`, buf);
     totalSize += buf.length;
     count++;
   }

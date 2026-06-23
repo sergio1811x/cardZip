@@ -51,9 +51,13 @@ async function searchSimilar(query: string, imageUrl?: string): Promise<WbSearch
   console.log(`[wb] Поиск: image=${imageUrl ? 'yes' : 'no'}, query="${query}"`);
 
   try {
+    if (!imageUrl) {
+      console.log('[wb] Нет фото — поиск невозможен');
+      return null;
+    }
+
     const params = new URLSearchParams({ secret: WB_PARSER_SECRET, limit: '50' });
-    if (imageUrl) params.set('image_url', imageUrl);
-    if (query) params.set('query', query);
+    params.set('image_url', imageUrl);
 
     const url = `${WB_PARSER_URL}/search-by-image?${params}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });

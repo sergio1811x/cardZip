@@ -5,10 +5,11 @@ import { supabase } from '../src/db/supabase';
 import { markSent } from '../src/db/queries/jobs';
 import { getStatus } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
-import { buildMessage1, buildMessage3 } from '../src/core/messageBuilder';
+import { buildMessage1, buildMessage3, buildEconomicsKeyboard } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { zipBuilder } from '../src/core/zipBuilder';
 import { createStepProgress } from '../src/core/progress';
+import { buildRewriteKeyboard } from '../src/bot/handlers/rewrite';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -48,30 +49,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
+    // Сообщение 1: Анализ + inline кнопки экономики
+    const econKeyboard = buildEconomicsKeyboard(job.id);
     await bot.telegram.sendMessage(chatId, buildMessage1(product), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
+      ...econKeyboard,
     });
 
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'wb_seo.txt'), {
+    // Сообщение 2: SEO файл (.md) + кнопки рерайта
+    const rewriteKb = buildRewriteKeyboard(job.id);
+    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'seo_content.md'), {
       caption: '📄 SEO-материалы для карточки WB',
+      ...rewriteKb,
     });
 
+    // Сообщение 2b: ZIP
     if (zipBuffer) {
       await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'), {
         caption: `🖼 Фото товара (${result.imageUrls.length} шт.)`,
       });
     }
 
+    // Сообщение 3: Лимиты + кнопки
     const { text, keyboard } = buildMessage3(freshStatus);
     await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...keyboard });
 
     await markSent(job.id);
-    console.log(`[step3] Job ${job.id} sent to Telegram`);
+    console.log(`[step4] Job ${job.id} sent to Telegram`);
 
     res.status(200).json({ ok: true });
   } catch (e: any) {
-    console.error('[step3]', e.message);
+    console.error('[step4]', e.message);
     await markSent(jobId);
     res.status(200).json({ ok: false });
   }

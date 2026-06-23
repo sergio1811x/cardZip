@@ -12,6 +12,8 @@ import { getStatus } from '../services/subscriptionService';
 import { rateLimitMiddleware } from './middleware/rateLimit';
 import { handleSupplierQuestions, handleSupplierQuestionsLang } from './handlers/supplierQuestions';
 import { handleTariffsMenu, handleEditTariff, handleResetTariffs, handleTariffInput, getPendingEdit } from './handlers/tariffs';
+import { handleRewrite } from './handlers/rewrite';
+import { handleQuickTariff } from './handlers/quickTariff';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -62,6 +64,17 @@ bot.action(/^edit_tariff_(.+)$/, async (ctx) => {
 bot.action('reset_tariffs', async (ctx) => {
   await ctx.answerCbQuery();
   return handleResetTariffs(ctx);
+});
+
+// ─── Быстрые тарифы (inline под экономикой) ──────────────────────────────────
+bot.action(/^(cargo|ff)_(\d+)_(.+)$/, async (ctx) => {
+  return handleQuickTariff(ctx);
+});
+
+// ─── A/B рерайт SEO ─────────────────────────────────────────────────────────
+bot.action(/^rw_(short|aggressive|premium)_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleRewrite(ctx);
 });
 
 // ─── Успешная оплата ──────────────────────────────────────────────────────────

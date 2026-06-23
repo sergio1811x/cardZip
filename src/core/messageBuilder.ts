@@ -49,7 +49,8 @@ export function buildMessage1(product: ProductWithContent): string {
       L.push('  <i>⚠️ Ограниченная выборка — проверьте вручную</i>');
     }
   } else {
-    L.push('  ⚠️ Недостаточно данных для автоматической оценки');
+    L.push('  ⚠️ Не удалось найти точных конкурентов по фото.');
+    L.push('  Экономика рассчитана от рекомендуемой наценки.');
   }
   L.push('');
 
@@ -97,6 +98,21 @@ export function buildMessage1(product: ProductWithContent): string {
   L.push(`<i>${esc(economics.disclaimer)}</i>`);
 
   return L.join('\n');
+}
+
+export function buildEconomicsKeyboard(jobId: string) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('📦 $3/кг', `cargo_3_${jobId}`),
+      Markup.button.callback('📦 $4/кг', `cargo_4_${jobId}`),
+      Markup.button.callback('📦 $5/кг', `cargo_5_${jobId}`),
+    ],
+    [
+      Markup.button.callback('🚚 50₽', `ff_50_${jobId}`),
+      Markup.button.callback('🚚 80₽', `ff_80_${jobId}`),
+      Markup.button.callback('🚚 120₽', `ff_120_${jobId}`),
+    ],
+  ]);
 }
 
 export function buildMessage3(status: SubscriptionStatus): {
