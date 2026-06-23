@@ -1,12 +1,14 @@
-import type { EconomicsInput, EconomicsResult } from '../types';
+import type { EconomicsInput, EconomicsResult, TestPurchaseResult } from '../types';
 
 const LOGISTICS_PER_KG = 400;
 const WB_COMMISSION = 0.20;
 const WB_LOGISTICS = 100;
 const FALLBACK_YUAN_TO_RUB = 11.8;
+const DEFAULT_TEST_QUANTITY = 20;
+const DEFAULT_RESERVE_PERCENT = 15;
 
 let cachedRate: { value: number; fetchedAt: number } | null = null;
-const CACHE_TTL = 3_600_000; // 1 час
+const CACHE_TTL = 3_600_000;
 
 async function fetchYuanRate(): Promise<number> {
   if (cachedRate && Date.now() - cachedRate.fetchedAt < CACHE_TTL) {
@@ -41,26 +43,55 @@ export async function getYuanRate(): Promise<number> {
 }
 
 export async function calcEconomics(input: EconomicsInput): Promise<EconomicsResult> {
-  const { priceYuan, weightKg, wbAvgPrice } = input;
+  const { priceYuan, weightKg, wbMedianPrice, wbAvgPrice } = input;
   const yuanToRub = await fetchYuanRate();
+  const weightMissing = !weightKg || weightKg <= 0;
 
   const purchaseRub = priceYuan * yuanToRub;
-  const logisticsRub = Math.max(weightKg * LOGISTICS_PER_KG, 100);
+  const logisticsRub = weightMissing ? 0 : Math.max(weightKg * LOGISTICS_PER_KG, 100);
   const costRub = Math.round(purchaseRub + logisticsRub);
 
-  const avgSaleRub = wbAvgPrice
-    ? Math.round(wbAvgPrice)
-    : Math.round(costRub * 3);
+  const salePrice = wbMedianPrice ?? wbAvgPrice;
+  const avgSaleRub = salePrice ? Math.round(salePrice) : Math.round(costRub * 3);
 
   const wbFee = Math.round(avgSaleRub * WB_COMMISSION);
   const grossProfitRub = avgSaleRub - costRub - wbFee - WB_LOGISTICS;
+  const grossMarginPercent = avgSaleRub > 0
+    ? Math.round((grossProfitRub / avgSaleRub) * 100)
+    : 0;
+
+  let disclaimer = '⚠️ Расчёт предварительный. Курс юаня, ставки карго и комиссии WB меняются. Уточняйте перед заказом.';
+  if (weightMissing) {
+    disclaimer = '⚠️ Вес не указан — логистика не учтена. Реальная себестоимость будет выше. ' + disclaimer;
+  }
 
   return {
     yuanToRub,
     costRub,
     avgSaleRub,
     grossProfitRub,
-    disclaimer:
-      '⚠️ Расчёт предварительный. Курс юаня, ставки карго и комиссии WB меняются. Уточняйте перед заказом.',
+    grossMarginPercent,
+    weightMissing,
+    disclaimer,
+  };
+}
+
+export function calcTestPurchase(
+  unitCostRub: number,
+  weightMissing: boolean,
+  quantity: number = DEFAULT_TEST_QUANTITY
+): TestPurchaseResult | null {
+  if (weightMissing) return null;
+
+  const goodsAndCargoRub = unitCostRub * quantity;
+  const reserveRub = Math.round(goodsAndCargoRub * DEFAULT_RESERVE_PERCENT / 100);
+  const testBudgetRub = goodsAndCargoRub + reserveRub;
+
+  return {
+    quantity,
+    goodsAndCargoRub,
+    reservePercent: DEFAULT_RESERVE_PERCENT,
+    reserveRub,
+    testBudgetRub,
   };
 }

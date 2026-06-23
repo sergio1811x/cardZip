@@ -3,9 +3,12 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { aiContentGenerator } from '../src/providers/aiContentGenerator';
-import { calcEconomics } from '../src/core/economicsCalc';
+import { calcEconomics, calcTestPurchase } from '../src/core/economicsCalc';
 import { buildVerdict } from '../src/core/verdict';
+import { buildRiskFlags } from '../src/core/riskFlags';
+import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
+import type { AiContentResult, WbFilterKeywords } from '../src/types';
 
 export const config = { maxDuration: 60 };
 
@@ -14,15 +17,25 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const WB_PARSER_URL = process.env.WB_PARSER_URL || 'http://50fc4ca33bd1.vps.myjino.ru';
 const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || 'cardzip-wb-2024';
 
-async function searchWbByImage(imageUrl: string) {
+async function searchWbByImage(imageUrl: string, query?: string) {
   try {
-    const url = `${WB_PARSER_URL}/search-by-image?secret=${WB_PARSER_SECRET}&image_url=${encodeURIComponent(imageUrl)}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(45_000) });
+    const params = new URLSearchParams({ secret: WB_PARSER_SECRET, limit: '50' });
+    if (imageUrl) params.set('image_url', imageUrl);
+    if (query) params.set('query', query);
+
+    const url = `${WB_PARSER_URL}/search-by-image?${params}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(50_000) });
     if (!res.ok) return null;
     const data = await res.json() as any;
     if (!data.success || !data.products?.length) return null;
 
-    const prices = data.products.map((p: any) => p.price).filter((p: number) => p > 0);
+    const cards = data.products.filter((p: any) => p.price > 0).map((p: any) => ({
+      title: p.name || '',
+      price: p.price,
+      url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
+    }));
+
+    const prices = cards.map((c: any) => c.price);
     if (!prices.length) return null;
 
     return {
@@ -30,16 +43,17 @@ async function searchWbByImage(imageUrl: string) {
       minPrice: Math.min(...prices),
       maxPrice: Math.max(...prices),
       totalCards: data.total || data.products.length,
-      topExamples: data.products.filter((p: any) => p.price > 0).slice(0, 3).map((p: any) => ({
-        title: p.name || '', price: p.price,
-        url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
-      })),
+      topExamples: cards.slice(0, 3),
+      allCards: cards,
+      photoSearchConfirmed: data.photoSearchConfirmed ?? false,
     };
   } catch (e: any) {
     console.warn('[step2] WB failed:', e.message);
     return null;
   }
 }
+
+const DEFAULT_FILTER_KEYWORDS: WbFilterKeywords = { required: [], optional: [], exclude: [] };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -56,13 +70,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const raw = (job.result_json as any).rawProduct;
     const imageUrls = (job.result_json as any).imageUrls;
 
-    // Прогресс с анимацией
     const progress = job.tg_message_id
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'process')
       : null;
 
-    // Параллельно: AI + WB + экономика
-    const [seoContent, wbData, economics] = await Promise.all([
+    const wbQuery = raw.titleEn || raw.titleCn;
+
+    const [seoContent, wbData, initialEconomics] = await Promise.all([
       aiContentGenerator.generate({
         titleCn: raw.titleCn,
         titleEn: raw.titleEn,
@@ -74,28 +88,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         supplierRating: raw.supplierRating,
         categoryName: raw.categoryName,
         attributes: raw.attributes,
-      }).catch(() => ({
+      }).catch((): AiContentResult => ({
         titleRu: raw.titleEn || raw.titleCn,
-        description: '', bullets: [] as string[], keywords: [] as string[],
-        characteristics: {} as Record<string, string>, isFallback: true,
+        description: '', bullets: [], keywords: [],
+        characteristics: {}, isFallback: true,
       })),
 
-      searchWbByImage(raw.mainImageUrl),
+      searchWbByImage(raw.mainImageUrl, wbQuery),
 
       calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg }),
     ]);
 
-    // Пересчитаем экономику с ценой WB
-    const finalEconomics = wbData?.avgPrice
-      ? await calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg, wbAvgPrice: wbData.avgPrice })
-      : economics;
+    // Фильтрация WB
+    const filterKeywords = seoContent.filterKeywords ?? DEFAULT_FILTER_KEYWORDS;
+    const searchQueries = seoContent.searchQueries ?? seoContent.keywords?.slice(0, 3) ?? [];
+    const wbFiltered = filterWbData(wbData, filterKeywords, searchQueries);
+
+    // Пересчёт экономики с медианой
+    const economics = wbFiltered && wbFiltered.medianPrice > 0
+      ? await calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg, wbMedianPrice: wbFiltered.medianPrice })
+      : initialEconomics;
+
+    const riskFlags = buildRiskFlags(raw, wbFiltered);
+    const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing);
 
     progress?.stop();
-    const verdict = buildVerdict(finalEconomics, wbData, raw.sold);
+    const verdict = buildVerdict(economics, wbFiltered, riskFlags);
 
-    console.log(`[step2] AI: ${seoContent.titleRu?.slice(0, 30)} | WB: ${wbData ? wbData.totalCards + ' cards' : 'null'}`);
+    console.log(`[step2] AI: ${seoContent.titleRu?.slice(0, 30)} | WB: ${wbFiltered?.quality ?? 'null'} (${wbFiltered?.relevantCount ?? 0} relevant)`);
 
-    // Сохраняем результат
     await supabase.from('jobs').update({
       status: 'done',
       result_json: {
@@ -105,14 +126,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           titleRu: seoContent.titleRu,
           seoContent,
           wbData,
-          economics: finalEconomics,
+          wbFiltered,
+          riskFlags,
+          economics,
+          testPurchase,
           verdict,
         },
       },
       finished_at: new Date().toISOString(),
     }).eq('id', jobId);
 
-    // Отвечаем и вызываем step3
     res.status(200).json({ ok: true });
     const host = req.headers.host || 'card-zip.vercel.app';
     const ac = new AbortController();

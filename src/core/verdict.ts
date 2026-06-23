@@ -1,65 +1,85 @@
-import type { EconomicsResult, WbSearchResult, Verdict } from '../types';
+import type { EconomicsResult, WbFilteredResult, RiskFlags, Verdict, ProductVerdict } from '../types';
 
 export function buildVerdict(
   economics: EconomicsResult,
-  wbData: WbSearchResult | null,
-  sold?: number
+  wbFiltered: WbFilteredResult | null,
+  riskFlags: RiskFlags
 ): Verdict {
   const reasons: string[] = [];
-  let score = 0;
 
-  // Маржинальность
-  const margin = economics.avgSaleRub > 0
-    ? (economics.grossProfitRub / economics.avgSaleRub) * 100
-    : 0;
+  const hasCriticalRisks = countCriticalRisks(riskFlags) >= 3;
+  const grossPositive = economics.grossProfitRub > 0;
+  const wbReliable = wbFiltered?.quality === 'reliable';
+  const wbLimited = wbFiltered?.quality === 'limited';
+  const knownWeight = !riskFlags.weightMissing;
+  const knownPrice = economics.costRub > 0;
+  const enoughCards = (wbFiltered?.relevantCount ?? 0) >= 20;
+  const noCriticalRisks =
+    !riskFlags.hasBrand &&
+    !riskFlags.isElectrical &&
+    !riskFlags.isChildren &&
+    !riskFlags.isCosmetic &&
+    !riskFlags.isFood &&
+    !riskFlags.isMedical;
 
-  if (margin >= 30) {
-    reasons.push('Маржа: высокая');
-    score += 2;
-  } else if (margin >= 15) {
-    reasons.push('Маржа: средняя');
-    score += 1;
-  } else {
-    reasons.push('Маржа: низкая');
-    score -= 1;
-  }
+  // ─── high_risk ──────────────────────────────────────────────────────────────
+  const isHighRisk =
+    !grossPositive ||
+    (wbFiltered?.quality === 'unavailable' && !knownWeight) ||
+    hasCriticalRisks ||
+    (wbFiltered && wbFiltered.quality !== 'unavailable' && wbFiltered.medianPrice > 0 && economics.costRub > wbFiltered.medianPrice);
 
-  // Конкуренция
-  if (wbData) {
-    if (wbData.totalCards < 500) {
-      reasons.push('Конкуренция: низкая');
-      score += 2;
-    } else if (wbData.totalCards < 2000) {
-      reasons.push('Конкуренция: средняя');
-      score += 1;
-    } else {
-      reasons.push('Конкуренция: высокая');
-      score -= 1;
+  if (isHighRisk) {
+    if (!grossPositive) reasons.push('Расчётная валовая разница отрицательная');
+    if (hasCriticalRisks) reasons.push('Обнаружено несколько серьёзных рисков');
+    if (wbFiltered?.quality === 'unavailable') reasons.push('Нет данных о рынке WB');
+    if (wbFiltered && wbFiltered.medianPrice > 0 && economics.costRub > wbFiltered.medianPrice) {
+      reasons.push('Себестоимость выше медианной цены WB');
     }
+    return { signal: 'red', verdict: 'high_risk', label: '🔴 Высокий риск для тестовой закупки', reasons };
   }
 
-  // Цена закупки
-  if (economics.costRub < 300) {
-    reasons.push('Цена закупки: низкая');
-    score += 1;
-  } else if (economics.costRub < 1000) {
-    reasons.push('Цена закупки: средняя');
-  } else {
-    reasons.push('Цена закупки: высокая');
-    score -= 1;
+  // ─── test_candidate ─────────────────────────────────────────────────────────
+  const isTestCandidate =
+    wbReliable &&
+    knownPrice &&
+    knownWeight &&
+    enoughCards &&
+    grossPositive &&
+    noCriticalRisks;
+
+  if (isTestCandidate) {
+    reasons.push('Данные WB достоверны');
+    reasons.push('Цена и вес известны');
+    reasons.push('Валовая разница положительная');
+    return { signal: 'green', verdict: 'test_candidate', label: '🟢 Предварительно подходит для тестовой закупки', reasons };
   }
 
-  // Популярность у поставщика
-  if (sold && sold > 1000) {
-    reasons.push('Спрос у поставщика: высокий');
-    score += 1;
-  }
+  // ─── manual_check ───────────────────────────────────────────────────────────
+  if (!wbReliable) reasons.push('Данные WB требуют ручной проверки');
+  if (riskFlags.hasBrand) reasons.push(`Обнаружен бренд: ${riskFlags.brand}`);
+  if (riskFlags.supplierOrdersLow) reasons.push('Мало заказов у поставщика');
+  if (riskFlags.weightMissing) reasons.push('Вес товара неизвестен');
+  if (riskFlags.isElectrical) reasons.push('Электротовар — нужны документы');
+  if (riskFlags.isChildren) reasons.push('Детский товар — нужны сертификаты');
+  if (riskFlags.isCosmetic) reasons.push('Косметика — нужны сертификаты');
+  if (riskFlags.isFood) reasons.push('Пищевой товар — нужны разрешения');
+  if (riskFlags.isMedical) reasons.push('Медицинский товар — нужны документы');
+  if (riskFlags.sizeGridRelevant) reasons.push('Размерная сетка может отличаться');
 
-  if (score >= 3) {
-    return { signal: 'green', label: '🟢 Можно тестировать', reasons };
-  } else if (score >= 1) {
-    return { signal: 'yellow', label: '🟡 Требует анализа', reasons };
-  } else {
-    return { signal: 'red', label: '🔴 Не рекомендовано', reasons };
-  }
+  return { signal: 'yellow', verdict: 'manual_check', label: '🟡 Требуется ручная проверка перед закупкой', reasons };
+}
+
+function countCriticalRisks(flags: RiskFlags): number {
+  let count = 0;
+  if (flags.hasBrand) count++;
+  if (flags.isElectrical) count++;
+  if (flags.isChildren) count++;
+  if (flags.isCosmetic) count++;
+  if (flags.isFood) count++;
+  if (flags.isMedical) count++;
+  if (flags.supplierOrdersLow) count++;
+  if (flags.weightMissing) count++;
+  if (flags.marketDataUnreliable) count++;
+  return count;
 }

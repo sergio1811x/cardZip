@@ -10,6 +10,7 @@ import { productImporter } from '../providers/productImporter';
 import { isAppError } from '../lib/errors';
 import { getStatus } from '../services/subscriptionService';
 import { rateLimitMiddleware } from './middleware/rateLimit';
+import { handleSupplierQuestions, handleSupplierQuestionsLang } from './handlers/supplierQuestions';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -39,6 +40,14 @@ bot.action('new_search', async (ctx) => {
 bot.action('last', async (ctx) => {
   await ctx.answerCbQuery();
   return handleLast(ctx);
+});
+bot.action('supplier_questions', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleSupplierQuestions(ctx);
+});
+bot.action(/^sq_(ru|cn)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleSupplierQuestionsLang(ctx);
 });
 
 // ─── Успешная оплата ──────────────────────────────────────────────────────────

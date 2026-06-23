@@ -3,11 +3,13 @@ import type { Message } from 'telegraf/typings/core/types/typegram';
 import { productImporter } from '../../providers/productImporter';
 import { aiContentGenerator } from '../../providers/aiContentGenerator';
 import { marketProvider } from '../../providers/marketProvider';
-import { calcEconomics } from '../../core/economicsCalc';
+import { calcEconomics, calcTestPurchase } from '../../core/economicsCalc';
 import { zipBuilder } from '../../core/zipBuilder';
 import { formatSeoText } from '../../core/seoFormatter';
 import { buildMessage1, buildMessage3 } from '../../core/messageBuilder';
 import { buildVerdict } from '../../core/verdict';
+import { buildRiskFlags } from '../../core/riskFlags';
+import { filterWbData } from '../../core/wbFilter';
 import { normalizeCnText } from '../../core/cnNormalize';
 import { buildCacheKey } from '../../lib/cache';
 import { findProductByKey, upsertProduct } from '../../db/queries/products';
@@ -15,7 +17,7 @@ import { getStatus, consumeGeneration } from '../../services/subscriptionService
 import { track } from '../../services/analyticsService';
 import { AppError, isAppError } from '../../lib/errors';
 import { Input } from 'telegraf';
-import type { ProductWithContent } from '../../types';
+import type { ProductWithContent, WbFilterKeywords, AiContentResult } from '../../types';
 
 // ─── Прогресс-сообщения ──────────────────────────────────────────────────────
 
@@ -41,9 +43,9 @@ const STEP_MESSAGES: Record<string, string[]> = {
     '🔍 <b>Шаг 3/4</b> — Анализируем цены конкурентов...',
     '🔍 <b>Шаг 3/4</b> — Загружаем фото для поиска на WB...',
     '🔍 <b>Шаг 3/4</b> — Сравниваем с карточками на маркетплейсе...',
-    '🔍 <b>Шаг 3/4</b> — Считаем среднюю цену в нише...',
+    '🔍 <b>Шаг 3/4</b> — Фильтруем нерелевантные товары...',
     '🔍 <b>Шаг 3/4</b> — Собираем топ похожих товаров...',
-    '🔍 <b>Шаг 3/4</b> — Оцениваем уровень конкуренции...',
+    '🔍 <b>Шаг 3/4</b> — Оцениваем качество выборки...',
   ],
   zip: [
     '📦 <b>Шаг 4/4</b> — Собираем архив с фотографиями...',
@@ -86,15 +88,13 @@ function createProgressUpdater(ctx: Context, chatId: number, msgId: number) {
   };
 }
 
-// ─── Определяем сетевые ошибки ───────────────────────────────────────────────
-
 function isNetworkError(e: unknown): boolean {
   if (e instanceof DOMException && e.name === 'TimeoutError') return true;
   if (e instanceof TypeError && (e.message === 'terminated' || e.message === 'fetch failed')) return true;
   return false;
 }
 
-// ─── Main handler ────────────────────────────────────────────────────────────
+const DEFAULT_FILTER_KEYWORDS: WbFilterKeywords = { required: [], optional: [], exclude: [] };
 
 export async function handleLink(ctx: Context, url: string): Promise<void> {
   const userId = (ctx as any).dbUserId as string;
@@ -128,26 +128,35 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     const rawProduct = await productImporter.fetchProduct(url);
     const cacheKey = buildCacheKey(rawProduct.productId, rawProduct.titleCn, rawProduct.mainImageUrl);
 
-    // Проверяем кэш
     const cached = await findProductByKey(cacheKey);
     let product: ProductWithContent;
     let zipResult: Buffer | null = null;
 
-    // Нормализуем китайский текст перед отправкой в AI
     rawProduct.titleCn = normalizeCnText(rawProduct.titleCn);
     if (rawProduct.description) rawProduct.description = normalizeCnText(rawProduct.description);
 
     if (cached?.data_json) {
       console.log('[pipeline] Cache hit:', cacheKey);
       const d = cached.data_json as any;
+
+      const wbFiltered = d.wbFiltered ?? null;
+      const riskFlags = d.riskFlags ?? buildRiskFlags(rawProduct, wbFiltered);
+      const economics = d.economics;
+      const testPurchase = d.testPurchase ?? calcTestPurchase(economics.costRub, economics.weightMissing);
+
       product = {
         ...rawProduct,
         titleRu: cached.title_ru ?? rawProduct.titleCn,
         cacheKey,
         seoContent: d.seoContent,
         wbData: d.wbData ?? null,
-        economics: d.economics,
-        verdict: d.verdict ?? buildVerdict(d.economics, d.wbData, rawProduct.sold),
+        wbFiltered,
+        riskFlags,
+        economics,
+        testPurchase,
+        verdict: d.verdict?.verdict
+          ? d.verdict
+          : buildVerdict(economics, wbFiltered, riskFlags),
         cachedAt: new Date(cached.created_at),
       };
     } else {
@@ -157,9 +166,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
       const searchImage = rawProduct.mainImageUrl || rawProduct.images[0];
       const wbQuery = rawProduct.titleEn || rawProduct.titleCn;
 
-      // Запускаем всё параллельно — все зависят только от rawProduct
-      const [seoContent, wbData, economicsResult, zipResult] = await Promise.all([
-        // AI SEO
+      const [seoContent, wbData, initialEconomics, zipBuf] = await Promise.all([
         aiContentGenerator.generate({
           titleCn: rawProduct.titleCn,
           titleEn: rawProduct.titleEn,
@@ -171,7 +178,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
           supplierRating: rawProduct.supplierRating,
           categoryName: rawProduct.categoryName,
           attributes: rawProduct.attributes,
-        }).catch(() => ({
+        }).catch((): AiContentResult => ({
           titleRu: rawProduct.titleEn || rawProduct.titleCn,
           description: '',
           bullets: [] as string[],
@@ -180,25 +187,36 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
           isFallback: true,
         })),
 
-        // WB поиск по фото (fallback на текст)
         marketProvider.searchSimilar(wbQuery, searchImage).catch(() => null),
 
-        // Экономика (курс ЦБ — без wbAvgPrice, добавим после)
         calcEconomics({
           priceYuan: rawProduct.priceYuan,
           weightKg: rawProduct.weightKg,
         }),
 
-        // ZIP фото
         zipBuilder.buildFromUrls(rawProduct.images, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }),
       ]);
 
-      // Пересчитаем экономику с ценой WB если есть
-      const economics = wbData?.avgPrice
-        ? await calcEconomics({ priceYuan: rawProduct.priceYuan, weightKg: rawProduct.weightKg, wbAvgPrice: wbData.avgPrice })
-        : economicsResult;
+      zipResult = zipBuf;
 
-      const verdict = buildVerdict(economics, wbData, rawProduct.sold);
+      // Фильтрация WB данных
+      progress.step('wb');
+      const filterKeywords = seoContent.filterKeywords ?? DEFAULT_FILTER_KEYWORDS;
+      const searchQueries = seoContent.searchQueries ?? seoContent.keywords?.slice(0, 3) ?? [];
+      const wbFiltered = filterWbData(wbData, filterKeywords, searchQueries);
+
+      // Пересчёт экономики с медианой WB
+      const economics = wbFiltered && wbFiltered.medianPrice > 0
+        ? await calcEconomics({
+            priceYuan: rawProduct.priceYuan,
+            weightKg: rawProduct.weightKg,
+            wbMedianPrice: wbFiltered.medianPrice,
+          })
+        : initialEconomics;
+
+      const riskFlags = buildRiskFlags(rawProduct, wbFiltered);
+      const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing);
+      const verdict = buildVerdict(economics, wbFiltered, riskFlags);
 
       product = {
         ...rawProduct,
@@ -206,28 +224,29 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         cacheKey,
         seoContent,
         wbData,
+        wbFiltered,
+        riskFlags,
         economics,
+        testPurchase,
         verdict,
       };
 
       upsertProduct(userId, product).catch((e) => console.error('[pipeline] upsert failed:', e));
     }
 
-    // ─── SEO текст (мгновенно) ──────────────────────────────────────────
+    // ─── SEO текст ──────────────────────────────────────────────────────────
     progress.step('zip');
-    const seoText = formatSeoText(product, product.seoContent);
-    // zipResult уже готов из параллельного блока, или собираем для cached
+    const seoText = formatSeoText(product, product.seoContent, product.riskFlags);
     const zipBuffer = zipResult ?? await zipBuilder.buildFromUrls(product.images, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 });
 
-    // ─── Стоп прогресс, удаляем сообщение ─────────────────────────────────
+    // ─── Стоп прогресс ──────────────────────────────────────────────────────
     progress.stop();
     await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
 
-    // ─── Записываем generation_done ДО отправки (Vercel может убить после) ─
     const durationMs = Date.now() - startTime;
     await track(userId, 'generation_done', { durationMs, cacheHit: !!cached, url });
 
-    // ─── Отправляем 3 сообщения ───────────────────────────────────────────
+    // ─── Отправляем 3 сообщения ─────────────────────────────────────────────
     await ctx.reply(buildMessage1(product), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
@@ -237,9 +256,11 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     await ctx.replyWithDocument(Input.fromBuffer(seoBuffer, 'wb_seo.txt'), {
       caption: '📄 SEO-материалы для карточки WB',
     });
-    await ctx.replyWithDocument(Input.fromBuffer(zipBuffer, 'images.zip'), {
-      caption: `🖼 Фото товара (${product.images.length} шт.)`,
-    });
+    if (zipBuffer) {
+      await ctx.replyWithDocument(Input.fromBuffer(zipBuffer, 'images.zip'), {
+        caption: `🖼 Фото товара (${product.images.length} шт.)`,
+      });
+    }
 
     const freshStatus = await getStatus(userId);
     const { text, keyboard } = buildMessage3(freshStatus);

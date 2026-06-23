@@ -50,18 +50,26 @@ export interface RawProduct1688 {
   supplierExtra?: SupplierExtra;
 }
 
-export type Verdict = {
+// ─── Verdict ─────────────────────────────────────────────────────────────────
+
+export type ProductVerdict = 'test_candidate' | 'manual_check' | 'high_risk';
+
+export interface Verdict {
   signal: 'green' | 'yellow' | 'red';
+  verdict: ProductVerdict;
   label: string;
   reasons: string[];
-};
+}
 
 export interface ProductWithContent extends RawProduct1688 {
   cacheKey: string;
   titleRu: string;
   seoContent: AiContentResult;
   wbData: WbSearchResult | null;
+  wbFiltered: WbFilteredResult | null;
+  riskFlags: RiskFlags;
   economics: EconomicsResult;
+  testPurchase: TestPurchaseResult | null;
   verdict: Verdict;
   cachedAt?: Date;
 }
@@ -78,12 +86,44 @@ export interface ProductImporter {
   parseUrl(url: string): ParsedUrl | null;
 }
 
+// ─── WB Market Data ──────────────────────────────────────────────────────────
+
+export type WbDataQuality = 'reliable' | 'limited' | 'unreliable' | 'unavailable';
+
+export interface WbCard {
+  title: string;
+  price: number;
+  url: string;
+}
+
+export interface WbFilterKeywords {
+  required: string[];
+  optional: string[];
+  exclude: string[];
+}
+
 export interface WbSearchResult {
   avgPrice: number;
   minPrice: number;
   maxPrice: number;
   totalCards: number;
-  topExamples: Array<{ title: string; price: number; url: string }>;
+  topExamples: WbCard[];
+  allCards: WbCard[];
+  photoSearchConfirmed: boolean;
+}
+
+export interface WbFilteredResult {
+  quality: WbDataQuality;
+  medianPrice: number;
+  p25Price: number;
+  p75Price: number;
+  minPrice: number;
+  maxPrice: number;
+  relevantCount: number;
+  totalCount: number;
+  topExamples: WbCard[];
+  searchQueries: string[];
+  raw: WbSearchResult;
 }
 
 export interface MarketProvider {
@@ -101,15 +141,56 @@ export interface AiContentRequest {
   supplierRating?: number;
   categoryName?: string;
   attributes?: ProductAttribute[];
+  confirmedFeatures?: string[];
+  missingFields?: string[];
+  brand?: string;
+  model?: string;
+  riskFlags?: RiskFlags;
 }
 
 export interface AiContentResult {
   titleRu: string;
+  titleRuBranded?: string;
   description: string;
   bullets: string[];
   keywords: string[];
   characteristics: Record<string, string>;
+  filterKeywords?: WbFilterKeywords;
+  searchQueries?: string[];
+  supplierQuestions?: SupplierQuestions;
   isFallback?: boolean;
+}
+
+export interface SupplierQuestions {
+  ru: string[];
+  cn: string[];
+}
+
+// ─── Risk Flags ──────────────────────────────────────────────────────────────
+
+export interface RiskFlags {
+  hasBrand: boolean;
+  brand?: string;
+  isElectrical: boolean;
+  isChildren: boolean;
+  isCosmetic: boolean;
+  isFood: boolean;
+  isMedical: boolean;
+  supplierOrdersLow: boolean;
+  supplierTypeUnknown: boolean;
+  weightMissing: boolean;
+  sizeGridRelevant: boolean;
+  marketDataUnreliable: boolean;
+}
+
+// ─── Test Purchase ───────────────────────────────────────────────────────────
+
+export interface TestPurchaseResult {
+  quantity: number;
+  goodsAndCargoRub: number;
+  reservePercent: number;
+  reserveRub: number;
+  testBudgetRub: number;
 }
 
 export interface AiContentGenerator {
@@ -168,6 +249,7 @@ export interface EconomicsInput {
   priceYuan: number;
   weightKg: number;
   wbAvgPrice?: number;
+  wbMedianPrice?: number;
 }
 
 export interface EconomicsResult {
@@ -175,6 +257,8 @@ export interface EconomicsResult {
   costRub: number;
   avgSaleRub: number;
   grossProfitRub: number;
+  grossMarginPercent: number;
+  weightMissing: boolean;
   disclaimer: string;
 }
 

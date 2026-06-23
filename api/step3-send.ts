@@ -29,14 +29,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const chatId = job.tg_chat_id;
     const product = result.product as ProductWithContent;
 
-    // Прогресс с анимацией
     const progress = job.tg_message_id
       ? createStepProgress(bot, chatId, job.tg_message_id, 'send')
       : null;
 
-    // Собираем ВСЁ параллельно перед отправкой
     const [seoText, zipBuffer, freshStatus] = await Promise.all([
-      Promise.resolve(formatSeoText(product, product.seoContent)),
+      Promise.resolve(formatSeoText(product, product.seoContent, product.riskFlags)),
       result.imageUrls?.length
         ? zipBuilder.buildFromUrls(result.imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null as Buffer | null)
         : Promise.resolve(null as Buffer | null),
@@ -45,13 +43,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     await track(job.user_id, 'generation_done', { url: job.input_url });
 
-    // Стоп прогресс, удаляем
     progress?.stop();
     if (job.tg_message_id) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
-    // Отправляем всё подряд (всё уже готово)
     await bot.telegram.sendMessage(chatId, buildMessage1(product), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
@@ -76,7 +72,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step3]', e.message);
-    // Пометим отправленным чтобы не зациклить
     await markSent(jobId);
     res.status(200).json({ ok: false });
   }
