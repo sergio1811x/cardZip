@@ -13,8 +13,8 @@ export const config = { maxDuration: 10 };
 async function isDuplicate(updateId: number): Promise<boolean> {
   if (!redis) return false;
   const key = `dedup:${updateId}`;
-  const exists = await redis.set(key, '1', { nx: true, ex: 60 });
-  return exists === null;
+  const result = await redis.set(key, '1', { nx: true, ex: 60 });
+  return result === null;
 }
 
 async function callWithRetry(url: string, body: object): Promise<boolean> {
@@ -39,85 +39,82 @@ async function callWithRetry(url: string, body: object): Promise<boolean> {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  // Telegram ждёт 200 как можно раньше, иначе ретраит
-  res.status(200).json({ ok: true });
-
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (secret && req.headers['x-telegram-bot-api-secret-token'] !== secret) return;
+  if (secret && req.headers['x-telegram-bot-api-secret-token'] !== secret) {
+    return res.status(200).json({ ok: true });
+  }
 
   const updateId = req.body?.update_id;
-  if (!updateId) return;
+  if (!updateId) return res.status(200).json({ ok: true });
 
-  // Дедупликация через Redis
   if (await isDuplicate(updateId)) {
-    console.log(`[webhook] Duplicate update ${updateId}, skip`);
+    return res.status(200).json({ ok: true });
+  }
+
+  const msg = req.body?.message;
+  const cbq = req.body?.callback_query;
+
+  // ─── URL pipeline: ранний 200, fire-and-forget step1 ──────────────────────
+  const isUrlMessage = msg?.text && !msg.text.trim().startsWith('/') &&
+    /https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com/i.test(msg.text);
+
+  if (isUrlMessage && msg.from?.id && msg.chat?.id) {
+    // Отвечаем Telegram сразу — дальше работаем async
+    res.status(200).json({ ok: true });
+
+    try {
+      const dbUser = await getOrCreateUser(msg.from.id);
+      const status = await getStatus(dbUser.id);
+      if (!status.canGenerate) {
+        await track(dbUser.id, 'upgrade_shown');
+        await bot.telegram.sendMessage(msg.chat.id,
+          '❌ <b>Бесплатные генерации исчерпаны</b>\n\n/upgrade для продолжения',
+          { parse_mode: 'HTML' }
+        );
+        return;
+      }
+
+      const urlMatch = msg.text.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/);
+      if (!urlMatch) return;
+
+      // Дедупликация по URL
+      if (redis) {
+        const urlKey = `job:${dbUser.id}:${urlMatch[0].slice(0, 80)}`;
+        const dup = await redis.set(urlKey, '1', { nx: true, ex: 60 });
+        if (dup === null) return;
+      }
+
+      const progressMsg = await bot.telegram.sendMessage(msg.chat.id,
+        '🔄 Загружаем данные с площадки...', { parse_mode: 'HTML' }
+      );
+
+      const job = await createJob(dbUser.id, msg.chat.id, progressMsg.message_id, urlMatch[0]);
+      await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
+
+      const host = req.headers.host || 'card-zip.vercel.app';
+      const sent = await callWithRetry(`https://${host}/api/step1-elim`, { jobId: job.id });
+
+      if (!sent) {
+        await bot.telegram.editMessageText(
+          msg.chat.id, progressMsg.message_id, undefined,
+          '❌ Не удалось запустить обработку. Попробуй ещё раз.',
+          { parse_mode: 'HTML' }
+        ).catch(() => {});
+        await supabase.from('jobs').update({ status: 'failed', error: 'step1_trigger_failed' }).eq('id', job.id);
+      }
+    } catch (e) {
+      console.error('[webhook] URL pipeline error:', e);
+    }
     return;
   }
 
+  // ─── Всё остальное: callbacks, команды, текст, tariff input ────────────────
+  // Ждём полной обработки перед ответом Telegram
   try {
-    const msg = req.body?.message;
-    const cbq = req.body?.callback_query;
-
-    if (cbq || !msg?.text || !msg.from?.id || !msg.chat?.id) {
-      await bot.handleUpdate(req.body);
-      return;
-    }
-
-    const text = msg.text.trim();
-    if (text.startsWith('/')) {
-      await bot.handleUpdate(req.body);
-      return;
-    }
-
-    const urlMatch = text.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/);
-    if (!urlMatch) {
-      // Может быть ввод тарифа или другой текст — отдаём в bot.handleUpdate
-      await bot.handleUpdate(req.body);
-      return;
-    }
-
-    const dbUser = await getOrCreateUser(msg.from.id);
-    const status = await getStatus(dbUser.id);
-    if (!status.canGenerate) {
-      await track(dbUser.id, 'upgrade_shown');
-      await bot.telegram.sendMessage(msg.chat.id,
-        `❌ <b>Бесплатные генерации исчерпаны</b>\n\n/upgrade для продолжения`,
-        { parse_mode: 'HTML' }
-      );
-      return;
-    }
-
-    // Дедупликация по URL: не создавать 2 job для одного URL за 60с
-    if (redis) {
-      const urlKey = `job:${dbUser.id}:${urlMatch[0].slice(0, 80)}`;
-      const dup = await redis.set(urlKey, '1', { nx: true, ex: 60 });
-      if (dup === null) {
-        console.log(`[webhook] Duplicate URL job for user ${dbUser.id}, skip`);
-        return;
-      }
-    }
-
-    const progressMsg = await bot.telegram.sendMessage(msg.chat.id,
-      '🔄 Загружаем данные с площадки...', { parse_mode: 'HTML' }
-    );
-
-    const job = await createJob(dbUser.id, msg.chat.id, progressMsg.message_id, urlMatch[0]);
-    await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
-
-    const host = req.headers.host || 'card-zip.vercel.app';
-    const sent = await callWithRetry(`https://${host}/api/step1-elim`, { jobId: job.id });
-
-    if (!sent) {
-      console.error('[webhook] Failed to trigger step1');
-      await bot.telegram.editMessageText(
-        msg.chat.id, progressMsg.message_id, undefined,
-        '❌ Не удалось запустить обработку. Попробуй ещё раз.',
-        { parse_mode: 'HTML' }
-      ).catch(() => {});
-      await supabase.from('jobs').update({ status: 'failed', error: 'step1_trigger_failed' }).eq('id', job.id);
-    }
-
+    await bot.handleUpdate(req.body);
   } catch (e) {
-    console.error('[webhook]', e);
+    console.error('[webhook] handleUpdate error:', e);
   }
+
+  return res.status(200).json({ ok: true });
 }
