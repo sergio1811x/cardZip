@@ -10,9 +10,9 @@ const MODELS = [
 const AiResponseSchema = z.object({
   titleRu: z.string().min(10).max(150),
   titleRuBranded: z.string().optional(),
-  description: z.string().min(100).max(3000),
-  bullets: z.array(z.string()).min(3).max(5),
-  keywords: z.array(z.string()).min(1).max(10),
+  description: z.string().min(50).max(3000),
+  bullets: z.array(z.string()).min(3).max(7),
+  keywords: z.array(z.string()).min(1).max(15),
   characteristics: z.record(z.union([z.string(), z.number()]).transform(String)),
   filterKeywords: z.object({
     required: z.array(z.string()),
@@ -22,8 +22,8 @@ const AiResponseSchema = z.object({
   searchQueries: z.array(z.string()).optional(),
   warnings: z.array(z.string()).optional(),
   supplierQuestions: z.object({
-    ru: z.array(z.string()).min(5).max(12),
-    cn: z.array(z.string()).min(5).max(12),
+    ru: z.array(z.string()).min(1).max(12),
+    cn: z.array(z.string()).min(1).max(12),
   }).optional(),
 });
 
