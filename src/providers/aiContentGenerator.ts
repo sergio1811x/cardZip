@@ -211,25 +211,29 @@ function cleanJsonResponse(raw: string): string {
     .trim();
 }
 
-async function callModel(model: string, prompt: string, apiKey: string): Promise<AiContentResult | null> {
+const SYSTEM_MSG = 'Ты SEO-копирайтер для Wildberries. Отвечаешь ТОЛЬКО валидным JSON. Никакого Markdown, никаких пояснений — только JSON-объект.';
+
+async function callProvider(
+  baseUrl: string,
+  model: string,
+  prompt: string,
+  apiKey: string,
+  extraHeaders?: Record<string, string>
+): Promise<AiContentResult | null> {
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://github.com/sergio1811x/cardZip',
-        'X-Title': 'cardZip',
+        ...extraHeaders,
       },
       body: JSON.stringify({
         model,
         max_tokens: 4000,
         temperature: 0.7,
         messages: [
-          {
-            role: 'system',
-            content: 'Ты SEO-копирайтер для Wildberries. Отвечаешь ТОЛЬКО валидным JSON. Никакого Markdown, никаких пояснений — только JSON-объект.',
-          },
+          { role: 'system', content: SYSTEM_MSG },
           { role: 'user', content: prompt },
         ],
       }),
@@ -253,6 +257,23 @@ async function callModel(model: string, prompt: string, apiKey: string): Promise
     console.error(`[ai] ${model} failed:`, e instanceof Error ? e.message : e);
     return null;
   }
+}
+
+function callModel(model: string, prompt: string, apiKey: string): Promise<AiContentResult | null> {
+  return callProvider(
+    'https://openrouter.ai/api/v1',
+    model, prompt, apiKey,
+    { 'HTTP-Referer': 'https://github.com/sergio1811x/cardZip', 'X-Title': 'cardZip' }
+  );
+}
+
+const FIREWORKS_MODEL = 'accounts/fireworks/models/deepseek-v3';
+
+function callFireworks(prompt: string): Promise<AiContentResult | null> {
+  const fwKey = process.env.FIREWORKS_API_KEY;
+  if (!fwKey) return Promise.resolve(null);
+  console.log('[ai] Fireworks fallback...');
+  return callProvider('https://api.fireworks.ai/inference/v1', FIREWORKS_MODEL, prompt, fwKey);
 }
 
 function postProcess(result: AiContentResult, req: AiContentRequest): AiContentResult {
@@ -279,7 +300,14 @@ async function generate(req: AiContentRequest): Promise<AiContentResult> {
     }
   }
 
-  console.error('[ai] All models failed, using fallback');
+  // Fireworks fallback — если весь OpenRouter лёг
+  const fwResult = await callFireworks(prompt);
+  if (fwResult) {
+    console.log('[ai] Success with Fireworks');
+    return postProcess(fwResult, req);
+  }
+
+  console.error('[ai] All providers failed, using fallback');
   return buildFallback(req);
 }
 
