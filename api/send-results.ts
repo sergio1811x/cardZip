@@ -42,7 +42,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
         // Обновляем прогресс
         if (job.tg_message_id) {
           await bot.telegram.editMessageText(chatId, job.tg_message_id, undefined,
-            '🤖 <b>Шаг 2/4</b> — Генерируем SEO-контент...', { parse_mode: 'HTML' }
+            '🔄 Генерируем SEO-контент...', { parse_mode: 'HTML' }
           ).catch(() => {});
         }
 
@@ -88,7 +88,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
         // Обновляем прогресс
         if (job.tg_message_id) {
           await bot.telegram.editMessageText(chatId, job.tg_message_id, undefined,
-            '📦 <b>Шаг 4/4</b> — Собираем материалы...', { parse_mode: 'HTML' }
+            '🔄 Собираем материалы...', { parse_mode: 'HTML' }
           ).catch(() => {});
         }
 
