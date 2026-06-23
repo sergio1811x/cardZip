@@ -108,23 +108,21 @@ export function buildMessage1(product: ProductWithContent): string {
   // Экономика
   if (economics.platformMode === 'full') {
     if (wm) {
-      // Вес отсутствует — неполная экономика
       L.push('💰 <b>Экономика — неполная</b>');
       L.push(`  Себестоимость без карго: ${fP(economics.costRub)}`);
       if (wbFiltered && wbFiltered.medianPrice > 0) {
-        L.push(`  Цена продажи-ориентир WB: ${fP(wbFiltered.medianPrice)}`);
+        L.push(`  Цена-ориентир WB: ${fP(wbFiltered.medianPrice)}`);
       }
-      L.push('  <i>Для расчёта маржи нужен вес 1 единицы с упаковкой.</i>');
-      L.push('  <i>Карго, итоговая себестоимость и допустимая закупочная цена пока не рассчитаны.</i>');
-
-      // Сценарии веса
       L.push('');
-      L.push('  📦 Возможное карго при ставке $4/кг:');
+      L.push('🟡 <b>Статус: нужна проверка</b>');
+      L.push('Вес товара с упаковкой не указан поставщиком.');
+      L.push('До подтверждения веса бот не рассчитывает маржу, ROI, допустимую цену и итоговый бюджет.');
+      L.push('');
+      L.push('📦 Возможное карго при $4/кг:');
       [0.3, 0.5, 0.7].forEach((w) => {
-        const cargoRub = Math.round(w * 4 * 95);
-        L.push(`  ${w} кг: ~${fP(cargoRub)} / шт.`);
+        L.push(`  ${w} кг → ~${fP(Math.round(w * 4 * 95))}/шт.`);
       });
-      L.push('  <i>Это не вес товара. Подтвердите вес у поставщика.</i>');
+      L.push('<i>Это сценарий, не вес товара.</i>');
     } else {
       // Полная экономика
       L.push('💰 <b>Ориентировочная закупочная экономика</b>');
@@ -218,13 +216,11 @@ export function buildMessage2(product: ProductWithContent, jobId: string): {
   if (budgets && economics.platformMode === 'full') {
     L.push('🧪 <b>Бюджет закупки</b>');
     if (wm) {
-      // Без веса — только товар+банк
+      L.push('🧪 <b>Бюджет — без карго</b>');
       [budgets.sample, budgets.test, budgets.firstBatch].forEach((s) => {
-        L.push(`  ${s.label}, ${s.quantity} шт:`);
-        L.push(`    Товар + банк: ~${fP(s.goodsCostRub)}`);
-        L.push('    Карго: ожидает вес поставщика');
-        L.push('    Итого: не рассчитан');
+        L.push(`  ${s.label}, ${s.quantity} шт: ~${fP(s.goodsCostRub)} (товар+банк)`);
       });
+      L.push('  <i>Карго не включено: нет веса.</i>');
     } else {
       [budgets.sample, budgets.test, budgets.firstBatch].forEach((s) => {
         L.push(`  ${s.label} — ${s.quantity} шт: ~<b>${fP(s.totalRub)}</b>${s.quantity > 1 ? ' (вкл. 15% резерв)' : ''}`);

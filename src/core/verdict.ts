@@ -41,13 +41,11 @@ export function buildConclusion(
   const marginPositive = economics.grossProfitRub > 0;
   const wm = economics.weightMissing;
 
-  // Вес отсутствует — нельзя давать финальный вывод
   if (wm) {
-    disclaimers.push('Вес неизвестен — экономика неполная.');
     return {
       platform,
       icon: '🟡',
-      headline: 'Экономика неполная. Уточните вес у поставщика перед решением.',
+      headline: 'Для расчёта экономики нужен вес. Уточните у поставщика.',
       disclaimers,
     };
   }

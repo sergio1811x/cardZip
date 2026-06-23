@@ -141,9 +141,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   if (isSyntheticPrice) {
     disclaimer = `Цена продажи рассчитана при целевой марже ${targetMargin}%, а не взята с рынка. ` + disclaimer;
   }
-  if (weightMissing) {
-    disclaimer = '⚠️ Вес не указан — карго не учтено. ' + disclaimer;
-  }
+  // Не дублируем про вес — это показывается в messageBuilder
   if (isCustom) {
     disclaimer = 'Расчёт по вашим тарифам. ' + disclaimer;
   }

@@ -50,33 +50,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
-    // Сообщение 1: Товар + WB ориентир + Экономика + Вывод
-    await bot.telegram.sendMessage(chatId, buildMessage1(product), {
+    // ─── СООБЩЕНИЕ 1: Решение + рынок + экономика + проверки ────────────────
+    const msg1text = buildMessage1(product);
+    const msg2data = buildMessage2(product, job.id);
+    const fullMsg1 = msg1text + '\n\n' + msg2data.text;
+
+    await bot.telegram.sendMessage(chatId, fullMsg1, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
+      ...msg2data.keyboard,
     });
 
-    // Сообщение 2: Риски + Бюджеты + Кнопки
-    const msg2 = buildMessage2(product, job.id);
-    await bot.telegram.sendMessage(chatId, msg2.text, {
-      parse_mode: 'HTML',
-      ...msg2.keyboard,
-    });
-
-    // Файлы
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'seo_content.md'), {
-      caption: '📄 SEO-материалы для карточки WB',
-    });
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), 'order_brief.md'), {
-      caption: '📋 ТЗ для байера / карго',
-    });
+    // ─── СООБЩЕНИЕ 2: Документы ──────────────────────────────────────────────
+    await bot.telegram.sendMessage(chatId,
+      '📎 <b>Материалы готовы</b>\n• SEO-карточка для WB\n• ТЗ байеру / карго\n• Исходные фото товара',
+      { parse_mode: 'HTML' }
+    );
+    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'seo_content.md'));
+    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), 'order_brief.md'));
     if (zipBuffer) {
-      await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'), {
-        caption: `🖼 Фото товара (${result.imageUrls.length} шт.)`,
-      });
+      await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'));
     }
 
-    // Сообщение 3: Лимиты + кнопки
+    // ─── СООБЩЕНИЕ 3: Действия ───────────────────────────────────────────────
     const { text, keyboard } = buildMessage3(freshStatus);
     await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...keyboard });
 

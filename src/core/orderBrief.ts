@@ -69,14 +69,26 @@ export function formatOrderBrief(
 
   // Оптовые цены
   if (product.priceRange?.length) {
-    L.push('### Оптовые цены');
-    L.push('');
-    L.push('| От (шт.) | Цена (¥) |');
-    L.push('|----------|----------|');
-    product.priceRange.slice(0, 5).forEach((r) => {
-      L.push(`| ${r.minQty} | ${r.price} ¥ |`);
-    });
-    L.push('');
+    const validTiers = product.priceRange.filter((r) =>
+      Number.isFinite(r.minQty) && r.minQty > 0 && Number.isFinite(r.price) && r.price > 0
+    );
+    if (validTiers.length) {
+      L.push('### Оптовые цены');
+      L.push('');
+      L.push('| От (шт.) | Цена (¥) |');
+      L.push('|----------|----------|');
+      validTiers.slice(0, 5).forEach((r) => {
+        L.push(`| ${r.minQty} | ${r.price} ¥ |`);
+      });
+      L.push('');
+    } else {
+      const prices = product.priceRange.map((r) => r.price).filter(Boolean);
+      if (prices.length) {
+        L.push(`Оптовая цена: от ${Math.min(...prices)} ¥`);
+        L.push('Пороги количества не распознаны. Уточните цену на 20, 50 и 100 шт.');
+        L.push('');
+      }
+    }
   }
 
   // SKU
@@ -116,15 +128,19 @@ export function formatOrderBrief(
 
   // Бюджеты
   if (budgets && economics.platformMode === 'full') {
-    L.push('## 🧪 Бюджет закупки');
+    const wmLabel = budgets.weightMissing ? ' — без карго' : '';
+    L.push(`## 🧪 Бюджет закупки${wmLabel}`);
     L.push('');
-    L.push(`| Сценарий | Кол-во | Товар+доставка | Резерв | Итого |`);
-    L.push('|----------|--------|----------------|--------|-------|');
+    const itogo = budgets.weightMissing ? 'Итого без карго' : 'Итого';
+    L.push(`| Сценарий | Кол-во | Товар+банк | Резерв 15% | ${itogo} |`);
+    L.push('|----------|--------|------------|------------|--------|');
     [budgets.sample, budgets.test, budgets.firstBatch].forEach((s) => {
       L.push(`| ${s.label} | ${s.quantity} шт | ${s.goodsCostRub} ₽ | ${s.reserveRub} ₽ | **${s.totalRub} ₽** |`);
     });
-    L.push('');
-    if (budgets.weightMissing) L.push('> ⚠️ Вес не указан — карго не учтено в расчёте.');
+    if (budgets.weightMissing) {
+      L.push('');
+      L.push('> Карго не включено: поставщик не указал вес единицы с упаковкой.');
+    }
     L.push('');
   } else if (economics.platformMode === 'sample_only') {
     L.push('## 🧪 Стоимость образца');
