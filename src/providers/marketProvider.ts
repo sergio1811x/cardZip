@@ -32,6 +32,8 @@ function buildResult(data: ParserResponse): WbSearchResult | null {
       title: p.name,
       price: p.price,
       url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
+      rating: p.rating || 0,
+      feedbacks: p.feedbacks || 0,
     }));
 
   return {

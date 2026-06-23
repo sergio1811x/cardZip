@@ -153,9 +153,10 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         riskFlags,
         economics,
         testPurchase,
-        verdict: d.verdict?.verdict
-          ? d.verdict
-          : buildVerdict(economics, wbFiltered, riskFlags),
+        ...(d.score ? { score: d.score } : {}),
+        ...(d.verdict?.verdict
+          ? { score: d.score ?? buildVerdict(economics, wbFiltered, riskFlags).score, verdict: d.verdict }
+          : buildVerdict(economics, wbFiltered, riskFlags)),
         cachedAt: new Date(cached.created_at),
       };
     } else {
@@ -215,7 +216,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
 
       const riskFlags = buildRiskFlags(rawProduct, wbFiltered);
       const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing);
-      const verdict = buildVerdict(economics, wbFiltered, riskFlags);
+      const { score, verdict } = buildVerdict(economics, wbFiltered, riskFlags);
 
       product = {
         ...rawProduct,
@@ -227,6 +228,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
         riskFlags,
         economics,
         testPurchase,
+        score,
         verdict,
       };
 

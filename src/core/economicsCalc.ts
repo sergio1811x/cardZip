@@ -1,8 +1,12 @@
-import type { EconomicsInput, EconomicsResult, TestPurchaseResult } from '../types';
+import type { EconomicsInput, EconomicsResult, EconomicsBreakdown, TestPurchaseResult } from '../types';
 
 const LOGISTICS_PER_KG = 400;
-const WB_COMMISSION = 0.20;
+const BANK_MARKUP_PERCENT = 3;
+const WB_COMMISSION_PERCENT = 20;
 const WB_LOGISTICS = 100;
+const INTERNAL_LOGISTICS = 50;
+const TAX_PERCENT = 7;
+const TARGET_MARGIN_PERCENT = 35;
 const FALLBACK_YUAN_TO_RUB = 11.8;
 const DEFAULT_TEST_QUANTITY = 20;
 const DEFAULT_RESERVE_PERCENT = 15;
@@ -47,30 +51,56 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   const yuanToRub = await fetchYuanRate();
   const weightMissing = !weightKg || weightKg <= 0;
 
-  const purchaseRub = priceYuan * yuanToRub;
-  const logisticsRub = weightMissing ? 0 : Math.max(weightKg * LOGISTICS_PER_KG, 100);
-  const costRub = Math.round(purchaseRub + logisticsRub);
+  // Декомпозиция расходов
+  const purchaseRub = Math.round(priceYuan * yuanToRub);
+  const bankMarkupRub = Math.round(purchaseRub * BANK_MARKUP_PERCENT / 100);
+  const cargoRub = weightMissing ? 0 : Math.max(Math.round(weightKg * LOGISTICS_PER_KG), 100);
+  const internalLogisticsRub = weightMissing ? 0 : INTERNAL_LOGISTICS;
 
+  const costRub = purchaseRub + bankMarkupRub + cargoRub + internalLogisticsRub;
+
+  // Цена продажи: медиана WB или рекомендация от себестоимости
   const salePrice = wbMedianPrice ?? wbAvgPrice;
-  const avgSaleRub = salePrice ? Math.round(salePrice) : Math.round(costRub * 3);
+  const avgSaleRub = salePrice ? Math.round(salePrice) : Math.round(costRub / (1 - WB_COMMISSION_PERCENT / 100 - TARGET_MARGIN_PERCENT / 100));
 
-  const wbFee = Math.round(avgSaleRub * WB_COMMISSION);
-  const grossProfitRub = avgSaleRub - costRub - wbFee - WB_LOGISTICS;
+  const wbCommissionRub = Math.round(avgSaleRub * WB_COMMISSION_PERCENT / 100);
+  const taxRub = Math.round(avgSaleRub * TAX_PERCENT / 100);
+  const grossProfitRub = avgSaleRub - costRub - wbCommissionRub - WB_LOGISTICS - taxRub;
   const grossMarginPercent = avgSaleRub > 0
     ? Math.round((grossProfitRub / avgSaleRub) * 100)
     : 0;
+  const roiPercent = costRub > 0
+    ? Math.round((grossProfitRub / costRub) * 100)
+    : 0;
 
-  let disclaimer = '⚠️ Расчёт предварительный. Курс юаня, ставки карго и комиссии WB меняются. Уточняйте перед заказом.';
+  // Рекомендуемая цена при целевой марже
+  const recommendedPriceRub = Math.round(costRub / (1 - WB_COMMISSION_PERCENT / 100 - TARGET_MARGIN_PERCENT / 100 - TAX_PERCENT / 100 - WB_LOGISTICS / Math.max(avgSaleRub, 1)));
+
+  const breakdown: EconomicsBreakdown = {
+    purchaseYuan: priceYuan,
+    purchaseRub,
+    bankMarkupRub,
+    cargoRub,
+    internalLogisticsRub,
+    wbCommissionRub,
+    wbLogisticsRub: WB_LOGISTICS,
+    taxRub,
+  };
+
+  let disclaimer = 'Расчёт предварительный. Уточняйте актуальные ставки перед заказом.';
   if (weightMissing) {
-    disclaimer = '⚠️ Вес не указан — логистика не учтена. Реальная себестоимость будет выше. ' + disclaimer;
+    disclaimer = 'Вес не указан — логистика не учтена. Реальная себестоимость будет выше. ' + disclaimer;
   }
 
   return {
     yuanToRub,
+    breakdown,
     costRub,
     avgSaleRub,
     grossProfitRub,
     grossMarginPercent,
+    roiPercent,
+    recommendedPriceRub,
     weightMissing,
     disclaimer,
   };

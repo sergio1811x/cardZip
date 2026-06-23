@@ -32,6 +32,8 @@ async function searchWbByImage(imageUrl: string, query?: string) {
       title: p.name || '',
       price: p.price,
       url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
+      rating: p.rating || p.reviewRating || 0,
+      feedbacks: p.feedbacks || 0,
     }));
 
     const prices = cards.map((c: any) => c.price);
@@ -89,11 +91,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const riskFlags = buildRiskFlags(raw, wbFiltered);
     const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing);
-    const verdict = buildVerdict(economics, wbFiltered, riskFlags);
+    const { score, verdict } = buildVerdict(economics, wbFiltered, riskFlags);
 
     progress?.stop();
 
-    console.log(`[step3-market] WB: ${wbFiltered?.quality ?? 'null'} (${wbFiltered?.relevantCount ?? 0} relevant) | verdict: ${verdict.verdict}`);
+    console.log(`[step3-market] WB: ${wbFiltered?.quality ?? 'null'} (${wbFiltered?.relevantCount ?? 0} relevant) | score: ${score.total}/100 | verdict: ${verdict.verdict}`);
 
     await supabase.from('jobs').update({
       status: 'done',
@@ -108,6 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           riskFlags,
           economics,
           testPurchase,
+          score,
           verdict,
         },
       },

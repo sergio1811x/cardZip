@@ -87,6 +87,8 @@ export function filterWbData(
       maxPrice: 0,
       relevantCount: 0,
       totalCount: raw?.totalCards ?? 0,
+      totalFeedbacks: 0,
+      avgRating: 0,
       topExamples: [],
       searchQueries,
       raw: raw ?? { avgPrice: 0, minPrice: 0, maxPrice: 0, totalCards: 0, topExamples: [], allCards: [], photoSearchConfirmed: false },
@@ -107,6 +109,8 @@ export function filterWbData(
       maxPrice: 0,
       relevantCount: 0,
       totalCount: raw.totalCards,
+      totalFeedbacks: 0,
+      avgRating: 0,
       topExamples: [],
       searchQueries,
       raw,
@@ -134,6 +138,12 @@ export function filterWbData(
     }
   }
 
+  const totalFeedbacks = relevant.reduce((sum, c) => sum + c.feedbacks, 0);
+  const ratingsWithValue = relevant.filter((c) => c.rating > 0);
+  const avgRating = ratingsWithValue.length
+    ? Math.round((ratingsWithValue.reduce((sum, c) => sum + c.rating, 0) / ratingsWithValue.length) * 10) / 10
+    : 0;
+
   return {
     quality,
     medianPrice,
@@ -143,6 +153,8 @@ export function filterWbData(
     maxPrice: sorted[sorted.length - 1],
     relevantCount: relevant.length,
     totalCount: raw.totalCards,
+    totalFeedbacks,
+    avgRating,
     topExamples,
     searchQueries,
     raw,

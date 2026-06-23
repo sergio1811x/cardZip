@@ -70,6 +70,7 @@ export interface ProductWithContent extends RawProduct1688 {
   riskFlags: RiskFlags;
   economics: EconomicsResult;
   testPurchase: TestPurchaseResult | null;
+  score: MarketScore;
   verdict: Verdict;
   cachedAt?: Date;
 }
@@ -94,6 +95,8 @@ export interface WbCard {
   title: string;
   price: number;
   url: string;
+  rating: number;
+  feedbacks: number;
 }
 
 export interface WbFilterKeywords {
@@ -121,9 +124,24 @@ export interface WbFilteredResult {
   maxPrice: number;
   relevantCount: number;
   totalCount: number;
+  totalFeedbacks: number;
+  avgRating: number;
   topExamples: WbCard[];
   searchQueries: string[];
   raw: WbSearchResult;
+}
+
+// ─── Market Score ────────────────────────────────────────────────────────────
+
+export interface MarketScore {
+  total: number;
+  demandScore: number;
+  competitionScore: number;
+  marginScore: number;
+  reliabilityScore: number;
+  verdict: ProductVerdict;
+  label: string;
+  reasons: string[];
 }
 
 export interface MarketProvider {
@@ -146,6 +164,7 @@ export interface AiContentRequest {
   brand?: string;
   model?: string;
   riskFlags?: RiskFlags;
+  wbTopKeywords?: string[];
 }
 
 export interface AiContentResult {
@@ -252,12 +271,26 @@ export interface EconomicsInput {
   wbMedianPrice?: number;
 }
 
+export interface EconomicsBreakdown {
+  purchaseYuan: number;
+  purchaseRub: number;
+  bankMarkupRub: number;
+  cargoRub: number;
+  internalLogisticsRub: number;
+  wbCommissionRub: number;
+  wbLogisticsRub: number;
+  taxRub: number;
+}
+
 export interface EconomicsResult {
   yuanToRub: number;
+  breakdown: EconomicsBreakdown;
   costRub: number;
   avgSaleRub: number;
   grossProfitRub: number;
   grossMarginPercent: number;
+  roiPercent: number;
+  recommendedPriceRub: number;
   weightMissing: boolean;
   disclaimer: string;
 }

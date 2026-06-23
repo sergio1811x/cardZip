@@ -2,8 +2,6 @@ import { Markup } from 'telegraf';
 import type { ProductWithContent, SubscriptionStatus } from '../types';
 import { formatRiskMessages } from './riskFlags';
 
-const FALLBACK_RATE = 11.8;
-
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -17,120 +15,85 @@ function fN(n: number): string {
 }
 
 export function buildMessage1(product: ProductWithContent): string {
-  const { wbFiltered, economics, verdict, riskFlags, testPurchase } = product;
+  const { wbFiltered, economics, score, verdict, riskFlags, testPurchase } = product;
   const L: string[] = [];
-  const rate = isFinite(economics.yuanToRub) && economics.yuanToRub > 0 ? economics.yuanToRub : FALLBACK_RATE;
+  const b = economics.breakdown;
 
-  // ─── Заголовок ─────────────────────────────────────────────────────────────
+  // ─── Заголовок + Score ─────────────────────────────────────────────────────
   L.push(`📦 <b>${esc(product.titleRu)}</b>`);
   L.push('');
-
-  // ─── Вердикт ───────────────────────────────────────────────────────────────
-  L.push(`<b>${verdict.label}</b>`);
-  verdict.reasons.forEach((r) => L.push(`• ${r}`));
+  L.push(`📊 <b>Score: ${score.total}/100</b> → <b>${verdict.label}</b>`);
+  score.reasons.forEach((r) => L.push(`  • ${r}`));
   L.push('');
 
-  // ─── Поставщик ─────────────────────────────────────────────────────────────
-  const pName = product.platform === '1688' ? '1688' : product.platform === 'taobao' ? 'Taobao' : 'Tmall';
-  L.push(`🏭 <b>Поставщик ${pName}</b>`);
-  if (product.supplierName) L.push(`• ${esc(product.supplierName)}`);
+  // ─── Поставщик (компактно) ─────────────────────────────────────────────────
+  const supplierParts: string[] = [];
   if (product.supplierType) {
-    const t = { factory: '🏭 Фабрика', merchant: '🏪 Торговая компания', seller: '👤 Продавец' };
-    L.push(`• Тип: ${t[product.supplierType]}`);
+    const t = { factory: 'Фабрика', merchant: 'Торговая компания', seller: 'Продавец' };
+    supplierParts.push(t[product.supplierType]);
   }
-  if (product.sold) L.push(`• Заказов: ${fN(product.sold)}+`);
-  if (product.supplierRating) L.push(`• Рейтинг: ${product.supplierRating}/5`);
-
-  const badges: string[] = [];
-  if (product.supplierExtra?.dropshipping) badges.push('дропшиппинг');
-  if (product.supplierExtra?.freeReturn7d) badges.push('возврат 7 дней');
-  if (product.supplierExtra?.selectedSource) badges.push('отобранный источник');
-  if (badges.length) L.push(`• ${badges.join(' | ')}`);
-  L.push('');
-
-  // ─── Закупка ───────────────────────────────────────────────────────────────
-  L.push('📦 <b>Закупка</b>');
-  const priceRub = Math.round(product.priceYuan * rate);
-  L.push(`• Цена: <b>${product.priceYuan} ¥</b> (~${fP(priceRub)})`);
-
-  if (product.priceRange?.length) {
-    const valid = product.priceRange.filter((r) => r.minQty > 0);
-    if (valid.length) {
-      const ranges = valid.slice(0, 3).map((r) => `от ${r.minQty} шт. → ${r.price} ¥`);
-      L.push(`• Опт: ${ranges.join(' | ')}`);
-    }
-  }
-
-  L.push(`• MOQ: ${product.moq} шт.`);
-  L.push(`• Вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : '⚠️ не указан'}`);
-  if (product.stock) L.push(`• Остаток: ${fN(product.stock)} шт.`);
+  if (product.sold) supplierParts.push(`${fN(product.sold)}+ заказов`);
+  if (product.supplierRating) supplierParts.push(`${product.supplierRating}/5`);
+  L.push(`🏭 <b>Поставщик:</b> ${esc(product.supplierName)}${supplierParts.length ? ' · ' + supplierParts.join(' · ') : ''}`);
   L.push('');
 
   // ─── Рынок WB ─────────────────────────────────────────────────────────────
-  L.push('🔍 <b>Рынок Wildberries</b>');
-
-  if (wbFiltered && wbFiltered.quality === 'reliable') {
-    L.push(`Релевантные товары: ${wbFiltered.relevantCount} из ${wbFiltered.totalCount} найденных`);
-    L.push(`Медианная цена: <b>${fP(wbFiltered.medianPrice)}</b>`);
-    L.push(`Типичный диапазон: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
-    L.push(`Общий диапазон: ${fP(wbFiltered.minPrice)}–${fP(wbFiltered.maxPrice)}`);
+  L.push('🔍 <b>Рынок WB</b>');
+  if (wbFiltered && (wbFiltered.quality === 'reliable' || wbFiltered.quality === 'limited')) {
+    L.push(`  Карточек: ${wbFiltered.relevantCount} | Отзывов: ${fN(wbFiltered.totalFeedbacks)} | Рейтинг: ${wbFiltered.avgRating}`);
+    L.push(`  Медиана: <b>${fP(wbFiltered.medianPrice)}</b> | Диапазон: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
     if (wbFiltered.topExamples.length) {
-      L.push('');
-      L.push('Похожие карточки:');
-      wbFiltered.topExamples.forEach((ex) => {
-        L.push(`• <a href="${ex.url}">${fP(ex.price)}</a>`);
-      });
+      L.push(`  Топ: ${wbFiltered.topExamples.map(ex => `<a href="${ex.url}">${fP(ex.price)}</a>`).join(' · ')}`);
     }
-  } else if (wbFiltered && wbFiltered.quality === 'limited') {
-    L.push(`🟡 Данные ограничены: найдено ${wbFiltered.relevantCount} релевантных товаров.`);
-    L.push(`Ориентир цены: ~<b>${fP(wbFiltered.medianPrice)}</b>`);
-    L.push(`Типичный диапазон: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
-    L.push('');
-    L.push('<i>Перед закупкой проверьте выдачу вручную.</i>');
+    if (wbFiltered.quality === 'limited') {
+      L.push('  <i>⚠️ Ограниченная выборка — проверьте вручную</i>');
+    }
   } else {
-    L.push('⚠️ Автоматическая оценка рынка недостаточно точна.');
-    L.push('В выдаче есть нерелевантные товары, выбросы или недостаточно данных.');
-    if (wbFiltered?.searchQueries?.length) {
-      L.push('');
-      L.push('Подготовлены поисковые запросы для ручной проверки:');
-      wbFiltered.searchQueries.forEach((q) => {
-        const encoded = encodeURIComponent(q);
-        L.push(`• <a href="https://www.wildberries.ru/catalog/0/search.aspx?search=${encoded}">🔎 ${esc(q)}</a>`);
-      });
-    }
+    L.push('  ⚠️ Недостаточно данных для автоматической оценки');
   }
   L.push('');
 
-  // ─── Экономика ─────────────────────────────────────────────────────────────
-  L.push('📊 <b>Предварительная экономика</b>');
-  L.push(`• Себестоимость в РФ: ~<b>${fP(economics.costRub)}</b>`);
-  if (economics.weightMissing) {
-    L.push('  <i>(без логистики — вес не указан)</i>');
+  // ─── Экономика (таблица) ───────────────────────────────────────────────────
+  L.push('💰 <b>Юнит-экономика</b>');
+  L.push(`  Закупка: ${b.purchaseYuan} ¥ × ${economics.yuanToRub.toFixed(2)} = ${fP(b.purchaseRub)}`);
+  L.push(`  Банк ${3}%: +${fP(b.bankMarkupRub)}`);
+  if (!economics.weightMissing) {
+    L.push(`  Карго (${product.weightKg} кг): +${fP(b.cargoRub)}`);
+    L.push(`  Внутренняя логистика: +${fP(b.internalLogisticsRub)}`);
+  } else {
+    L.push('  Карго: <i>вес не указан</i>');
   }
-  L.push(`• Ориентир цены продажи: ~<b>${fP(economics.avgSaleRub)}</b>`);
-  const p = economics.grossProfitRub;
-  L.push(`• Валовая разница: <b>${p >= 0 ? '+' : '−'}${fP(Math.abs(p))}</b>`);
+  L.push(`  <b>Себестоимость: ${fP(economics.costRub)}</b>`);
+  L.push('');
+  L.push(`  Цена продажи: ${fP(economics.avgSaleRub)}`);
+  L.push(`  Комиссия WB ${20}%: −${fP(b.wbCommissionRub)}`);
+  L.push(`  Логистика WB: −${fP(b.wbLogisticsRub)}`);
+  L.push(`  Налог ~${7}%: −${fP(b.taxRub)}`);
+  L.push('');
+
+  const profitSign = economics.grossProfitRub >= 0 ? '+' : '';
+  L.push(`  <b>Чистая маржа: ${profitSign}${fP(economics.grossProfitRub)} (${economics.grossMarginPercent}%)</b>`);
+  L.push(`  ROI: ${economics.roiPercent}%`);
+  if (economics.recommendedPriceRub > 0 && !economics.weightMissing) {
+    L.push(`  Рекомендуемая цена (при марже 35%): ${fP(economics.recommendedPriceRub)}`);
+  }
   L.push('');
 
   // ─── Тестовая закупка ──────────────────────────────────────────────────────
   if (testPurchase) {
-    L.push(`🧪 <b>Тестовая закупка: ${testPurchase.quantity} шт.</b>`);
-    L.push(`• Товар и карго: ~${fP(testPurchase.goodsAndCargoRub)}`);
-    L.push(`• Резерв ${testPurchase.reservePercent}%: ~${fP(testPurchase.reserveRub)}`);
-    L.push(`• Стартовый бюджет: ~<b>${fP(testPurchase.testBudgetRub)}</b>`);
-    L.push('<i>Не включает комиссии WB, рекламу, упаковку, налоги, возвраты и хранение.</i>');
+    L.push(`🧪 <b>Тестовая партия ${testPurchase.quantity} шт: ~${fP(testPurchase.testBudgetRub)}</b>`);
+    L.push(`  Товар+карго: ${fP(testPurchase.goodsAndCargoRub)} | Резерв ${testPurchase.reservePercent}%: ${fP(testPurchase.reserveRub)}`);
     L.push('');
   }
 
   // ─── Риски ─────────────────────────────────────────────────────────────────
   const riskMessages = formatRiskMessages(riskFlags);
   if (riskMessages.length) {
-    L.push('⚠️ <b>Риски и что проверить</b>');
-    riskMessages.forEach((r) => L.push(`• ${r}`));
+    L.push('⚠️ <b>Проверить</b>');
+    riskMessages.forEach((r) => L.push(`  • ${r}`));
     L.push('');
   }
 
-  // ─── Дисклеймер ────────────────────────────────────────────────────────────
   L.push(`<i>${esc(economics.disclaimer)}</i>`);
 
   return L.join('\n');
