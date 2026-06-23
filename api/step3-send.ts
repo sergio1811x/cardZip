@@ -8,6 +8,7 @@ import { track } from '../src/services/analyticsService';
 import { buildMessage1, buildMessage3 } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { zipBuilder } from '../src/core/zipBuilder';
+import { createStepProgress } from '../src/core/progress';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -28,17 +29,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const chatId = job.tg_chat_id;
     const product = result.product as ProductWithContent;
 
-    // Прогресс
-    if (job.tg_message_id) {
-      await bot.telegram.editMessageText(chatId, job.tg_message_id, undefined,
-        '📦 <b>Шаг 4/4</b> — Отправляем результат...', { parse_mode: 'HTML' }
-      ).catch(() => {});
-    }
+    // Прогресс с анимацией
+    const progress = job.tg_message_id
+      ? createStepProgress(bot, chatId, job.tg_message_id, 'send')
+      : null;
 
     // Аналитика (до отправки)
     await track(job.user_id, 'generation_done', { url: job.input_url });
 
-    // Удаляем прогресс
+    // Стоп прогресс, удаляем
+    progress?.stop();
     if (job.tg_message_id) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }

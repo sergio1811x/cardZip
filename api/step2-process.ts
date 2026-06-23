@@ -5,6 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { aiContentGenerator } from '../src/providers/aiContentGenerator';
 import { calcEconomics } from '../src/core/economicsCalc';
 import { buildVerdict } from '../src/core/verdict';
+import { createStepProgress } from '../src/core/progress';
 
 export const config = { maxDuration: 60 };
 
@@ -55,12 +56,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const raw = (job.result_json as any).rawProduct;
     const imageUrls = (job.result_json as any).imageUrls;
 
-    // Прогресс
-    if (job.tg_message_id) {
-      await bot.telegram.editMessageText(job.tg_chat_id, job.tg_message_id, undefined,
-        '🤖 <b>Шаг 2/4</b> — Генерируем SEO и ищем на WB...', { parse_mode: 'HTML' }
-      ).catch(() => {});
-    }
+    // Прогресс с анимацией
+    const progress = job.tg_message_id
+      ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'process')
+      : null;
 
     // Параллельно: AI + WB + экономика
     const [seoContent, wbData, economics] = await Promise.all([
@@ -91,6 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? await calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg, wbAvgPrice: wbData.avgPrice })
       : economics;
 
+    progress?.stop();
     const verdict = buildVerdict(finalEconomics, wbData, raw.sold);
 
     console.log(`[step2] AI: ${seoContent.titleRu?.slice(0, 30)} | WB: ${wbData ? wbData.totalCards + ' cards' : 'null'}`);

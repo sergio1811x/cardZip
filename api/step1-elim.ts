@@ -4,6 +4,7 @@ import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { productImporter } from '../src/providers/productImporter';
 import { normalizeCnText } from '../src/core/cnNormalize';
+import { createStepProgress } from '../src/core/progress';
 
 export const config = { maxDuration: 60 };
 
@@ -23,15 +24,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Обновляем статус
     await supabase.from('jobs').update({ status: 'elim', started_at: new Date().toISOString() }).eq('id', jobId);
 
-    // Прогресс
-    if (job.tg_message_id) {
-      await bot.telegram.editMessageText(job.tg_chat_id, job.tg_message_id, undefined,
-        '📡 <b>Шаг 1/4</b> — Загружаем карточку товара...', { parse_mode: 'HTML' }
-      ).catch(() => {});
-    }
+    // Прогресс с анимацией
+    const progress = job.tg_message_id
+      ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'elim')
+      : null;
 
     // Elim API
-    const rawProduct = await productImporter.fetchProduct(job.input_url);
+    let rawProduct;
+    try {
+      rawProduct = await productImporter.fetchProduct(job.input_url);
+    } finally {
+      progress?.stop();
+    }
     rawProduct.titleCn = normalizeCnText(rawProduct.titleCn);
     if (rawProduct.description) rawProduct.description = normalizeCnText(rawProduct.description);
 
