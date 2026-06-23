@@ -69,10 +69,21 @@ export function buildMessage1(product: ProductWithContent): string {
     if (wbFiltered.quality === 'limited') {
       L.push('  <i>⚠️ Ограниченная выборка — проверьте вручную</i>');
     }
-  } else if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.relevantCount < 10) {
-    L.push(`  ⚠️ Найдено ${wbFiltered.relevantCount} карточек — недостаточно для ориентира`);
+  } else if (wbFiltered && wbFiltered.relevantCount > 0) {
+    L.push(`  ⚠️ Ограниченная выборка: ${wbFiltered.relevantCount} карточек`);
+    if (wbFiltered.medianPrice > 0) {
+      L.push(`  Медиана: ~<b>${fP(wbFiltered.medianPrice)}</b>`);
+      L.push(`  Диапазон: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
+    }
+    if (wbFiltered.topExamples.length) {
+      wbFiltered.topExamples.slice(0, 2).forEach((ex) => {
+        const t = ex.title.length > 35 ? ex.title.slice(0, 32) + '...' : ex.title;
+        L.push(`  • <a href="${ex.url}">${fP(ex.price)}</a> — ${esc(t)}`);
+      });
+    }
+    L.push('  <i>Проверьте выдачу WB вручную перед решением.</i>');
   } else {
-    L.push('  ⚠️ Не удалось найти точных аналогов по фото');
+    L.push('  ⚠️ Не удалось найти аналогов по фото');
   }
   L.push('');
 

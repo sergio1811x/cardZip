@@ -35,10 +35,13 @@ export function buildConclusion(
   // ─── 1688 ──────────────────────────────────────────────────────────────────
   disclaimers.push('Подтвердите цену выбранного SKU, вес с упаковкой и цену партии у поставщика.');
 
-  const hasWb = wbFiltered && (wbFiltered.quality === 'reliable' || wbFiltered.quality === 'limited');
+  const hasStrongWb = wbFiltered && (wbFiltered.quality === 'reliable' || wbFiltered.quality === 'limited');
+  const hasWeakWb = wbFiltered && wbFiltered.quality === 'unreliable' && wbFiltered.relevantCount > 0;
+  const hasAnyWb = hasStrongWb || hasWeakWb;
+  const noWb = !wbFiltered || wbFiltered.quality === 'unavailable' || wbFiltered.relevantCount === 0;
   const marginPositive = economics.grossProfitRub > 0;
 
-  if (hasWb && marginPositive && !economics.isSyntheticPrice) {
+  if (hasStrongWb && marginPositive && !economics.isSyntheticPrice) {
     if (riskFlags.hasBrand) disclaimers.push('Обнаружен бренд — проверьте права перед закупкой.');
     return {
       platform,
@@ -48,7 +51,7 @@ export function buildConclusion(
     };
   }
 
-  if (hasWb && !marginPositive && !economics.isSyntheticPrice) {
+  if (hasStrongWb && !marginPositive && !economics.isSyntheticPrice) {
     return {
       platform,
       icon: '🔴',
@@ -57,17 +60,35 @@ export function buildConclusion(
     };
   }
 
-  if (!hasWb) {
-    disclaimers.push('Оцените спрос на WB вручную перед закупкой.');
+  if (hasWeakWb && !economics.isSyntheticPrice) {
+    disclaimers.push('Выборка WB ограничена — проверьте выдачу вручную.');
+    if (marginPositive) {
+      return {
+        platform,
+        icon: '🟡',
+        headline: 'Маржа предварительно положительная, но выборка мала. Проверьте рынок вручную.',
+        disclaimers,
+      };
+    }
     return {
       platform,
-      icon: '⚪️',
-      headline: 'Конкуренты на WB не найдены. Оцените рынок вручную.',
+      icon: '🔴',
+      headline: 'Маржа отрицательная при ограниченной выборке. Проверьте оптовые цены.',
       disclaimers,
     };
   }
 
-  // WB есть, но цена синтетическая
+  if (noWb) {
+    disclaimers.push('Оцените спрос на WB вручную перед закупкой.');
+    return {
+      platform,
+      icon: '⚪️',
+      headline: 'Аналоги на WB не найдены. Оцените рынок вручную перед закупкой.',
+      disclaimers,
+    };
+  }
+
+  // WB есть но цена синтетическая
   return {
     platform,
     icon: '🟡',
