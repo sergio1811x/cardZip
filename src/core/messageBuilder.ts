@@ -282,7 +282,7 @@ export function buildMessage3(status: SubscriptionStatus): {
     ],
   ];
 
-  if (status.creditsRemaining <= 0 || status.plan === 'free') {
+  if (status.creditsRemaining <= 0) {
     buttons.push([
       Markup.button.callback('10 · 165⭐', 'pay_pack10'),
       Markup.button.callback('30 · 335⭐', 'pay_pack30'),
