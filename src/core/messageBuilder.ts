@@ -117,7 +117,10 @@ export function buildMessage3(status: SubscriptionStatus): {
 
   const buttons = [
     [Markup.button.callback('🔄 Проверить ещё товар', 'new_search')],
-    [Markup.button.callback('📩 Вопросы поставщику', 'supplier_questions')],
+    [
+      Markup.button.callback('📩 Вопросы поставщику', 'supplier_questions'),
+      Markup.button.callback('⚙️ Мои тарифы', 'edit_tariffs'),
+    ],
     ...(status.plan === 'free' ? [[Markup.button.callback('🔥 Снять лимиты', 'upgrade')]] : []),
   ];
 

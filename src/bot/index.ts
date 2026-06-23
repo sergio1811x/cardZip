@@ -11,6 +11,7 @@ import { isAppError } from '../lib/errors';
 import { getStatus } from '../services/subscriptionService';
 import { rateLimitMiddleware } from './middleware/rateLimit';
 import { handleSupplierQuestions, handleSupplierQuestionsLang } from './handlers/supplierQuestions';
+import { handleTariffsMenu, handleEditTariff, handleResetTariffs, handleTariffInput, getPendingEdit } from './handlers/tariffs';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -25,6 +26,7 @@ bot.command('start', handleStart);
 bot.command('upgrade', handleUpgrade);
 bot.command('last', handleLast);
 bot.command('admin', handleAdmin);
+bot.command('tariffs', async (ctx) => handleTariffsMenu(ctx));
 
 // ─── Callback-кнопки ──────────────────────────────────────────────────────────
 bot.action('upgrade', async (ctx) => {
@@ -49,14 +51,33 @@ bot.action(/^sq_(ru|cn)$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierQuestionsLang(ctx);
 });
+bot.action('edit_tariffs', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleTariffsMenu(ctx);
+});
+bot.action(/^edit_tariff_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleEditTariff(ctx);
+});
+bot.action('reset_tariffs', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleResetTariffs(ctx);
+});
 
 // ─── Успешная оплата ──────────────────────────────────────────────────────────
 bot.on('successful_payment', handleSuccessPayment);
 
-// ─── Текстовые сообщения: определяем URL площадки ────────────────────────────
+// ─── Текстовые сообщения ────────────────────────────────────────────────────
 bot.on('text', async (ctx) => {
   const text = ctx.message.text.trim();
   const userId = (ctx as any).dbUserId as string | undefined;
+  const chatId = ctx.chat?.id;
+
+  // Сначала проверяем: ожидает ли бот ввода тарифа
+  if (chatId && getPendingEdit(chatId)) {
+    const handled = await handleTariffInput(ctx, text);
+    if (handled) return;
+  }
 
   const urlMatch = text.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/);
   if (!urlMatch) {
@@ -76,7 +97,6 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // Rate limit
   try {
     const status = await getStatus(userId);
     const isPaid = status.plan !== 'free';

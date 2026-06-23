@@ -7,6 +7,7 @@ import { buildVerdict } from '../src/core/verdict';
 import { buildRiskFlags } from '../src/core/riskFlags';
 import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
+import { getUserTariffs } from '../src/db/queries/userSettings';
 import type { WbFilterKeywords } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -84,13 +85,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const searchQueries = seoContent?.searchQueries ?? seoContent?.keywords?.slice(0, 3) ?? [];
     const wbFiltered = filterWbData(wbData, filterKeywords, searchQueries);
 
+    // Пользовательские тарифы
+    const userTariffs = await getUserTariffs(job.user_id).catch(() => null);
+
     // Экономика
-    const economics = wbFiltered && wbFiltered.medianPrice > 0
-      ? await calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg, wbMedianPrice: wbFiltered.medianPrice })
-      : await calcEconomics({ priceYuan: raw.priceYuan, weightKg: raw.weightKg });
+    const economicsInput = {
+      priceYuan: raw.priceYuan,
+      weightKg: raw.weightKg,
+      categoryHint: raw.categoryName,
+      tariffs: userTariffs ?? undefined,
+      ...(wbFiltered && wbFiltered.medianPrice > 0 ? { wbMedianPrice: wbFiltered.medianPrice } : {}),
+    };
+    const economics = await calcEconomics(economicsInput);
 
     const riskFlags = buildRiskFlags(raw, wbFiltered);
-    const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing);
+    const testPurchase = calcTestPurchase(economics.costRub, economics.weightMissing, raw.moq);
     const { score, verdict } = buildVerdict(economics, wbFiltered, riskFlags);
 
     progress?.stop();

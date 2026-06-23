@@ -262,6 +262,15 @@ export interface AnalyticsService {
   track(userId: string, event: EventName, payload?: Record<string, unknown>): void;
 }
 
+// ─── User Settings ───────────────────────────────────────────────────────────
+
+export interface UserTariffs {
+  cargoPerKgUsd?: number;
+  fulfillmentRub?: number;
+  taxPercent?: number;
+  targetMarginPercent?: number;
+}
+
 // ─── Economics ────────────────────────────────────────────────────────────────
 
 export interface EconomicsInput {
@@ -269,6 +278,8 @@ export interface EconomicsInput {
   weightKg: number;
   wbAvgPrice?: number;
   wbMedianPrice?: number;
+  categoryHint?: string;
+  tariffs?: UserTariffs;
 }
 
 export interface EconomicsBreakdown {
@@ -292,6 +303,7 @@ export interface EconomicsResult {
   roiPercent: number;
   recommendedPriceRub: number;
   weightMissing: boolean;
+  isCustomTariffs: boolean;
   disclaimer: string;
 }
 
