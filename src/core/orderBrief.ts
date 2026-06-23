@@ -174,13 +174,33 @@ export function formatOrderBrief(
   // Экономика
   L.push('## 📊 Расчёт (справочно)');
   L.push('');
-  L.push(`- Себестоимость до WB: ~${economics.costRub} ₽`);
-  L.push(`- Курс: 1 ¥ = ${economics.yuanToRub.toFixed(2)} ₽`);
-  if (economics.platformMode === 'full' && !economics.isSyntheticPrice) {
-    L.push(`- Цена продажи (медиана WB): ${economics.avgSaleRub} ₽`);
-    L.push(`- Ориентировочная прибыль: ${economics.grossProfitRub} ₽`);
-    L.push(`- ROI: ${economics.roiPercent}%`);
+  if (economics.weightMissing) {
+    L.push('**Статус экономики: НЕПОЛНАЯ**');
+    L.push('**Причина:** отсутствует вес товара с упаковкой.');
+    L.push('');
+    L.push(`- Себестоимость без карго: ~${economics.costRub} ₽`);
+    L.push(`- Курс: 1 ¥ = ${economics.yuanToRub.toFixed(2)} ₽`);
+  } else {
+    L.push(`- Себестоимость: ~${economics.costRub} ₽`);
+    L.push(`- Курс: 1 ¥ = ${economics.yuanToRub.toFixed(2)} ₽`);
+    if (economics.platformMode === 'full' && !economics.isSyntheticPrice) {
+      L.push(`- Цена продажи (медиана WB): ${economics.avgSaleRub} ₽`);
+      L.push(`- Ориентировочная прибыль: ${economics.grossProfitRub} ₽`);
+      L.push(`- ROI: ${economics.roiPercent}%`);
+    }
   }
+  L.push('');
+
+  // Допущения
+  L.push('### Допущения расчёта');
+  L.push('');
+  L.push(`- Банковская комиссия: ${economics.breakdown.bankMarkupRub > 0 ? '3%' : 'не учтена'}`);
+  L.push(`- Карго: ${economics.weightMissing ? 'не учтено (нет веса)' : economics.breakdown.cargoRub + ' ₽'}`);
+  L.push(`- Фулфилмент: ${economics.breakdown.internalLogisticsRub} ₽`);
+  L.push(`- Комиссия WB: 20%`);
+  L.push(`- ДРР: ${economics.breakdown.drrPercent}%`);
+  L.push(`- Налог: 7%`);
+  L.push(`- ${economics.isCustomTariffs ? 'Тарифы пользователя' : 'Тарифы по умолчанию'}`);
   L.push('');
 
   // Вывод

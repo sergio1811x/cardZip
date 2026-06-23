@@ -37,9 +37,20 @@ export function buildConclusion(
 
   const hasStrongWb = wbFiltered && (wbFiltered.quality === 'reliable' || wbFiltered.quality === 'limited');
   const hasWeakWb = wbFiltered && wbFiltered.quality === 'unreliable' && wbFiltered.relevantCount > 0;
-  const hasAnyWb = hasStrongWb || hasWeakWb;
   const noWb = !wbFiltered || wbFiltered.quality === 'unavailable' || wbFiltered.relevantCount === 0;
   const marginPositive = economics.grossProfitRub > 0;
+  const wm = economics.weightMissing;
+
+  // Вес отсутствует — нельзя давать финальный вывод
+  if (wm) {
+    disclaimers.push('Вес неизвестен — экономика неполная.');
+    return {
+      platform,
+      icon: '🟡',
+      headline: 'Экономика неполная. Уточните вес у поставщика перед решением.',
+      disclaimers,
+    };
+  }
 
   if (hasStrongWb && marginPositive && !economics.isSyntheticPrice) {
     if (riskFlags.hasBrand) disclaimers.push('Обнаружен бренд — проверьте права перед закупкой.');
