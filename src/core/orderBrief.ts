@@ -1,4 +1,5 @@
 import type { RawProduct1688, AiContentResult, EconomicsResult, RiskFlags, BudgetScenarios, PlatformConclusion } from '../types';
+import { getCategoryChecklist } from './categoryChecklist';
 
 const PLATFORM_STATUS: Record<string, string> = {
   '1688': 'закупочная гипотеза',
@@ -149,7 +150,15 @@ export function formatOrderBrief(
   checks.push('Проверить качество на образце перед партией');
 
   const aiWarnings = content.warnings ?? [];
+  const categoryChecks = getCategoryChecklist(riskFlags, product.categoryName);
   [...aiWarnings, ...checks].forEach((c) => L.push(`- ${c}`));
+
+  if (categoryChecks.length) {
+    L.push('');
+    L.push('### Категорийный чек-лист');
+    L.push('');
+    categoryChecks.forEach((c) => L.push(`- [ ] ${c}`));
+  }
   L.push('');
 
   // Вопросы поставщику (китайский)

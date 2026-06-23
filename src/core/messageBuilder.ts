@@ -6,6 +6,13 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function sanitize(text: string): string {
+  return text
+    .replace(/file:\/\/\/[^\s]+/gi, '')
+    .replace(/\/(?:tmp|var|home|Users)\/[^\s]+/g, '')
+    .trim();
+}
+
 function fP(n: number): string {
   return n.toLocaleString('ru-RU') + ' ₽';
 }
@@ -31,6 +38,9 @@ export function buildMessage1(product: ProductWithContent): string {
   L.push(`📦 <b>${esc(product.titleRu)}</b>`);
   L.push('');
   L.push(`<i>${PLATFORM_LABELS[product.platform] ?? product.platform}</i>`);
+  if (product.priceIsRange) {
+    L.push('⚠️ <i>Цена может зависеть от варианта (цвет/размер/комплектация). Уточните у поставщика.</i>');
+  }
 
   // Поставщик
   const parts: string[] = [];
@@ -128,7 +138,7 @@ export function buildMessage1(product: ProductWithContent): string {
   L.push('');
   L.push(`<i>${esc(economics.disclaimer)}</i>`);
 
-  return L.join('\n');
+  return sanitize(L.join('\n'));
 }
 
 // ─── Сообщение 2: Риски + Бюджеты + Кнопки ─────────────────────────────────

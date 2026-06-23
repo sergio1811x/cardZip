@@ -263,6 +263,7 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     description: json.description,
     priceYuan: price,
     priceRange: priceRange.length > 0 ? priceRange : undefined,
+    priceIsRange: skuPrices.length >= 3 || (priceRange.length > 1),
     moq: json.moq ?? 1,
     weightKg,
     images,

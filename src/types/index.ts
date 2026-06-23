@@ -48,6 +48,7 @@ export interface RawProduct1688 {
   attributes?: ProductAttribute[];
   skus?: ProductSku[];
   supplierExtra?: SupplierExtra;
+  priceIsRange?: boolean;
 }
 
 // ─── Platform Conclusion (replaces Score/Verdict) ────────────────────────────
@@ -70,6 +71,7 @@ export interface ProductWithContent extends RawProduct1688 {
   budgets: BudgetScenarios | null;
   maxPurchasePrice: MaxPurchasePrice | null;
   conclusion: PlatformConclusion;
+  evidence?: FieldEvidence[];
   cachedAt?: Date;
 }
 
@@ -213,6 +215,18 @@ export interface MaxPurchasePrice {
   currentYuan: number;
   allowed: boolean;
   targetMarginPercent: number;
+}
+
+// ─── Field Evidence ──────────────────────────────────────────────────────────
+
+export type FieldConfidence = 'confirmed' | 'inferred' | 'unknown';
+export type FieldSource = 'product_attributes' | 'title' | 'seller' | 'llm' | 'wb';
+
+export interface FieldEvidence {
+  field: string;
+  value: string | number;
+  confidence: FieldConfidence;
+  source: FieldSource;
 }
 
 export interface AiContentGenerator {
