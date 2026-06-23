@@ -237,7 +237,7 @@ async function callProvider(
           { role: 'user', content: prompt },
         ],
       }),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(25_000),
     });
 
     if (!res.ok) {
