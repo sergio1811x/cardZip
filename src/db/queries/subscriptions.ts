@@ -27,12 +27,12 @@ export async function upsertSubscription(
   );
 }
 
-/** Возвращает количество генераций (считаем по events) */
+/** Возвращает количество генераций — считаем по завершённым jobs (без дублей) */
 export async function countGenerations(userId: string): Promise<number> {
   const { count } = await supabase
-    .from('events')
+    .from('jobs')
     .select('*', { count: 'exact', head: true })
     .eq('user_id', userId)
-    .eq('event_name', 'generation_done');
+    .in('status', ['done', 'sent']);
   return count ?? 0;
 }
