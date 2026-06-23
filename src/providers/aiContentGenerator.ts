@@ -267,7 +267,7 @@ function callModel(model: string, prompt: string, apiKey: string): Promise<AiCon
   );
 }
 
-const FIREWORKS_MODEL = 'accounts/fireworks/models/deepseek-v3';
+const FIREWORKS_MODEL = 'accounts/fireworks/models/deepseek-v4-flash';
 
 function callFireworks(prompt: string): Promise<AiContentResult | null> {
   const fwKey = process.env.FIREWORKS_API_KEY;
