@@ -85,7 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (redis) {
         const urlKey = `job:${dbUser.id}:${urlMatch[0].slice(0, 80)}`;
-        const dup = await redis.set(urlKey, '1', { nx: true, ex: 60 });
+        const dup = await redis.set(urlKey, '1', { nx: true, ex: 120 });
         if (dup === null) return res.status(200).json({ ok: true });
       }
 

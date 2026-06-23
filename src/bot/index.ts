@@ -3,7 +3,7 @@ import { Telegraf, Markup } from 'telegraf';
 import { userMiddleware } from './middleware/user';
 import { handleStart } from './handlers/start';
 import { handleLink } from './handlers/link';
-import { handleUpgrade, handlePayPack10, handlePayPack30, handlePayWeek, handleSuccessPayment } from './handlers/upgrade';
+import { handleUpgrade, handlePayTest, handlePayPack10, handlePayPack30, handlePayWeek, handleSuccessPayment } from './handlers/upgrade';
 import { handleLast } from './handlers/last';
 import { handleAdmin } from './handlers/admin';
 import { productImporter } from '../providers/productImporter';
@@ -38,6 +38,7 @@ bot.action('upgrade', async (ctx) => {
   await ctx.answerCbQuery();
   return handleUpgrade(ctx);
 });
+bot.action('pay_test', handlePayTest);
 bot.action('pay_pack10', handlePayPack10);
 bot.action('pay_pack30', handlePayPack30);
 bot.action('pay_week', handlePayWeek);

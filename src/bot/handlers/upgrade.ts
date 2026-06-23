@@ -19,12 +19,18 @@ export async function handleUpgrade(ctx: Context): Promise<void> {
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
+        [Markup.button.callback('🧪 Тест 3 разбора · 1 ⭐', 'pay_test')],
         [Markup.button.callback('10 разборов · 165 ⭐', 'pay_pack10')],
         [Markup.button.callback('30 разборов · 335 ⭐ Выгоднее', 'pay_pack30')],
         [Markup.button.callback('7 дней безлимит · 550 ⭐', 'pay_week')],
       ]),
     }
   );
+}
+
+export async function handlePayTest(ctx: Context): Promise<void> {
+  await ctx.answerCbQuery();
+  await sendInvoice(ctx, 'test');
 }
 
 export async function handlePayPack10(ctx: Context): Promise<void> {

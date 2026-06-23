@@ -5,6 +5,12 @@ import type { Plan } from '../types';
 
 // Telegram Stars: 1 звезда ≈ 1.8 ₽
 const PACKAGES: Record<string, { stars: number; label: string; plan: Plan; description: string }> = {
+  test: {
+    stars: 1,
+    label: 'Тест 3 разбора',
+    plan: 'pack10',
+    description: 'Тестовый пакет: 3 разбора за 1 звезду.',
+  },
   pack10: {
     stars: 165,
     label: '10 разборов',
