@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
-import { Telegraf } from 'telegraf';
+import { bot } from '../src/bot';
 import { getOrCreateUser } from '../src/db/queries/users';
 import { createJob } from '../src/db/queries/jobs';
 import { getStatus } from '../src/services/subscriptionService';
@@ -8,8 +8,6 @@ import { track } from '../src/services/analyticsService';
 import { supabase } from '../src/db/supabase';
 
 export const config = { maxDuration: 10 };
-
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const processed = new Set<number>();
 
 async function callWithRetry(url: string, body: object): Promise<boolean> {
