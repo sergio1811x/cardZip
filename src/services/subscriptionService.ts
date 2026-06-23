@@ -5,7 +5,7 @@ import {
 } from '../db/queries/subscriptions';
 import type { Plan, SubscriptionStatus } from '../types';
 
-const FREE_LIMIT = 3;
+const FREE_LIMIT = 5;
 
 export async function getStatus(userId: string): Promise<SubscriptionStatus> {
   const sub = await getSubscription(userId);
