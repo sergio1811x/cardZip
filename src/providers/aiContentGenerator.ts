@@ -2,9 +2,9 @@ import { z } from 'zod';
 import type { AiContentGenerator, AiContentRequest, AiContentResult } from '../types';
 
 const MODELS = [
-  process.env.CONTENT_MODEL || 'deepseek/deepseek-v4-flash',
-  process.env.FALLBACK_MODEL || 'xiaomi/mimo-v2.5',
-  process.env.SECONDARY_FALLBACK_MODEL || 'google/gemini-2.5-flash-lite-preview-09-2025',
+  process.env.CONTENT_MODEL || 'google/gemini-2.5-flash-lite-preview-09-2025',
+  process.env.FALLBACK_MODEL || 'deepseek/deepseek-v4-flash',
+  process.env.SECONDARY_FALLBACK_MODEL || 'meta-llama/llama-4-scout',
 ];
 
 const AiResponseSchema = z.object({
