@@ -9,7 +9,6 @@ import { buildMessage1, buildMessage3, buildEconomicsKeyboard } from '../src/cor
 import { formatSeoText } from '../src/core/seoFormatter';
 import { zipBuilder } from '../src/core/zipBuilder';
 import { createStepProgress } from '../src/core/progress';
-import { buildRewriteKeyboard } from '../src/bot/handlers/rewrite';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -57,11 +56,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...econKeyboard,
     });
 
-    // Сообщение 2: SEO файл (.md) + кнопки рерайта
-    const rewriteKb = buildRewriteKeyboard(job.id);
+    // Сообщение 2: SEO файл (.md)
     await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'seo_content.md'), {
       caption: '📄 SEO-материалы для карточки WB',
-      ...rewriteKb,
     });
 
     // Сообщение 2b: ZIP

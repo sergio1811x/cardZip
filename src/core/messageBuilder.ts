@@ -48,7 +48,11 @@ export function buildMessage1(product: ProductWithContent): string {
     L.push(`  Карточек: ${wbFiltered.relevantCount} | Отзывов: ${fN(wbFiltered.totalFeedbacks)} | Рейтинг: ${wbFiltered.avgRating}`);
     L.push(`  Медиана: <b>${fP(wbFiltered.medianPrice)}</b> | Диапазон: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
     if (wbFiltered.topExamples.length) {
-      L.push(`  Топ: ${wbFiltered.topExamples.map(ex => `<a href="${ex.url}">${fP(ex.price)}</a>`).join(' · ')}`);
+      L.push('  Похожие:');
+      wbFiltered.topExamples.forEach((ex) => {
+        const shortTitle = ex.title.length > 40 ? ex.title.slice(0, 37) + '...' : ex.title;
+        L.push(`  • <a href="${ex.url}">${fP(ex.price)}</a> — ${esc(shortTitle)}`);
+      });
     }
     if (wbFiltered.quality === 'limited') {
       L.push('  <i>⚠️ Ограниченная выборка — проверьте вручную</i>');
