@@ -24,7 +24,7 @@ async function searchWbByImage(imageUrl: string, query?: string) {
     if (query) params.set('query', query);
 
     const url = `${WB_PARSER_URL}/search-by-image?${params}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(50_000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) return null;
     const data = await res.json() as any;
     if (!data.success || !data.products?.length) return null;

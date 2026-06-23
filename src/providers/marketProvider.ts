@@ -54,7 +54,7 @@ async function searchSimilar(query: string, imageUrl?: string): Promise<WbSearch
     if (query) params.set('query', query);
 
     const url = `${WB_PARSER_URL}/search-by-image?${params}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(50_000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
 
     if (!res.ok) {
       console.warn(`[wb] VPS parser HTTP ${res.status}`);

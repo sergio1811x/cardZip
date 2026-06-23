@@ -183,7 +183,7 @@ async function callModel(model: string, prompt: string, apiKey: string): Promise
           { role: 'user', content: prompt },
         ],
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (!res.ok) {
