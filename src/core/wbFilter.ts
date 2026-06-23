@@ -34,22 +34,33 @@ function normalizeText(text: string): string {
   return text.toLowerCase().replace(/[^а-яёa-z0-9\s]/g, ' ');
 }
 
+function phraseMatches(text: string, phrase: string): boolean {
+  const words = phrase.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return false;
+  // Фраза считается совпавшей если хотя бы одно значимое слово (>3 букв) найдено
+  const significantWords = words.filter((w) => w.length > 3);
+  if (significantWords.length === 0) return words.some((w) => text.includes(w));
+  return significantWords.some((w) => text.includes(w));
+}
+
 function matchesKeywords(title: string, keywords: WbFilterKeywords): boolean {
   const text = normalizeText(title);
 
   for (const exc of keywords.exclude) {
-    if (text.includes(exc.toLowerCase())) return false;
+    if (phraseMatches(text, exc)) return false;
   }
 
   const hasRequired = keywords.required.length === 0 ||
-    keywords.required.some((kw) => text.includes(kw.toLowerCase()));
+    keywords.required.some((kw) => phraseMatches(text, kw));
   if (!hasRequired) return false;
 
+  if (keywords.optional.length === 0) return true;
+
   const optionalMatches = keywords.optional.filter((kw) =>
-    text.includes(kw.toLowerCase())
+    phraseMatches(text, kw)
   ).length;
 
-  return optionalMatches >= 1 || keywords.optional.length === 0;
+  return optionalMatches >= 1;
 }
 
 export function filterCards(cards: WbCard[], keywords: WbFilterKeywords): WbCard[] {
