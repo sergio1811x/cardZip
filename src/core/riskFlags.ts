@@ -84,7 +84,7 @@ export function buildRiskFlags(
     isCosmetic: hasKeyword(text, COSMETIC_KEYWORDS),
     isFood: hasKeyword(text, FOOD_KEYWORDS),
     isMedical: hasKeyword(text, MEDICAL_KEYWORDS),
-    supplierOrdersLow: (product.sold ?? 0) < 100,
+    supplierOrdersLow: (product.sold ?? 0) < 10,
     supplierTypeUnknown: !product.supplierType,
     weightMissing: !product.weightKg || product.weightKg <= 0,
     sizeGridRelevant: hasKeyword(text, SIZE_GRID_KEYWORDS),
