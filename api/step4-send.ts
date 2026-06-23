@@ -7,6 +7,7 @@ import { getStatus } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { buildMessage1, buildMessage3, buildEconomicsKeyboard } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
+import { formatOrderBrief } from '../src/core/orderBrief';
 import { zipBuilder } from '../src/core/zipBuilder';
 import { createStepProgress } from '../src/core/progress';
 import type { ProductWithContent } from '../src/types';
@@ -56,9 +57,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...econKeyboard,
     });
 
-    // Сообщение 2: SEO файл (.md)
+    // Сообщение 2a: SEO файл
     await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'seo_content.md'), {
       caption: '📄 SEO-материалы для карточки WB',
+    });
+
+    // Сообщение 2b: Байерский бриф
+    const briefText = formatOrderBrief(product, product.seoContent, product.economics, product.riskFlags, job.input_url);
+    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), 'order_brief.md'), {
+      caption: '📋 ТЗ для байера / карго',
     });
 
     // Сообщение 2b: ZIP

@@ -82,6 +82,7 @@ export function buildMessage1(product: ProductWithContent): string {
   }
   L.push(`  Комиссия WB 20%: −${fP(b.wbCommissionRub)}`);
   L.push(`  Логистика WB: −${fP(b.wbLogisticsRub)}`);
+  L.push(`  Реклама (ДРР ${b.drrPercent}%): −${fP(b.drrRub)}`);
   L.push(`  Налог ~7%: −${fP(b.taxRub)}`);
   L.push('');
 

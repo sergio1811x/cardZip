@@ -270,6 +270,7 @@ export interface UserTariffs {
   fulfillmentRub?: number;
   taxPercent?: number;
   targetMarginPercent?: number;
+  drrPercent?: number;
 }
 
 // ─── Economics ────────────────────────────────────────────────────────────────
@@ -292,6 +293,8 @@ export interface EconomicsBreakdown {
   wbCommissionRub: number;
   wbLogisticsRub: number;
   taxRub: number;
+  drrRub: number;
+  drrPercent: number;
 }
 
 export interface EconomicsResult {

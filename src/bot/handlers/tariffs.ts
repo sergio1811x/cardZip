@@ -9,6 +9,7 @@ const TARIFF_FIELDS: Array<{ key: keyof UserTariffs; label: string; unit: string
   { key: 'fulfillmentRub', label: 'Фулфилмент', unit: '₽/шт', hint: 'Упаковка + приёмка на складе за 1 единицу (в рублях). Обычно 50–150₽.' },
   { key: 'taxPercent', label: 'Налог', unit: '%', hint: 'Ставка налога (УСН 6% или 7%). Введите число без знака %.' },
   { key: 'targetMarginPercent', label: 'Целевая маржа', unit: '%', hint: 'Желаемая маржинальность для расчёта рекомендуемой цены. Обычно 25–40%.' },
+  { key: 'drrPercent', label: 'ДРР (реклама)', unit: '%', hint: 'Доля рекламных расходов от цены продажи. На WB обычно 10–20%.' },
 ];
 
 function pendingKey(chatId: number): string {
@@ -30,6 +31,7 @@ export async function handleTariffsMenu(ctx: Context) {
     `Фулфилмент: <b>${tariffs?.fulfillmentRub ?? '80'} ₽/шт</b> ${tariffs?.fulfillmentRub ? '(ваш)' : '(авто)'}`,
     `Налог: <b>${tariffs?.taxPercent ?? '7'}%</b> ${tariffs?.taxPercent ? '(ваш)' : '(авто)'}`,
     `Целевая маржа: <b>${tariffs?.targetMarginPercent ?? '35'}%</b> ${tariffs?.targetMarginPercent ? '(ваш)' : '(авто)'}`,
+    `ДРР (реклама): <b>${tariffs?.drrPercent ?? '15'}%</b> ${tariffs?.drrPercent ? '(ваш)' : '(авто)'}`,
     '',
     'Нажмите на параметр, чтобы изменить:',
   ];

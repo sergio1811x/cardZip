@@ -12,6 +12,7 @@ const DEFAULTS = {
   wbLogisticsRub: 100,
   taxPercent: 7,
   targetMarginPercent: 35,
+  drrPercent: 15,
 };
 
 const CATEGORY_CARGO: Record<string, number> = {
@@ -77,6 +78,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   const fulfillmentRub = tariffs?.fulfillmentRub ?? DEFAULTS.fulfillmentRub;
   const taxPercent = tariffs?.taxPercent ?? DEFAULTS.taxPercent;
   const targetMargin = tariffs?.targetMarginPercent ?? DEFAULTS.targetMarginPercent;
+  const drrPercent = tariffs?.drrPercent ?? DEFAULTS.drrPercent;
 
   // Декомпозиция
   const purchaseRub = Math.round(priceYuan * yuanToRub);
@@ -95,12 +97,13 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
 
   const wbCommissionRub = Math.round(avgSaleRub * DEFAULTS.wbCommissionPercent / 100);
   const taxRub = Math.round(avgSaleRub * taxPercent / 100);
-  const grossProfitRub = avgSaleRub - costRub - wbCommissionRub - DEFAULTS.wbLogisticsRub - taxRub;
+  const drrRub = Math.round(avgSaleRub * drrPercent / 100);
+  const grossProfitRub = avgSaleRub - costRub - wbCommissionRub - DEFAULTS.wbLogisticsRub - taxRub - drrRub;
   const grossMarginPercent = avgSaleRub > 0 ? Math.round((grossProfitRub / avgSaleRub) * 100) : 0;
   const roiPercent = costRub > 0 ? Math.round((grossProfitRub / costRub) * 100) : 0;
 
   // Рекомендуемая цена при целевой марже
-  const denominator = 1 - DEFAULTS.wbCommissionPercent / 100 - taxPercent / 100 - targetMargin / 100;
+  const denominator = 1 - DEFAULTS.wbCommissionPercent / 100 - taxPercent / 100 - drrPercent / 100 - targetMargin / 100;
   const recommendedPriceRub = denominator > 0
     ? Math.round((costRub + DEFAULTS.wbLogisticsRub) / denominator)
     : 0;
@@ -114,6 +117,8 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
     wbCommissionRub,
     wbLogisticsRub: DEFAULTS.wbLogisticsRub,
     taxRub,
+    drrRub,
+    drrPercent,
   };
 
   let disclaimer = isCustom
