@@ -58,8 +58,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const urlMatch = !urlText.startsWith('/') ? urlText.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/i) : null;
 
   if (urlMatch && msg?.from?.id && msg?.chat?.id) {
-    res.status(200).json({ ok: true });
-
     try {
       const dbUser = await getOrCreateUser(msg.from.id);
       const status = await getStatus(dbUser.id);
@@ -99,7 +97,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } catch (e) {
       console.error('[webhook] URL pipeline:', e);
     }
-    return;
+    return res.status(200).json({ ok: true });
   }
 
   // ─── Всё остальное: callbacks, /команды, текст (tariff input) ─────────────
