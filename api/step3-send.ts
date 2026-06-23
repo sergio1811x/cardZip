@@ -34,7 +34,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, chatId, job.tg_message_id, 'send')
       : null;
 
-    // Аналитика (до отправки)
+    // Собираем ВСЁ параллельно перед отправкой
+    const [seoText, zipBuffer, freshStatus] = await Promise.all([
+      Promise.resolve(formatSeoText(product, product.seoContent)),
+      result.imageUrls?.length
+        ? zipBuilder.buildFromUrls(result.imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null as Buffer | null)
+        : Promise.resolve(null as Buffer | null),
+      getStatus(job.user_id),
+    ]);
+
     await track(job.user_id, 'generation_done', { url: job.input_url });
 
     // Стоп прогресс, удаляем
@@ -43,30 +51,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
-    // Сообщение 1: аналитика
+    // Отправляем всё подряд (всё уже готово)
     await bot.telegram.sendMessage(chatId, buildMessage1(product), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
     });
 
-    // Сообщение 2: SEO файл
-    const seoText = formatSeoText(product, product.seoContent);
     await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'wb_seo.txt'), {
       caption: '📄 SEO-материалы для карточки WB',
     });
 
-    // ZIP
-    if (result.imageUrls?.length) {
-      try {
-        const zipBuffer = await zipBuilder.buildFromUrls(result.imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 });
-        await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'), {
-          caption: `🖼 Фото товара (${result.imageUrls.length} шт.)`,
-        });
-      } catch {}
+    if (zipBuffer) {
+      await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'), {
+        caption: `🖼 Фото товара (${result.imageUrls.length} шт.)`,
+      });
     }
 
-    // Сообщение 3: счётчик
-    const freshStatus = await getStatus(job.user_id);
     const { text, keyboard } = buildMessage3(freshStatus);
     await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...keyboard });
 
