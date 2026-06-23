@@ -15,6 +15,7 @@ import { handleTariffsMenu, handleEditTariff, handleResetTariffs, handleTariffIn
 import { handleRewrite } from './handlers/rewrite';
 import { handleQuickTariff } from './handlers/quickTariff';
 import { handleSearch1688 } from './handlers/search1688';
+import { handleSkuSelect } from './handlers/skuSelect';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -70,6 +71,11 @@ bot.action('reset_tariffs', async (ctx) => {
 // ─── Быстрые тарифы (inline под экономикой) ──────────────────────────────────
 bot.action(/^(cargo|ff)_(\d+)_(.+)$/, async (ctx) => {
   return handleQuickTariff(ctx);
+});
+
+// ─── Выбор SKU ──────────────────────────────────────────────────────────────
+bot.action(/^sku_(all|\d+)_(.+)$/, async (ctx) => {
+  return handleSkuSelect(ctx);
 });
 
 // ─── Найти на 1688 ──────────────────────────────────────────────────────────

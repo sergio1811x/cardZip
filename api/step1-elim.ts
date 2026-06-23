@@ -39,33 +39,65 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     rawProduct.titleCn = normalizeCnText(rawProduct.titleCn);
     if (rawProduct.description) rawProduct.description = normalizeCnText(rawProduct.description);
 
-    console.log(`[step1] Elim: ${rawProduct.titleCn?.slice(0, 30)} | imgs:${rawProduct.images.length}`);
+    console.log(`[step1] Elim: ${rawProduct.titleCn?.slice(0, 30)} | imgs:${rawProduct.images.length} | skus:${rawProduct.skus?.length ?? 0}`);
 
-    // Сохраняем rawProduct (без тяжёлых полей)
+    const rawForJob = {
+      productId: rawProduct.productId,
+      platform: rawProduct.platform,
+      titleCn: rawProduct.titleCn,
+      titleEn: rawProduct.titleEn,
+      description: rawProduct.description?.slice(0, 500),
+      priceYuan: rawProduct.priceYuan,
+      priceRange: rawProduct.priceRange?.slice(0, 5),
+      priceIsRange: rawProduct.priceIsRange,
+      moq: rawProduct.moq,
+      weightKg: rawProduct.weightKg,
+      mainImageUrl: rawProduct.mainImageUrl,
+      supplierName: rawProduct.supplierName,
+      supplierRating: rawProduct.supplierRating,
+      supplierType: rawProduct.supplierType,
+      sold: rawProduct.sold,
+      stock: rawProduct.stock,
+      categoryName: rawProduct.categoryName,
+      attributes: rawProduct.attributes?.slice(0, 15),
+      skus: rawProduct.skus?.slice(0, 15),
+    };
+
+    // SKU выбор: если 2+ SKU с разными ценами, спрашиваем пользователя
+    const skus = rawProduct.skus ?? [];
+    const uniquePrices = new Set(skus.filter(s => s.price).map(s => s.price));
+    const needSkuChoice = skus.length >= 2 && uniquePrices.size >= 2;
+
+    if (needSkuChoice && job.tg_message_id) {
+      // Показываем кнопки выбора SKU
+      const { Markup } = require('telegraf');
+      const buttons = skus.slice(0, 8).map((sku: any, i: number) => [
+        Markup.button.callback(
+          `${sku.name?.slice(0, 25)} · ${sku.price ?? '?'} ¥`,
+          `sku_${i}_${jobId}`
+        ),
+      ]);
+      buttons.push([Markup.button.callback('📊 Посчитать диапазон цен', `sku_all_${jobId}`)]);
+
+      await supabase.from('jobs').update({
+        status: 'sku_pending',
+        result_json: { rawProduct: rawForJob, imageUrls: rawProduct.images },
+      }).eq('id', jobId);
+
+      await bot.telegram.editMessageText(
+        job.tg_chat_id, job.tg_message_id, undefined,
+        'Выберите вариант для расчёта:',
+        { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) }
+      ).catch(() => {});
+
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    // Без SKU выбора — продолжаем как раньше
     await supabase.from('jobs').update({
       status: 'elim_done',
-      result_json: {
-        rawProduct: {
-          productId: rawProduct.productId,
-          platform: rawProduct.platform,
-          titleCn: rawProduct.titleCn,
-          titleEn: rawProduct.titleEn,
-          description: rawProduct.description?.slice(0, 500),
-          priceYuan: rawProduct.priceYuan,
-          priceRange: rawProduct.priceRange?.slice(0, 3),
-          moq: rawProduct.moq,
-          weightKg: rawProduct.weightKg,
-          mainImageUrl: rawProduct.mainImageUrl,
-          supplierName: rawProduct.supplierName,
-          supplierRating: rawProduct.supplierRating,
-          supplierType: rawProduct.supplierType,
-          sold: rawProduct.sold,
-          stock: rawProduct.stock,
-          categoryName: rawProduct.categoryName,
-          attributes: rawProduct.attributes?.slice(0, 15),
-        },
-        imageUrls: rawProduct.images,
-      },
+      result_json: { rawProduct: rawForJob, imageUrls: rawProduct.images },
     }).eq('id', jobId);
 
     // Вызываем step2 — 2 попытки с увеличенным таймаутом
