@@ -99,17 +99,30 @@ export function buildMessage1(product: ProductWithContent): string {
     L.push('  <b>Цена аналогов:</b>');
     L.push(`  P25: ${fP(wbFiltered.p25Price)} | Медиана: <b>${fP(wbFiltered.medianPrice)}</b> | P75: ${fP(wbFiltered.p75Price)}`);
 
-    // Лидеры ниши (top по отзывам)
+    // Близкие аналоги (top по similarity)
     if (wbFiltered.topExamples.length) {
-      const leaders = [...wbFiltered.topExamples]
-        .sort((a, b) => b.feedbacks - a.feedbacks)
-        .slice(0, 3);
       L.push('');
-      L.push('  🏆 <b>Лидеры ниши:</b>');
-      leaders.forEach((ex, i) => {
+      L.push('  🎯 <b>Близкие аналоги:</b>');
+      wbFiltered.topExamples.slice(0, 3).forEach((ex, i) => {
         const t = ex.title.length > 30 ? ex.title.slice(0, 27) + '...' : ex.title;
         L.push(`  ${i + 1}. <a href="${ex.url}">${fP(ex.price)}</a> ⭐${ex.rating} 💬${fN(ex.feedbacks)} — ${esc(t)}`);
       });
+    }
+
+    // Лидеры рынка (top по отзывам × similarity)
+    const leaders = (product as any).similarityData?.leaders ?? wbFiltered.topExamples;
+    if (leaders?.length) {
+      const topLeaders = leaders
+        .filter((l: any) => l.feedbacks > 50)
+        .slice(0, 3);
+      if (topLeaders.length) {
+        L.push('');
+        L.push('  🏆 <b>Лидеры рынка:</b>');
+        topLeaders.forEach((ex: any, i: number) => {
+          const t = (ex.title ?? '').length > 30 ? ex.title.slice(0, 27) + '...' : ex.title ?? '';
+          L.push(`  ${i + 1}. <a href="${ex.url}">${fP(ex.price)}</a> ⭐${ex.rating} 💬${fN(ex.feedbacks)} — ${esc(t)}`);
+        });
+      }
     }
   } else if (!sim || sim.totalAnalyzed === 0) {
     L.push('  ⚠️ Похожие товары не найдены');

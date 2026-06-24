@@ -1,8 +1,10 @@
 export type KitType = 'body_only' | 'basic_kit' | 'full_kit' | 'unknown';
 
 export interface ProductStructure {
-  category: string;
+  productFamily: string;
   productType: string;
+  coreNoun: string;
+  modifiers: string[];
   subtype: string | null;
   coreIntent: string;
   mustHaveFeatures: string[];
@@ -22,82 +24,11 @@ export interface WbQueryPlan {
   excludeIfOnlyMatch: string[][];
 }
 
-const SYSTEM_PROMPT = `Ты — аналитик товаров из Китая. Анализируй данные с 1688/Taobao и выдавай структуру товара на русском.`;
-
-function buildUnderstandingPrompt(raw: {
-  titleCn: string;
-  titleEn?: string;
-  categoryName?: string;
-  attributes?: Array<{ name: string; value: string }>;
-  description?: string;
-  skus?: Array<{ name: string; price?: number }>;
-}): string {
-  let info = `Название (CN): ${raw.titleCn}`;
-  if (raw.titleEn) info += `\nНазвание (EN): ${raw.titleEn}`;
-  if (raw.categoryName) info += `\nКатегория 1688: ${raw.categoryName}`;
-  if (raw.attributes?.length) {
-    info += '\nХарактеристики:';
-    raw.attributes.slice(0, 20).forEach(a => { info += `\n  ${a.name}: ${a.value}`; });
-  }
-  if (raw.description) info += `\nОписание: ${raw.description.slice(0, 300)}`;
-  if (raw.skus?.length) {
-    info += '\nВарианты SKU:';
-    raw.skus.slice(0, 8).forEach(s => { info += `\n  ${s.name} — ${s.price ?? '?'} ¥`; });
-  }
-
-  return `Проанализируй товар и верни JSON.
-
-ДАННЫЕ:
-${info}
-
-Верни ТОЛЬКО JSON:
-{
-  "category": "категория на русском (Автотовары, Одежда, Электроника, ...)",
-  "productType": "тип товара на русском (пусковое устройство, леггинсы, зонт, ...)",
-  "subtype": "подтип или null (с компрессором, складной автомат, ...)",
-  "coreIntent": "зачем покупают (аварийный запуск автомобиля, защита от дождя, ...)",
-  "mustHaveFeatures": ["обязательные признаки для аналога"],
-  "importantFeatures": ["важные, но не обязательные"],
-  "optionalFeatures": ["второстепенные (цвет, чехол, ...)"],
-  "technicalSpecs": {"ключ": "значение"},
-  "negativeMatches": ["что НЕ является этим товаром, но может попасть в выдачу"],
-  "kitType": "body_only|basic_kit|full_kit|unknown",
-  "kitContents": ["что входит в комплект: батарея, чехол, насадки, зарядка и т.д."],
-  "confidence": 0.0-1.0
-}`;
-}
-
-function buildQueryPrompt(structure: ProductStructure): string {
-  return `На основе структуры товара сгенерируй 5-8 коротких русских поисковых запросов для Wildberries.
-
-ТОВАР:
-Категория: ${structure.category}
-Тип: ${structure.productType}
-Подтип: ${structure.subtype ?? 'нет'}
-Назначение: ${structure.coreIntent}
-Обязательные признаки: ${structure.mustHaveFeatures.join(', ')}
-Важные признаки: ${structure.importantFeatures.join(', ')}
-Не аналоги: ${structure.negativeMatches.join(', ')}
-
-ПРАВИЛА:
-- Только русский язык. Никакого английского и китайского.
-- Каждый запрос 2-4 слова.
-- Типы запросов: базовый (категория), функциональный (с ключевой функцией), синоним, технический (с параметром).
-- НЕ включай: "новинка", "опт", "горячая продажа", "хит", "популярный".
-- НЕ переводи дословно с китайского.
-- requiredConcepts: группы синонимов, хотя бы одно слово из группы ОБЯЗАТЕЛЬНО в карточке.
-- excludeIfOnlyMatch: если карточка содержит ТОЛЬКО эти слова без requiredConcepts — исключить.
-
-Верни ТОЛЬКО JSON:
-{
-  "queries": [
-    {"query": "запрос", "purpose": "broad_market|functional_match|synonym|technical_match", "priority": 1-3}
-  ],
-  "requiredConcepts": [["синоним1", "синоним2"]],
-  "bonusConcepts": [["доп.признак1", "доп.признак2"]],
-  "excludeIfOnlyMatch": [["слово которое без основного товара = мусор"]]
-}`;
-}
+const MODELS = [
+  process.env.CONTENT_MODEL || 'google/gemini-2.5-flash-lite-preview-09-2025',
+  process.env.FALLBACK_MODEL || 'deepseek/deepseek-v4-flash',
+  process.env.SECONDARY_FALLBACK_MODEL || 'meta-llama/llama-4-scout',
+];
 
 function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
@@ -107,31 +38,64 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
 
-  const model = process.env.CONTENT_MODEL || 'google/gemini-2.5-flash-lite-preview-09-2025';
+  for (const model of MODELS) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2000,
+          temperature: 0.3,
+          messages: [
+            { role: 'system', content: systemMsg },
+            { role: 'user', content: prompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 2000,
-      temperature: 0.3,
-      messages: [
-        { role: 'system', content: systemMsg },
-        { role: 'user', content: prompt },
-      ],
-    }),
-    signal: AbortSignal.timeout(15_000),
-  });
+      if (!res.ok) {
+        console.warn(`[llm] ${model} HTTP ${res.status}`);
+        continue;
+      }
+      const data = await res.json() as any;
+      const raw = data.choices?.[0]?.message?.content ?? '';
+      const parsed = JSON.parse(cleanJson(raw));
+      if (parsed) return parsed;
+    } catch (e) {
+      console.warn(`[llm] ${model} failed:`, e instanceof Error ? e.message : e);
+    }
+  }
 
-  if (!res.ok) return null;
-  const data = await res.json() as any;
-  const raw = data.choices?.[0]?.message?.content ?? '';
-  return JSON.parse(cleanJson(raw));
+  // Fireworks fallback
+  const fwKey = process.env.FIREWORKS_API_KEY;
+  if (fwKey) {
+    try {
+      const res = await fetch('https://api.fireworks.ai/inference/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${fwKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'accounts/fireworks/models/deepseek-v4-flash',
+          max_tokens: 2000, temperature: 0.3,
+          messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.ok) {
+        const data = await res.json() as any;
+        return JSON.parse(cleanJson(data.choices?.[0]?.message?.content ?? ''));
+      }
+    } catch {}
+  }
+
+  return null;
 }
+
+// ─── Product Understanding ───────────────────────────────────────────────────
 
 export async function understandProduct(raw: {
   titleCn: string;
@@ -141,13 +105,48 @@ export async function understandProduct(raw: {
   description?: string;
   skus?: Array<{ name: string; price?: number }>;
 }): Promise<ProductStructure | null> {
+  let info = `Название (CN): ${raw.titleCn}`;
+  if (raw.titleEn) info += `\nНазвание (EN): ${raw.titleEn}`;
+  if (raw.categoryName) info += `\nКатегория 1688: ${raw.categoryName}`;
+  if (raw.attributes?.length) {
+    info += '\nХарактеристики:';
+    raw.attributes.slice(0, 20).forEach(a => { info += `\n  ${a.name}: ${a.value}`; });
+  }
+  if (raw.description) info += `\nОписание: ${raw.description.slice(0, 300)}`;
+  if (raw.skus?.length) {
+    info += '\nSKU:';
+    raw.skus.slice(0, 8).forEach(s => { info += `\n  ${s.name} — ${s.price ?? '?'} ¥`; });
+  }
+
+  const prompt = `Проанализируй товар. Верни ТОЛЬКО JSON:
+{
+  "productFamily": "категория (Автотовары, Одежда, Электроника, Дом, Аксессуары, ...)",
+  "productType": "полный тип (аккумуляторная минимойка, складной зонт автомат, ...)",
+  "coreNoun": "главное существительное товара (мойка, зонт, леггинсы, ...)",
+  "modifiers": ["ключевые прилагательные (аккумуляторная, портативная, складной, ...)"],
+  "subtype": "подтип или null",
+  "coreIntent": "зачем покупают",
+  "mustHaveFeatures": ["обязательные признаки аналога"],
+  "importantFeatures": ["важные но не обязательные"],
+  "optionalFeatures": ["второстепенные"],
+  "technicalSpecs": {"ключ": "значение"},
+  "negativeMatches": ["что НЕ является этим товаром но может попасть в выдачу"],
+  "kitType": "body_only|basic_kit|full_kit|unknown",
+  "kitContents": ["что входит в комплект"],
+  "confidence": 0.0-1.0
+}
+
+ДАННЫЕ:
+${info}`;
+
   try {
-    const prompt = buildUnderstandingPrompt(raw);
-    const result = await callLlm(prompt, SYSTEM_PROMPT);
-    if (!result?.productType) return null;
+    const result = await callLlm(prompt, 'Ты аналитик товаров из Китая. Отвечай ТОЛЬКО JSON.');
+    if (!result?.coreNoun) return null;
     return {
-      category: result.category ?? '',
+      productFamily: result.productFamily ?? '',
       productType: result.productType ?? '',
+      coreNoun: result.coreNoun ?? '',
+      modifiers: result.modifiers ?? [],
       subtype: result.subtype ?? null,
       coreIntent: result.coreIntent ?? '',
       mustHaveFeatures: result.mustHaveFeatures ?? [],
@@ -160,15 +159,39 @@ export async function understandProduct(raw: {
       confidence: result.confidence ?? 0.5,
     };
   } catch (e) {
-    console.error('[understand] Failed:', e instanceof Error ? e.message : e);
+    console.error('[understand]', e instanceof Error ? e.message : e);
     return null;
   }
 }
 
+// ─── Query Planner ───────────────────────────────────────────────────────────
+
 export async function planQueries(structure: ProductStructure): Promise<WbQueryPlan | null> {
+  const prompt = `Сгенерируй 5-8 коротких русских запросов для поиска на Wildberries.
+
+ТОВАР: ${structure.productType}
+Семейство: ${structure.productFamily}
+Главное слово: ${structure.coreNoun}
+Модификаторы: ${structure.modifiers.join(', ')}
+Назначение: ${structure.coreIntent}
+Обязательные: ${structure.mustHaveFeatures.join(', ')}
+Не аналоги: ${structure.negativeMatches.join(', ')}
+
+ПРАВИЛА:
+- Только русский, 2-4 слова на запрос.
+- Типы: базовый, функциональный, синоним, технический.
+- НЕ: "новинка", "опт", "хит", китайский, английский.
+
+JSON:
+{
+  "queries": [{"query": "...", "purpose": "broad|functional|synonym|technical", "priority": 1-3}],
+  "requiredConcepts": [["синоним1", "синоним2"]],
+  "bonusConcepts": [["доп.признак"]],
+  "excludeIfOnlyMatch": [["слово без основного товара = мусор"]]
+}`;
+
   try {
-    const prompt = buildQueryPrompt(structure);
-    const result = await callLlm(prompt, 'Ты генератор поисковых запросов для Wildberries. Отвечай ТОЛЬКО JSON.');
+    const result = await callLlm(prompt, 'Генератор запросов для WB. ТОЛЬКО JSON.');
     if (!result?.queries?.length) return null;
     return {
       queries: result.queries ?? [],
@@ -177,8 +200,35 @@ export async function planQueries(structure: ProductStructure): Promise<WbQueryP
       excludeIfOnlyMatch: result.excludeIfOnlyMatch ?? [],
     };
   } catch (e) {
-    console.error('[queryPlan] Failed:', e instanceof Error ? e.message : e);
+    console.error('[queryPlan]', e instanceof Error ? e.message : e);
     return null;
+  }
+}
+
+// ─── Query Refiner (второй проход) ──────────────────────────────────────────
+
+export async function refineQueries(
+  structure: ProductStructure,
+  topCardTitles: string[]
+): Promise<string[]> {
+  const prompt = `На основе товара и найденных карточек WB сгенерируй 3-4 ДОПОЛНИТЕЛЬНЫХ уточняющих запроса.
+
+ТОВАР: ${structure.productType} (${structure.coreNoun})
+Модификаторы: ${structure.modifiers.join(', ')}
+
+Найденные карточки WB (топ):
+${topCardTitles.slice(0, 10).map((t, i) => `${i + 1}. ${t}`).join('\n')}
+
+Сгенерируй синонимы, подтипы и уточнения которых НЕ было в первом поиске.
+Только русский, 2-4 слова. Верни JSON: {"queries": ["запрос1", "запрос2", "запрос3"]}`;
+
+  try {
+    const result = await callLlm(prompt, 'Генератор уточняющих запросов. ТОЛЬКО JSON.');
+    return validateQueries(
+      (result?.queries ?? []).map((q: string) => ({ query: q, purpose: 'refined', priority: 2 }))
+    );
+  } catch {
+    return [];
   }
 }
 
@@ -194,7 +244,7 @@ export function validateQueries(queries: Array<{ query: string; purpose: string;
     .filter(q => {
       if (q.length < 3 || q.length > 60) return false;
       if (HAS_CHINESE.test(q)) return false;
-      if (HAS_ENGLISH.test(q) && !/\d/.test(q)) return false; // allow "12v" but not "jump starter"
+      if (HAS_ENGLISH.test(q) && !/\d/.test(q)) return false;
       if (q.split(/\s+/).length > 5) return false;
       if (JUNK_WORDS.test(q)) return false;
       return true;

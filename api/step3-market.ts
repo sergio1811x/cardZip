@@ -9,8 +9,8 @@ import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
 import { getUserTariffs } from '../src/db/queries/userSettings';
 import { scoreSimilarity } from '../src/core/wbSimilarity';
+import { refineQueries } from '../src/providers/productUnderstanding';
 import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
-import type { ProductStructure, WbQueryPlan } from '../src/providers/productUnderstanding';
 
 export const config = { maxDuration: 60 };
 
@@ -104,7 +104,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    console.log(`[step3] Collected: ${allCards.length} unique cards from ${textResults.filter(Boolean).length} queries`);
+    console.log(`[step3] Pass 1: ${allCards.length} unique cards from ${textResults.filter(Boolean).length} queries`);
+
+    // ─── ВТОРОЙ ПРОХОД: Query Refiner ──────────────────────────────────
+    if (productStructure && allCards.length > 0) {
+      const topTitles = allCards.slice(0, 20).map(c => c.title);
+      const refinedQueries = await refineQueries(productStructure, topTitles).catch(() => [] as string[]);
+
+      if (refinedQueries.length > 0) {
+        console.log(`[step3] Pass 2: ${refinedQueries.length} refined queries: ${refinedQueries.join(' | ')}`);
+        const refinedResults = await Promise.all(
+          refinedQueries.map(q => searchWbByText(q))
+        );
+        for (const cards of refinedResults) {
+          if (!cards) continue;
+          for (const card of cards) {
+            if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
+          }
+        }
+        console.log(`[step3] After pass 2: ${allCards.length} total unique cards`);
+      }
+    }
 
     // Скоринг похожести через LLM-структуру
     const similarity = scoreSimilarity(allCards, productStructure, queryPlan, searchQueries);
@@ -132,6 +152,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       highCount: similarity.highCards.length,
       mediumCount: similarity.mediumCards.length,
       marketStatus: similarity.marketStatus,
+      leaders: similarity.leaders.slice(0, 10).map(c => ({
+        title: c.title, price: c.price, url: c.url,
+        rating: c.rating, feedbacks: c.feedbacks,
+        similarity: c.similarity,
+      })),
     };
 
     // Тарифы

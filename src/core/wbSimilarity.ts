@@ -4,6 +4,8 @@ import type { ProductStructure, WbQueryPlan } from '../providers/productUndersta
 export interface ScoredCard extends WbCard {
   similarity: number;
   level: 'high' | 'medium' | 'low';
+  matched: string[];
+  missing: string[];
 }
 
 export interface SimilarityResult {
@@ -12,6 +14,7 @@ export interface SimilarityResult {
   highCards: ScoredCard[];
   mediumCards: ScoredCard[];
   lowCards: ScoredCard[];
+  leaders: ScoredCard[];
   marketStatus: 'confirmed' | 'limited' | 'insufficient';
 }
 
@@ -28,67 +31,97 @@ function containsAnyGroup(text: string, groups: string[][]): boolean {
 }
 
 function isExcludedOnly(text: string, required: string[][], excluded: string[][]): boolean {
-  const hasRequired = containsAnyGroup(text, required);
-  if (hasRequired) return false;
+  if (containsAnyGroup(text, required)) return false;
   return containsAnyGroup(text, excluded);
+}
+
+interface ScoreResult {
+  score: number;
+  hasType: boolean;
+  hasFunction: boolean;
+  matched: string[];
+  missing: string[];
 }
 
 function scoreCardSmart(
   cardTitle: string,
   structure: ProductStructure,
   plan: WbQueryPlan | null
-): { score: number; hasType: boolean; hasFunction: boolean } {
+): ScoreResult {
   const text = normalize(cardTitle);
   let score = 0;
-  let hasType = false;
-  let hasFunction = false;
+  const matched: string[] = [];
+  const missing: string[] = [];
 
-  // Проверка на negative match (полное исключение)
+  // coreNoun обязателен — без него карточка сразу low
+  const hasCoreNoun = text.includes(structure.coreNoun.toLowerCase());
+  if (!hasCoreNoun) {
+    // Проверяем синонимы из requiredConcepts
+    const hasSynonym = plan ? containsAnyGroup(text, plan.requiredConcepts) : false;
+    if (!hasSynonym) {
+      missing.push(structure.coreNoun);
+      return { score: 0, hasType: false, hasFunction: false, matched, missing };
+    }
+  }
+
+  // Negative match
   for (const neg of structure.negativeMatches) {
-    const negNorm = neg.toLowerCase();
-    if (text.includes(negNorm) && !text.includes(structure.productType.toLowerCase())) {
-      return { score: 0, hasType: false, hasFunction: false };
+    if (text.includes(neg.toLowerCase()) && !hasCoreNoun) {
+      return { score: 0, hasType: false, hasFunction: false, matched, missing: [neg] };
     }
   }
 
   // excludeIfOnlyMatch
   if (plan && isExcludedOnly(text, plan.requiredConcepts, plan.excludeIfOnlyMatch)) {
-    return { score: 0, hasType: false, hasFunction: false };
+    return { score: 0, hasType: false, hasFunction: false, matched, missing };
   }
 
-  // Product type match (+40)
-  const typeWords = [structure.productType, ...(structure.subtype ? [structure.subtype] : [])];
-  if (containsAny(text, typeWords)) {
-    score += 40;
-    hasType = true;
-  } else if (plan && containsAnyGroup(text, plan.requiredConcepts)) {
-    score += 35;
-    hasType = true;
+  // Product type (+40)
+  matched.push(structure.coreNoun);
+  score += 40;
+  let hasType = true;
+
+  // Modifiers (+5 each, max 15)
+  for (const mod of structure.modifiers) {
+    if (text.includes(mod.toLowerCase())) {
+      matched.push(mod);
+      score += 5;
+    } else {
+      missing.push(mod);
+    }
+  }
+  score = Math.min(score, 55);
+
+  // Must-have features (+12 each, max 25)
+  let hasFunction = false;
+  for (const f of structure.mustHaveFeatures) {
+    if (text.includes(f.toLowerCase())) {
+      matched.push(f);
+      score += 12;
+      hasFunction = true;
+    } else {
+      missing.push(f);
+    }
   }
 
-  // Must-have features (+25 max)
-  const mustMatches = structure.mustHaveFeatures.filter(f => text.includes(f.toLowerCase())).length;
-  if (mustMatches > 0) {
-    score += Math.min(25, mustMatches * 12);
-    hasFunction = true;
+  // Important features (+8 each, max 20)
+  for (const f of structure.importantFeatures) {
+    if (text.includes(f.toLowerCase())) {
+      matched.push(f);
+      score += 8;
+    }
   }
 
-  // Important features (+20 max)
-  const impMatches = structure.importantFeatures.filter(f => text.includes(f.toLowerCase())).length;
-  score += Math.min(20, impMatches * 8);
-  if (impMatches > 0) hasFunction = true;
-
-  // Bonus concepts (+10 max)
+  // Bonus concepts (+5 each, max 10)
   if (plan) {
-    const bonusMatches = plan.bonusConcepts.filter(g => g.some(t => text.includes(t.toLowerCase()))).length;
-    score += Math.min(10, bonusMatches * 5);
+    for (const group of plan.bonusConcepts) {
+      if (group.some(t => text.includes(t.toLowerCase()))) {
+        score += 5;
+      }
+    }
   }
 
-  // Technical specs (+5 each, max 10)
-  const specMatches = Object.values(structure.technicalSpecs).filter(v => text.includes(v.toLowerCase())).length;
-  score += Math.min(10, specMatches * 5);
-
-  return { score: Math.min(100, score), hasType, hasFunction };
+  return { score: Math.min(100, score), hasType, hasFunction, matched, missing };
 }
 
 function getLevel(score: number, hasType: boolean, hasFunction: boolean): 'high' | 'medium' | 'low' {
@@ -103,7 +136,6 @@ export function scoreSimilarity(
   plan: WbQueryPlan | null,
   queries: string[]
 ): SimilarityResult {
-  // Дедупликация по URL
   const seen = new Set<string>();
   const unique = cards.filter(c => {
     if (seen.has(c.url)) return false;
@@ -112,31 +144,39 @@ export function scoreSimilarity(
   });
 
   if (!structure) {
-    // Fallback без LLM-структуры — все карточки medium
-    const scored: ScoredCard[] = unique.map(card => ({ ...card, similarity: 30, level: 'medium' as const }));
+    const scored: ScoredCard[] = unique.map(card => ({
+      ...card, similarity: 30, level: 'medium' as const, matched: [], missing: [],
+    }));
     return {
-      queries,
-      totalAnalyzed: unique.length,
-      highCards: [],
-      mediumCards: scored,
-      lowCards: [],
+      queries, totalAnalyzed: unique.length,
+      highCards: [], mediumCards: scored, lowCards: [],
+      leaders: scored.sort((a, b) => b.feedbacks - a.feedbacks).slice(0, 10),
       marketStatus: scored.length >= 15 ? 'limited' : 'insufficient',
     };
   }
 
   const scored: ScoredCard[] = unique.map(card => {
-    const { score, hasType, hasFunction } = scoreCardSmart(card.title, structure, plan);
-    return { ...card, similarity: score, level: getLevel(score, hasType, hasFunction) };
+    const r = scoreCardSmart(card.title, structure, plan);
+    return { ...card, similarity: r.score, level: getLevel(r.score, r.hasType, r.hasFunction), matched: r.matched, missing: r.missing };
   });
 
   const highCards = scored.filter(c => c.level === 'high').sort((a, b) => b.similarity - a.similarity);
   const mediumCards = scored.filter(c => c.level === 'medium').sort((a, b) => b.similarity - a.similarity);
   const lowCards = scored.filter(c => c.level === 'low');
 
+  // Лидеры рынка: топ по отзывам среди high+medium
+  const leaders = [...highCards, ...mediumCards]
+    .sort((a, b) => {
+      const scoreA = a.similarity * 0.6 + Math.log(Math.max(a.feedbacks, 1)) * 10 * 0.25 + a.rating * 20 * 0.15;
+      const scoreB = b.similarity * 0.6 + Math.log(Math.max(b.feedbacks, 1)) * 10 * 0.25 + b.rating * 20 * 0.15;
+      return scoreB - scoreA;
+    })
+    .slice(0, 10);
+
   let marketStatus: 'confirmed' | 'limited' | 'insufficient';
   if (highCards.length >= 15) marketStatus = 'confirmed';
   else if (highCards.length >= 5 || highCards.length + mediumCards.length >= 15) marketStatus = 'limited';
   else marketStatus = 'insufficient';
 
-  return { queries, totalAnalyzed: unique.length, highCards, mediumCards, lowCards, marketStatus };
+  return { queries, totalAnalyzed: unique.length, highCards, mediumCards, lowCards, leaders, marketStatus };
 }
