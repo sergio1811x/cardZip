@@ -12,7 +12,7 @@ import { zipBuilder } from '../src/core/zipBuilder';
 import { createStepProgress } from '../src/core/progress';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
-import { redis } from '../src/lib/redis';
+import { acquireStepLock } from '../src/lib/stepLock';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -26,14 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    // Атомарный lock — предотвращает дубли при параллельных вызовах
-    if (redis) {
-      const locked = await redis.set(`send_lock:${jobId}`, '1', { nx: true, ex: 120 });
-      if (locked === null) {
-        console.log(`[step4] Duplicate send blocked for job ${jobId}`);
-        return res.status(200).json({ ok: true, skip: true });
-      }
-    }
+    if (!await acquireStepLock('step4', jobId)) return res.status(200).json({ ok: true, skip: true });
 
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
     if (!job || job.status !== 'done' || job.sent_to_telegram) return res.status(200).json({ ok: true, skip: true });

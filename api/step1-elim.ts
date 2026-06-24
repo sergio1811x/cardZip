@@ -7,6 +7,7 @@ import { normalizeCnText } from '../src/core/cnNormalize';
 import { createStepProgress } from '../src/core/progress';
 import { findProductByKey } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
+import { acquireStepLock } from '../src/lib/stepLock';
 
 export const config = { maxDuration: 60 };
 
@@ -19,7 +20,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    // Получаем job
+    if (!await acquireStepLock('step1', jobId)) return res.status(200).json({ ok: true, skip: true });
+
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
     if (!job || job.status !== 'pending') return res.status(200).json({ ok: true, skip: true });
 

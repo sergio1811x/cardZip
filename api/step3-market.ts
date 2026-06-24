@@ -10,6 +10,7 @@ import { createStepProgress } from '../src/core/progress';
 import { getUserTariffs } from '../src/db/queries/userSettings';
 import { scoreSimilarity } from '../src/core/wbSimilarity';
 import { refineQueries } from '../src/providers/productUnderstanding';
+import { acquireStepLock } from '../src/lib/stepLock';
 import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -54,6 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
     if (!job || job.status !== 'ai_done') return res.status(200).json({ ok: true, skip: true });
+    if (!await acquireStepLock('step3', jobId)) return res.status(200).json({ ok: true, skip: true });
 
     await supabase.from('jobs').update({ status: 'market_processing' }).eq('id', jobId);
 

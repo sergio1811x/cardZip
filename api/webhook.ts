@@ -64,6 +64,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   console.log(`[webhook] urlMatch=${!!urlMatch} text="${urlText.slice(0, 50)}"`);
 
   if (urlMatch && msg?.from?.id && msg?.chat?.id) {
+    // Дедуп по message_id — предотвращает двойную обработку одного сообщения
+    if (redis && msg.message_id) {
+      const msgLock = await redis.set(`msg:${msg.chat.id}:${msg.message_id}`, '1', { nx: true, ex: 120 });
+      if (msgLock === null) {
+        console.log(`[webhook] Duplicate message ${msg.message_id} blocked`);
+        return res.status(200).json({ ok: true });
+      }
+    }
+
     try {
       const dbUser = await getOrCreateUser(msg.from.id);
 
