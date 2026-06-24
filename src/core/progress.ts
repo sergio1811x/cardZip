@@ -19,9 +19,9 @@ const STEPS = [
 
 function buildBar(current: number, total: number): string {
   const pct = Math.round((current / total) * 100);
-  const filled = Math.round((current / total) * 15);
-  const bar = '●'.repeat(filled) + '○'.repeat(15 - filled);
-  return `⏳  ${bar}`;
+  const filled = Math.round((current / total) * 10);
+  const bar = '🟩'.repeat(filled) + '⬜'.repeat(10 - filled);
+  return `⏳ ${bar} ${pct}%`;
 }
 
 export function createStepProgress(
