@@ -121,7 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let preRank = rankCandidates(allCards, structure, lexicon, pass1Queries);
 
     // ─── PASS 2: Adaptive (only if direct < 10) ─────────────────────────
-    if (preRank.buckets.directAnalogs.length < 10 && structure) {
+    if (preRank.buckets.directLocalAnalogs.length < 10 && structure) {
       const adaptiveQueries = await expandQueries(structure, mining.tokens, mining.bigrams).catch(() => [] as string[]);
       if (adaptiveQueries.length > 0) {
         console.log(`[step3] PASS 2: ${adaptiveQueries.length} adaptive queries`);
@@ -130,12 +130,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
         }
         preRank = rankCandidates(allCards, structure, lexicon, [...pass1Queries, ...adaptiveQueries]);
-        console.log(`[step3] After PASS 2: ${allCards.length} cards, direct=${preRank.buckets.directAnalogs.length}`);
+        console.log(`[step3] After PASS 2: ${allCards.length} cards, direct=${preRank.buckets.directLocalAnalogs.length}`);
       }
     }
 
     // ─── FALLBACK: coreObject search (only if direct < 3) ───────────────
-    if (preRank.buckets.directAnalogs.length < 3 && structure?.coreObject) {
+    if (preRank.buckets.directLocalAnalogs.length < 3 && structure?.coreObject) {
       const fbQueries = [
         structure.coreObject,
         structure.productType !== structure.coreObject ? structure.productType : null,
@@ -240,8 +240,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pass1Queries,
       pass1Cards: pass1Cards.length,
       mining: { tokens: mining.tokens.slice(0, 10), bigrams: mining.bigrams.slice(0, 5) },
-      pass2Used: preRank.buckets.directAnalogs.length < 10,
-      fallbackUsed: preRank.buckets.directAnalogs.length < 3,
+      pass2Used: preRank.buckets.directLocalAnalogs.length < 10,
+      fallbackUsed: preRank.buckets.directLocalAnalogs.length < 3,
       totalCards: allCards.length,
       finalBuckets: {
         directLocal: similarity.buckets.directLocalAnalogs.length,
