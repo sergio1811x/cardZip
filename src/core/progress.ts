@@ -33,7 +33,11 @@ export function createStepProgress(
   const phaseIndex: Record<string, number> = { elim: 0, ai: 3, market: 7, send: 11 };
   let tick = phaseIndex[startPhase] ?? 0;
 
+  let maxTick = tick;
+
   const edit = (idx: number) => {
+    if (idx < maxTick) return; // никогда не откатываемся
+    maxTick = idx;
     const step = STEPS[idx] ?? STEPS[STEPS.length - 1];
     const bar = buildBar(idx + 1, STEPS.length);
     const text = `${bar}\n\n${step.text}...`;
@@ -52,8 +56,8 @@ export function createStepProgress(
   return {
     step(phase: string) {
       const newIdx = phaseIndex[phase];
-      if (newIdx !== undefined && newIdx > tick) {
-        tick = newIdx;
+      if (newIdx !== undefined) {
+        tick = Math.max(tick, newIdx);
         edit(tick);
       }
     },

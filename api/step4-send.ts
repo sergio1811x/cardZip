@@ -13,6 +13,7 @@ import { createStepProgress } from '../src/core/progress';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
 import { acquireStepLock } from '../src/lib/stepLock';
+import { redis } from '../src/lib/redis';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -85,6 +86,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...keyboard });
 
     await markSent(job.id);
+    // Снимаем lock обработки
+    if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
 
     // Кэшируем для быстрого повторного доступа
     const cacheKey = buildCacheKey(product.productId, product.titleCn, product.mainImageUrl);

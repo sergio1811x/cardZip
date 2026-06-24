@@ -76,6 +76,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const dbUser = await getOrCreateUser(msg.from.id);
 
+      // Проверяем: есть ли активный job у этого юзера
+      if (redis) {
+        const processing = await redis.get(`processing:${dbUser.id}`);
+        if (processing) {
+          await bot.telegram.sendMessage(msg.chat.id, '⏳ Предыдущий анализ ещё выполняется. Дождитесь результата.');
+          return res.status(200).json({ ok: true });
+        }
+      }
+
       // Rate limit: 1 ссылка в 30с
       const linkRL = await checkLinkLimit(dbUser.id);
       if (!linkRL.allowed) {
@@ -112,6 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       const job = await createJob(dbUser.id, msg.chat.id, progressMsg.message_id, urlMatch[0]);
+      if (redis) await redis.set(`processing:${dbUser.id}`, job.id, { ex: 180 });
       await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
 
       const host = req.headers.host || 'card-zip.vercel.app';
