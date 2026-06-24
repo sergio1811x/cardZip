@@ -69,10 +69,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       '📎 <b>Материалы готовы</b>\n• SEO-карточка для WB\n• ТЗ байеру / карго\n• Исходные фото товара',
       { parse_mode: 'HTML' }
     );
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), 'seo_content.md'));
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), 'order_brief.md'));
+    // Уникальные имена файлов: slug из названия + productId
+    const slug = (product.titleRu ?? 'product').replace(/[^а-яёa-z0-9]/gi, '_').slice(0, 30).replace(/_+$/, '');
+    const pid = product.productId?.slice(-6) ?? '';
+    const prefix = `${slug}_${pid}`;
+
+    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), `seo_${prefix}.md`));
+    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), `brief_${prefix}.md`));
     if (zipBuffer) {
-      await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, 'images.zip'));
+      await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, `photos_${prefix}.zip`));
     }
 
     // ─── СООБЩЕНИЕ 3: Действия ───────────────────────────────────────────────
