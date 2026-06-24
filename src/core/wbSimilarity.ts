@@ -4,6 +4,7 @@ import type { ProductStructure, ProductLexicon, MatchLevel } from '../providers/
 export interface ScoredCard extends WbCard {
   similarity: number;
   matchLevel: MatchLevel;
+  eligibleForEconomy: boolean;
   matchedTerms: string[];
   missingTerms: string[];
   hardConflictsFound: string[];
@@ -12,8 +13,9 @@ export interface ScoredCard extends WbCard {
 }
 
 export interface MatchBuckets {
-  directAnalogs: ScoredCard[];
-  similarProducts: ScoredCard[];
+  directLocalAnalogs: ScoredCard[];
+  similarLocalProducts: ScoredCard[];
+  crossBorderAnalogs: ScoredCard[];
   categoryOnly: ScoredCard[];
   wrong: ScoredCard[];
 }
@@ -23,7 +25,7 @@ export interface SimilarityResult {
   totalAnalyzed: number;
   buckets: MatchBuckets;
   leaders: ScoredCard[];
-  confidence: 'high' | 'medium' | 'low' | 'category_only' | 'no_market';
+  confidence: 'high' | 'medium' | 'low' | 'crossborder_only' | 'category_only' | 'no_market';
 }
 
 function norm(text: string): string {
@@ -205,14 +207,13 @@ export function rankCandidates(
   });
 
   if (!structure || !lexicon) {
-    // No LLM data — all category_only
     const scored: ScoredCard[] = unique.map(c => ({
-      ...c, similarity: 20, matchLevel: 'category_only' as MatchLevel,
+      ...c, similarity: 20, matchLevel: 'category_only' as MatchLevel, eligibleForEconomy: false,
       matchedTerms: [], missingTerms: [], hardConflictsFound: [], softConflictsFound: [], queryHits: [],
     }));
     return {
       queries, totalAnalyzed: unique.length,
-      buckets: { directAnalogs: [], similarProducts: [], categoryOnly: scored, wrong: [] },
+      buckets: { directLocalAnalogs: [], similarLocalProducts: [], crossBorderAnalogs: [], categoryOnly: scored, wrong: [] },
       leaders: scored.sort((a, b) => b.feedbacks - a.feedbacks).slice(0, 10),
       confidence: scored.length >= 20 ? 'category_only' : 'no_market',
     };
@@ -221,10 +222,13 @@ export function rankCandidates(
   const scored: ScoredCard[] = unique.map(card => {
     const qType = queryTypeMap?.get(card.url);
     const r = scoreCandidate(card.title, structure, lexicon, qType ? { query: '', queryType: qType } : undefined);
+    const isLocal = card.marketType === 'local_wb_market';
+    const isCrossBorder = card.marketType === 'crossborder_market';
     return {
       ...card,
       similarity: r.score,
       matchLevel: r.matchLevel,
+      eligibleForEconomy: isLocal && (r.matchLevel === 'direct_analog'),
       matchedTerms: r.matched,
       missingTerms: r.missing,
       hardConflictsFound: r.hardFound,
@@ -233,15 +237,20 @@ export function rankCandidates(
     };
   });
 
+  // Разделяем на корзины: local vs crossborder
+  const directAll = scored.filter(c => c.matchLevel === 'direct_analog').sort((a, b) => b.similarity - a.similarity);
+  const similarAll = scored.filter(c => c.matchLevel === 'similar').sort((a, b) => b.similarity - a.similarity);
+
   const buckets: MatchBuckets = {
-    directAnalogs: scored.filter(c => c.matchLevel === 'direct_analog').sort((a, b) => b.similarity - a.similarity),
-    similarProducts: scored.filter(c => c.matchLevel === 'similar').sort((a, b) => b.similarity - a.similarity),
+    directLocalAnalogs: directAll.filter(c => c.marketType !== 'crossborder_market'),
+    similarLocalProducts: similarAll.filter(c => c.marketType !== 'crossborder_market'),
+    crossBorderAnalogs: [...directAll, ...similarAll].filter(c => c.marketType === 'crossborder_market'),
     categoryOnly: scored.filter(c => c.matchLevel === 'category_only'),
     wrong: scored.filter(c => c.matchLevel === 'wrong'),
   };
 
-  // Leaders: seller-dedup by price+feedbacks proxy
-  const leaderCandidates = [...buckets.directAnalogs, ...buckets.similarProducts];
+  // Leaders: only local, seller-dedup
+  const leaderCandidates = [...buckets.directLocalAnalogs, ...buckets.similarLocalProducts];
   const leaders: ScoredCard[] = [];
   const seenSellers = new Set<number>();
   for (const card of leaderCandidates.sort((a, b) => {
@@ -256,14 +265,15 @@ export function rankCandidates(
     if (leaders.length >= 10) break;
   }
 
-  // Confidence
-  const dc = buckets.directAnalogs.length;
-  const sc = buckets.similarProducts.length;
+  // Confidence: only by directLocalAnalogs
+  const dc = buckets.directLocalAnalogs.length;
+  const cb = buckets.crossBorderAnalogs.length;
   const cc = buckets.categoryOnly.length;
   let confidence: SimilarityResult['confidence'];
   if (dc >= 10) confidence = 'high';
   else if (dc >= 3) confidence = 'medium';
   else if (dc >= 1) confidence = 'low';
+  else if (cb > 0) confidence = 'crossborder_only' as any;
   else if (cc >= 20) confidence = 'category_only';
   else confidence = 'no_market';
 

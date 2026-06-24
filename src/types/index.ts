@@ -76,6 +76,7 @@ export interface ProductWithContent extends RawProduct1688 {
     totalAnalyzed: number;
     directCount?: number;
     similarCount?: number;
+    crossBorderCount?: number;
     categoryCount?: number;
     highCount?: number;
     mediumCount?: number;
@@ -103,12 +104,22 @@ export interface ProductImporter {
 
 export type WbDataQuality = 'reliable' | 'limited' | 'unreliable' | 'unavailable';
 
+export type MarketType = 'local_wb_market' | 'crossborder_market' | 'unknown_market';
+
 export interface WbCard {
   title: string;
   price: number;
   url: string;
   rating: number;
   feedbacks: number;
+  wh?: number | null;
+  time1?: number | null;
+  time2?: number | null;
+  dist?: number | null;
+  seller?: string;
+  supplierId?: number | null;
+  brand?: string;
+  marketType?: MarketType;
 }
 
 export interface WbFilterKeywords {

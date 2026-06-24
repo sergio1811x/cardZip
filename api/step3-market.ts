@@ -26,11 +26,23 @@ async function searchWb(query: string): Promise<WbCard[] | null> {
     if (!res.ok) return null;
     const data = await res.json() as any;
     if (!data.success || !data.products?.length) return null;
-    return data.products.map((p: any) => ({
-      title: p.name || '', price: p.price,
-      url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
-      rating: p.rating || 0, feedbacks: p.feedbacks || 0,
-    })).filter((c: WbCard) => c.price > 0);
+    return data.products.map((p: any) => {
+      const time1 = p.time1 ?? null;
+      const brand = (p.brand || '').toLowerCase();
+      const isCrossBorder = time1 !== null && time1 > 5 || /aliexpress|ali express/i.test(brand);
+      const marketType = isCrossBorder ? 'crossborder_market' as const
+        : time1 !== null && time1 <= 5 ? 'local_wb_market' as const
+        : 'unknown_market' as const;
+
+      return {
+        title: p.name || '', price: p.price,
+        url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
+        rating: p.rating || 0, feedbacks: p.feedbacks || 0,
+        wh: p.wh, time1, time2: p.time2, dist: p.dist,
+        seller: p.seller || '', supplierId: p.supplierId,
+        brand: p.brand || '', marketType,
+      };
+    }).filter((c: WbCard) => c.price > 0);
   } catch { return null; }
 }
 
@@ -122,10 +134,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const similarity = rankCandidates(allCards, structure, lexicon, pass1Queries);
 
     // ─── LLM Judge for top-30 (only if structure available) ──────────────
-    if (structure && similarity.buckets.directAnalogs.length + similarity.buckets.similarProducts.length > 0) {
+    if (structure && similarity.buckets.directLocalAnalogs.length + similarity.buckets.similarLocalProducts.length > 0) {
       const topCandidates = [
-        ...similarity.buckets.directAnalogs.slice(0, 20),
-        ...similarity.buckets.similarProducts.slice(0, 10),
+        ...similarity.buckets.directLocalAnalogs.slice(0, 20),
+        ...similarity.buckets.similarLocalProducts.slice(0, 10),
       ];
 
       // Judge only borderline candidates (skip obviously high scores)
@@ -143,18 +155,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             card.missingTerms = judgment.missingAttributes;
           }
         }
-        // Re-sort buckets after judge
-        const all = [...similarity.buckets.directAnalogs, ...similarity.buckets.similarProducts, ...similarity.buckets.categoryOnly];
-        similarity.buckets.directAnalogs = all.filter(c => c.matchLevel === 'direct_analog').sort((a, b) => b.similarity - a.similarity);
-        similarity.buckets.similarProducts = all.filter(c => c.matchLevel === 'similar').sort((a, b) => b.similarity - a.similarity);
+        // Re-sort local buckets after judge
+        const all = [...similarity.buckets.directLocalAnalogs, ...similarity.buckets.similarLocalProducts, ...similarity.buckets.categoryOnly];
+        similarity.buckets.directLocalAnalogs = all.filter(c => c.matchLevel === 'direct_analog' && c.marketType !== 'crossborder_market').sort((a, b) => b.similarity - a.similarity);
+        similarity.buckets.similarLocalProducts = all.filter(c => c.matchLevel === 'similar' && c.marketType !== 'crossborder_market').sort((a, b) => b.similarity - a.similarity);
         similarity.buckets.categoryOnly = all.filter(c => c.matchLevel === 'category_only');
       }
     }
 
-    console.log(`[step3] Final: direct=${similarity.buckets.directAnalogs.length} similar=${similarity.buckets.similarProducts.length} category=${similarity.buckets.categoryOnly.length} confidence=${similarity.confidence}`);
+    console.log(`[step3] Final: directLocal=${similarity.buckets.directLocalAnalogs.length} similarLocal=${similarity.buckets.similarLocalProducts.length} crossBorder=${similarity.buckets.crossBorderAnalogs.length} category=${similarity.buckets.categoryOnly.length} confidence=${similarity.confidence}`);
 
-    // ─── Build WbData for economics (only from direct analogs) ──────────
-    const directCards = similarity.buckets.directAnalogs;
+    // ─── Build WbData for economics (only from LOCAL direct analogs) ────
+    const directCards = similarity.buckets.directLocalAnalogs;
     const wbData: WbSearchResult | null = directCards.length > 0 ? {
       avgPrice: Math.round(directCards.reduce((s, c) => s + c.price, 0) / directCards.length),
       minPrice: Math.min(...directCards.map(c => c.price)),
@@ -192,8 +204,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const similarityData = {
       queries: pass1Queries.filter(q => /[а-яё]/i.test(q)).slice(0, 5),
       totalAnalyzed: allCards.length,
-      directCount: similarity.buckets.directAnalogs.length,
-      similarCount: similarity.buckets.similarProducts.length,
+      directCount: similarity.buckets.directLocalAnalogs.length,
+      similarCount: similarity.buckets.similarLocalProducts.length,
+      crossBorderCount: similarity.buckets.crossBorderAnalogs.length,
       categoryCount: similarity.buckets.categoryOnly.length,
       confidence: similarity.confidence,
       leaders: similarity.leaders.slice(0, 10).map(c => ({
@@ -212,8 +225,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       fallbackUsed: preRank.buckets.directAnalogs.length < 3,
       totalCards: allCards.length,
       finalBuckets: {
-        direct: similarity.buckets.directAnalogs.length,
-        similar: similarity.buckets.similarProducts.length,
+        directLocal: similarity.buckets.directLocalAnalogs.length,
+        similarLocal: similarity.buckets.similarLocalProducts.length,
+        crossBorder: similarity.buckets.crossBorderAnalogs.length,
         category: similarity.buckets.categoryOnly.length,
         wrong: similarity.buckets.wrong.length,
       },

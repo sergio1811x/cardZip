@@ -88,13 +88,18 @@ export function buildMessage1(product: ProductWithContent): string {
   if (sim && sim.totalAnalyzed > 0) {
     const confMap: Record<string, [string, string]> = {
       high: ['🟢', 'Высокая'], medium: ['🟡', 'Средняя'], low: ['🟠', 'Низкая'],
+      crossborder_only: ['🟤', 'Только cross-border'],
       category_only: ['🔵', 'Только категория'], no_market: ['🔴', 'Не подтверждён'],
     };
     const [confIcon, confLabel] = confMap[sim.confidence ?? ''] ?? ['🔴', 'Не подтверждён'];
     L.push(`  ${confIcon} Уверенность: <b>${confLabel}</b>`);
-    L.push(`  Прямые аналоги: ${sim.directCount ?? sim.highCount ?? 0}`);
-    L.push(`  Похожие товары: ${sim.similarCount ?? sim.mediumCount ?? 0}`);
+    L.push(`  Прямые локальные аналоги: ${sim.directCount ?? sim.highCount ?? 0}`);
+    L.push(`  Похожие локальные: ${sim.similarCount ?? sim.mediumCount ?? 0}`);
+    if (sim.crossBorderCount) L.push(`  Cross-border: ${sim.crossBorderCount}`);
     if (sim.categoryCount) L.push(`  Широкая категория: ${sim.categoryCount}`);
+    if (sim.crossBorderCount && !sim.directCount) {
+      L.push('  <i>⚠️ Найдены аналоги с доставкой из Китая. Они не использованы в экономике.</i>');
+    }
   }
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {
