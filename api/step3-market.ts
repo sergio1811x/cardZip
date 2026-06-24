@@ -63,12 +63,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── МУЛЬТИЗАПРОСНЫЙ ПОИСК: 3-5 text queries через VPS ──────────────
+    // ─── МУЛЬТИЗАПРОСНЫЙ ПОИСК: оригинальное название + LLM queries ─────
+    // Приоритет: оригинальное название товара (даёт лучшие результаты на WB)
+    const rawTitle = (raw.titleEn || raw.titleCn || '').replace(/[\[\]【】「」]/g, '').trim();
+    const shortTitle = rawTitle.length > 60 ? rawTitle.slice(0, 60) : rawTitle;
+
     const searchQueries: string[] = [
-      ...(seoContent?.searchQueries ?? []),
-      ...(seoContent?.keywords?.slice(0, 2) ?? []),
-      seoContent?.titleRu,
-    ].filter((q): q is string => !!q && q.length > 2).slice(0, 5);
+      shortTitle,                                          // оригинальное название — главный запрос
+      seoContent?.titleRu,                                // LLM перевод
+      ...(seoContent?.searchQueries ?? []),                // LLM поисковые запросы
+      ...(seoContent?.keywords?.slice(0, 2) ?? []),        // ключевые слова
+    ].filter((q): q is string => !!q && q.length > 2)
+     .filter((q, i, arr) => arr.indexOf(q) === i)          // дедупликация
+     .slice(0, 6);
 
     console.log(`[step3] Multi-search: ${searchQueries.length} queries via VPS`);
 
