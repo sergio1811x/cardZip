@@ -1,33 +1,48 @@
 import type { Context } from 'telegraf';
 import * as subscriptionService from './subscriptionService';
 import { track } from './analyticsService';
-import type { Plan } from '../types';
 
-// Telegram Stars: 1 звезда ≈ 1.8 ₽
-const PACKAGES: Record<string, { stars: number; label: string; plan: Plan; description: string }> = {
+interface PackageConfig {
+  stars: number;
+  label: string;
+  credits: number;
+  unlimitedDays: number;
+  unlimitedLimit: number;
+  description: string;
+}
+
+const PACKAGES: Record<string, PackageConfig> = {
   test: {
     stars: 1,
-    label: 'Тест 3 разбора',
-    plan: 'pack10' as Plan,
-    description: 'Тестовый пакет: 3 разбора за 1 звезду.',
+    label: '1 разбор (тест)',
+    credits: 1,
+    unlimitedDays: 0,
+    unlimitedLimit: 0,
+    description: 'Тестовый разбор за 1 звезду.',
   },
   pack10: {
-    stars: 165,
+    stars: 160,
     label: '10 разборов',
-    plan: 'pack10',
-    description: '10 полных разборов товаров из Китая. Кредиты не сгорают.',
+    credits: 10,
+    unlimitedDays: 0,
+    unlimitedLimit: 0,
+    description: '10 полных разборов товаров. Кредиты не сгорают.',
   },
   pack30: {
-    stars: 335,
-    label: '30 разборов ⭐',
-    plan: 'pack30',
-    description: '30 полных разборов — выгоднее! ~10 ⭐ за разбор. Кредиты не сгорают.',
+    stars: 330,
+    label: '30 разборов',
+    credits: 30,
+    unlimitedDays: 0,
+    unlimitedLimit: 0,
+    description: '30 разборов — выгоднее! ~11 ⭐ за разбор. Кредиты не сгорают.',
   },
   week: {
     stars: 550,
-    label: 'Неделя закупки',
-    plan: 'week',
-    description: '7 дней активного поиска (до 50 разборов). Для байеров в фазе закупки.',
+    label: 'Неделя (до 100)',
+    credits: 0,
+    unlimitedDays: 7,
+    unlimitedLimit: 100,
+    description: '7 дней безлимитного поиска (до 100 разборов).',
   },
 };
 
@@ -38,7 +53,7 @@ export async function sendInvoice(ctx: Context, packageId: string): Promise<void
   await (ctx as any).replyWithInvoice({
     title: `CardZip — ${pkg.label}`,
     description: pkg.description,
-    payload: JSON.stringify({ plan: pkg.plan, credits: pkg.stars === 1 ? 3 : undefined, userId: (ctx as any).dbUserId }),
+    payload: JSON.stringify({ packageId }),
     provider_token: '',
     currency: 'XTR',
     prices: [{ label: pkg.label, amount: pkg.stars }],
@@ -52,25 +67,27 @@ export async function handleSuccessfulPayment(
   const payment = (ctx.message as any)?.successful_payment;
   if (!payment) return;
 
-  let plan: Plan = 'pack10';
-  let creditsOverride: number | undefined;
+  let packageId = 'pack10';
   try {
-    const payloadData = JSON.parse(payment.invoice_payload);
-    if (payloadData.plan) plan = payloadData.plan as Plan;
-    if (payloadData.credits) creditsOverride = payloadData.credits;
+    const payload = JSON.parse(payment.invoice_payload);
+    if (payload.packageId) packageId = payload.packageId;
   } catch {}
 
-  await subscriptionService.activate(userId, plan, creditsOverride);
-  track(userId, 'paid', { plan, stars: payment.total_amount, currency: payment.currency });
+  const pkg = PACKAGES[packageId];
+  if (!pkg) return;
 
-  const labels: Record<string, string> = {
-    pack10: '10 разборов',
-    pack30: '30 разборов',
-    week: 'Неделя активной закупки (до 50 разборов)',
-  };
+  // Активируем
+  if (pkg.unlimitedDays > 0) {
+    await subscriptionService.activateUnlimited(userId, pkg.unlimitedDays, pkg.unlimitedLimit);
+  } else {
+    await subscriptionService.addCredits(userId, pkg.credits);
+  }
 
-  await ctx.reply(
-    `✅ Оплата прошла! Активировано: <b>${labels[plan] ?? plan}</b>.\n\nОтправляйте ссылку на товар 👇`,
-    { parse_mode: 'HTML' }
-  );
+  track(userId, 'paid', { packageId, stars: payment.total_amount });
+
+  const successMsg = pkg.unlimitedDays > 0
+    ? `✅ Активировано: <b>${pkg.label}</b> (до ${pkg.unlimitedLimit} разборов за ${pkg.unlimitedDays} дней)`
+    : `✅ Добавлено: <b>${pkg.credits} разборов</b>. Кредиты не сгорают.`;
+
+  await ctx.reply(`${successMsg}\n\nОтправляйте ссылку на товар 👇`, { parse_mode: 'HTML' });
 }

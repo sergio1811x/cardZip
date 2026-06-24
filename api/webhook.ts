@@ -92,9 +92,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           {
             parse_mode: 'HTML',
             ...Markup.inlineKeyboard([
-              [Markup.button.callback('10 разборов · 165 ⭐', 'pay_pack10')],
-              [Markup.button.callback('30 разборов · 335 ⭐ Выгоднее', 'pay_pack30')],
-              [Markup.button.callback('7 дней безлимит · 550 ⭐', 'pay_week')],
+              [Markup.button.callback('10 разборов · 160 ⭐', 'pay_pack10')],
+              [Markup.button.callback('30 разборов · 330 ⭐ Выгоднее', 'pay_pack30')],
+              [Markup.button.callback('Неделя (100) · 550 ⭐', 'pay_week')],
             ]),
           }
         );
