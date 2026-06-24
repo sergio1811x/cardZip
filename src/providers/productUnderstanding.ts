@@ -27,11 +27,11 @@ export interface WbQueryPlan {
   excludeIfOnlyMatch: string[][];
 }
 
-// Поиск и структура: Gemini → Llama → DeepSeek
+// Поиск и структура: Gemini → DeepSeek → Llama
 const SEARCH_MODELS = [
   'google/gemini-2.5-flash-lite-preview-09-2025',
-  'meta-llama/llama-4-scout',
   'deepseek/deepseek-v4-flash',
+  'meta-llama/llama-4-scout',
 ];
 
 function cleanJson(raw: string): string {
