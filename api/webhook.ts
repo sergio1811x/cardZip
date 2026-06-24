@@ -123,7 +123,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const progressMsg = await bot.telegram.sendMessage(msg.chat.id,
-        '🔄 Загружаем данные с площадки...', { parse_mode: 'HTML' }
+        '⏳ 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0%\n\n📡 Запрос принят, начинаю анализ...', { parse_mode: 'HTML' }
       );
 
       const job = await createJob(dbUser.id, msg.chat.id, progressMsg.message_id, urlMatch[0]);
