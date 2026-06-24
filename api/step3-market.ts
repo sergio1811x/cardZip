@@ -19,43 +19,61 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const WB_PARSER_URL = process.env.WB_PARSER_URL || 'http://50fc4ca33bd1.vps.myjino.ru';
 const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || 'cardzip-wb-2024';
 
-async function searchWb(query: string): Promise<WbCard[] | null> {
-  try {
-    const params = new URLSearchParams({ secret: WB_PARSER_SECRET, query, limit: '100' });
-    const res = await fetch(`${WB_PARSER_URL}/search-by-text?${params}`, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return null;
-    const data = await res.json() as any;
-    if (!data.success || !data.products?.length) return null;
-    return data.products.map((p: any) => {
-      const time1 = p.time1 ?? null;
-      const brand = (p.brand || '').toLowerCase();
-      const isCrossBorder = time1 !== null && time1 > 5 || /aliexpress|ali express/i.test(brand);
-      const marketType = isCrossBorder ? 'crossborder_market' as const
-        : time1 !== null && time1 <= 5 ? 'local_wb_market' as const
-        : 'unknown_market' as const;
-
-      return {
-        title: p.name || '', price: p.price,
-        url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
-        rating: p.rating || 0, feedbacks: p.feedbacks || 0,
-        wh: p.wh, time1, time2: p.time2, dist: p.dist,
-        seller: p.seller || '', supplierId: p.supplierId,
-        brand: p.brand || '', marketType,
-      };
-    }).filter((c: WbCard) => c.price > 0);
-  } catch { return null; }
+function parseCards(products: any[]): WbCard[] {
+  return products.map((p: any) => {
+    const time1 = p.time1 ?? null;
+    const brand = (p.brand || '').toLowerCase();
+    const isCrossBorder = (time1 !== null && time1 > 5) || /aliexpress|ali express/i.test(brand);
+    const marketType = isCrossBorder ? 'crossborder_market' as const
+      : time1 !== null && time1 <= 5 ? 'local_wb_market' as const
+      : 'unknown_market' as const;
+    return {
+      title: p.name || '', price: p.price,
+      url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
+      rating: p.rating || 0, feedbacks: p.feedbacks || 0,
+      wh: p.wh, time1, time2: p.time2, dist: p.dist,
+      seller: p.seller || '', supplierId: p.supplierId,
+      brand: p.brand || '', marketType,
+    };
+  }).filter((c: WbCard) => c.price > 0);
 }
 
-async function multiSearch(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string> }> {
-  const results = await Promise.all(queries.map(q => searchWb(q)));
+// Batch search через VPS — последовательный с throttling на стороне VPS
+async function batchSearch(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string> }> {
   const seenUrls = new Set<string>();
   const cards: WbCard[] = [];
-  for (const batch of results) {
-    if (!batch) continue;
-    for (const card of batch) {
-      if (!seenUrls.has(card.url)) { seenUrls.add(card.url); cards.push(card); }
+
+  try {
+    const res = await fetch(`${WB_PARSER_URL}/search-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret: WB_PARSER_SECRET, queries, limit: 100 }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (!res.ok) return { cards, seenUrls };
+    const data = await res.json() as any;
+
+    for (const result of data.results ?? []) {
+      for (const card of parseCards(result.products ?? [])) {
+        if (!seenUrls.has(card.url)) { seenUrls.add(card.url); cards.push(card); }
+      }
+    }
+  } catch (e: any) {
+    console.warn('[step3] Batch search failed:', e.message);
+    // Fallback: sequential single queries
+    for (const query of queries.slice(0, 5)) {
+      try {
+        const params = new URLSearchParams({ secret: WB_PARSER_SECRET, query, limit: '100' });
+        const res = await fetch(`${WB_PARSER_URL}/search-by-text?${params}`, { signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) continue;
+        const data = await res.json() as any;
+        for (const card of parseCards(data.products ?? [])) {
+          if (!seenUrls.has(card.url)) { seenUrls.add(card.url); cards.push(card); }
+        }
+      } catch { continue; }
     }
   }
+
   return { cards, seenUrls };
 }
 
@@ -91,7 +109,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log(`[step3] PASS 1: ${pass1Queries.length} queries`);
 
     // ─── PASS 1 ──────────────────────────────────────────────────────────
-    const { cards: pass1Cards, seenUrls } = await multiSearch(pass1Queries);
+    const { cards: pass1Cards, seenUrls } = await batchSearch(pass1Queries);
     console.log(`[step3] PASS 1 result: ${pass1Cards.length} unique cards`);
 
     // ─── WB Result Mining ────────────────────────────────────────────────
@@ -106,7 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const adaptiveQueries = await expandQueries(structure, mining.tokens, mining.bigrams).catch(() => [] as string[]);
       if (adaptiveQueries.length > 0) {
         console.log(`[step3] PASS 2: ${adaptiveQueries.length} adaptive queries`);
-        const { cards: pass2Cards } = await multiSearch(adaptiveQueries);
+        const { cards: pass2Cards } = await batchSearch(adaptiveQueries);
         for (const card of pass2Cards) {
           if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
         }
@@ -124,7 +142,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ].filter((q): q is string => !!q && q.length > 2).slice(0, 4);
 
       console.log(`[step3] FALLBACK: ${fbQueries.join(' | ')}`);
-      const { cards: fbCards } = await multiSearch(fbQueries);
+      const { cards: fbCards } = await batchSearch(fbQueries);
       for (const card of fbCards) {
         if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
       }
@@ -268,6 +286,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (e: any) {
     console.error('[step3]', e.message);
     await supabase.from('jobs').update({ status: 'failed', error: e.message, finished_at: new Date().toISOString() }).eq('id', jobId);
+
+    // Сообщаем пользователю об ошибке
+    try {
+      const { data: failedJob } = await supabase.from('jobs').select('tg_chat_id, tg_message_id, user_id').eq('id', jobId).single();
+      if (failedJob) {
+        if (failedJob.tg_message_id) {
+          await bot.telegram.editMessageText(
+            failedJob.tg_chat_id, failedJob.tg_message_id, undefined,
+            '❌ Не удалось завершить анализ. Попробуйте ещё раз через минуту.'
+          ).catch(() => {});
+        }
+        // Снимаем processing lock
+        const { redis: r } = require('../src/lib/redis');
+        if (r) await r.del(`processing:${failedJob.user_id}`).catch(() => {});
+      }
+    } catch {}
+
     res.status(200).json({ ok: false });
   }
 }
