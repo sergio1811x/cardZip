@@ -67,10 +67,18 @@ export async function handleTariffsMenu(ctx: Context) {
     [Markup.button.callback('🔄 Сбросить на авто', 'reset_tariffs')],
   ];
 
-  await ctx.reply(lines.join('\n'), {
-    parse_mode: 'HTML',
-    ...Markup.inlineKeyboard(buttons),
-  });
+  // Если вызвано из callback — редактируем текущее сообщение, не создаём новое
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(lines.join('\n'), {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard(buttons),
+    }).catch(() => {});
+  } else {
+    await ctx.reply(lines.join('\n'), {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard(buttons),
+    });
+  }
 }
 
 export async function handleEditTariff(ctx: Context) {
@@ -92,10 +100,18 @@ export async function handleEditTariff(ctx: Context) {
     await redis.set(pendingKey(chatId), JSON.stringify({ field: fieldKey, userId }), { ex: 120 });
   }
 
-  await ctx.reply(
-    `📝 <b>${field.label}</b>\n${field.hint}\n\nВведите новое значение (${field.unit}):`,
-    { parse_mode: 'HTML' }
-  );
+  // Редактируем текущее сообщение с тарифами → prompt ввода
+  if (ctx.callbackQuery) {
+    await ctx.editMessageText(
+      `📝 <b>${field.label}</b>\n${field.hint}\n\nВведите новое значение (${field.unit}):`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+  } else {
+    await ctx.reply(
+      `📝 <b>${field.label}</b>\n${field.hint}\n\nВведите новое значение (${field.unit}):`,
+      { parse_mode: 'HTML' }
+    );
+  }
 }
 
 export async function getPendingEdit(chatId: number): Promise<{ field: keyof UserTariffs; userId: string } | null> {
@@ -144,5 +160,11 @@ export async function handleResetTariffs(ctx: Context) {
   if (!userId) return;
 
   await saveUserTariffs(userId, {});
-  await ctx.reply('🔄 Все тарифы сброшены на автоматические.');
+
+  if (ctx.callbackQuery) {
+    // Показываем обновлённое меню тарифов вместо отдельного сообщения
+    await handleTariffsMenu(ctx);
+  } else {
+    await ctx.reply('🔄 Все тарифы сброшены на автоматические.');
+  }
 }
