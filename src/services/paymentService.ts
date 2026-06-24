@@ -26,7 +26,7 @@ const PACKAGES: Record<string, PackageConfig> = {
     credits: 10,
     unlimitedDays: 0,
     unlimitedLimit: 0,
-    description: '10 проверок товаров из Китая: WB-аналоги, экономика, ТЗ байеру. Кредиты не сгорают.',
+    description: '10 анализов товаров из Китая. Аналоги на WB, экономика и ТЗ байеру. Кредиты не сгорают.',
   },
   pack30: {
     stars: 300,
@@ -34,15 +34,15 @@ const PACKAGES: Record<string, PackageConfig> = {
     credits: 30,
     unlimitedDays: 0,
     unlimitedLimit: 0,
-    description: '30 проверок товаров из Китая: WB-аналоги, экономика, ТЗ байеру. Кредиты не сгорают.',
+    description: '30 анализов товаров из Китая. Аналоги на WB, экономика и ТЗ байеру. Кредиты не сгорают.',
   },
   week: {
     stars: 500,
-    label: '100 анализов на 7 дней',
+    label: '7 дней Pro',
     credits: 0,
     unlimitedDays: 7,
     unlimitedLimit: 100,
-    description: 'До 100 проверок товаров из Китая за неделю. Для активного поиска товаров и теста ниш.',
+    description: 'Доступ на 7 дней: до 100 анализов товаров из Китая. Аналоги на WB, экономика и ТЗ байеру.',
   },
 };
 

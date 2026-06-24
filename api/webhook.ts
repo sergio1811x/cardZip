@@ -109,7 +109,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             ...Markup.inlineKeyboard([
               [Markup.button.callback('10 анализов · 150 ⭐', 'pay_pack10')],
               [Markup.button.callback('30 анализов · 300 ⭐', 'pay_pack30')],
-              [Markup.button.callback('100 на 7 дней · 500 ⭐', 'pay_week')],
+              [Markup.button.callback('7 дней Pro · 500 ⭐', 'pay_week')],
             ]),
           }
         );

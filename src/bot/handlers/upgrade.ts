@@ -22,7 +22,7 @@ export async function handleUpgrade(ctx: Context): Promise<void> {
         [Markup.button.callback('🧪 Тест · 1 ⭐', 'pay_test')],
         [Markup.button.callback('10 анализов · 150 ⭐', 'pay_pack10')],
         [Markup.button.callback('30 анализов · 300 ⭐', 'pay_pack30')],
-        [Markup.button.callback('100 на 7 дней · 500 ⭐', 'pay_week')],
+        [Markup.button.callback('7 дней Pro · 500 ⭐', 'pay_week')],
       ]),
     }
   );
