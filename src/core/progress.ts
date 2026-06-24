@@ -1,62 +1,62 @@
 import { Telegraf } from 'telegraf';
 
-const STEP_MESSAGES: Record<string, string[]> = {
-  elim: [
-    '🔄 Загружаем данные с площадки...',
-    '🔄 Читаем карточку товара...',
-    '🔄 Извлекаем характеристики...',
-    '🔄 Парсим цены и фотографии...',
-    '🔄 Обрабатываем данные поставщика...',
-    '🔄 Определяем вес и размеры...',
-    '🔄 Проверяем атрибуты товара...',
-    '🔄 Нормализуем китайский текст...',
-    '🔄 Почти загрузили...',
-  ],
-  ai: [
-    '🔄 Генерируем SEO-контент...',
-    '🔄 Подбираем ключевые слова для WB...',
-    '🔄 Составляем описание карточки...',
-    '🔄 Формируем буллеты для инфографики...',
-    '🔄 Адаптируем под российский рынок...',
-    '🔄 Готовим вопросы поставщику...',
-    '🔄 Переводим характеристики...',
-    '🔄 Проверяем название на бренды...',
-  ],
-  market: [
-    '🔄 Ищем похожие товары на Wildberries...',
-    '🔄 Загружаем фото для поиска на WB...',
-    '🔄 Анализируем цены конкурентов...',
-    '🔄 Фильтруем нерелевантные товары...',
-    '🔄 Оцениваем качество выборки...',
-    '🔄 Рассчитываем юнит-экономику...',
-    '🔄 Проверяем риски товара...',
-    '🔄 Считаем тестовую закупку...',
-    '🔄 Формируем вердикт...',
-  ],
-  send: [
-    '🔄 Собираем архив с фотографиями...',
-    '🔄 Скачиваем изображения товара...',
-    '🔄 Формируем SEO-файл...',
-    '🔄 Упаковываем материалы...',
-    '🔄 Почти готово, отправляем...',
-  ],
-};
+const STEPS = [
+  { text: 'Загружаем данные с площадки', phase: 'elim' },
+  { text: 'Читаем карточку товара', phase: 'elim' },
+  { text: 'Извлекаем характеристики', phase: 'elim' },
+  { text: 'Генерируем SEO-контент', phase: 'ai' },
+  { text: 'Подбираем ключевые слова', phase: 'ai' },
+  { text: 'Анализируем товар', phase: 'ai' },
+  { text: 'Готовим вопросы поставщику', phase: 'ai' },
+  { text: 'Ищем аналоги на Wildberries', phase: 'market' },
+  { text: 'Анализируем цены конкурентов', phase: 'market' },
+  { text: 'Фильтруем нерелевантные товары', phase: 'market' },
+  { text: 'Рассчитываем экономику', phase: 'market' },
+  { text: 'Собираем архив с фотографиями', phase: 'send' },
+  { text: 'Упаковываем материалы', phase: 'send' },
+  { text: 'Почти готово', phase: 'send' },
+];
+
+function buildBar(current: number, total: number): string {
+  const filled = Math.round((current / total) * 10);
+  return '▓'.repeat(filled) + '░'.repeat(10 - filled);
+}
 
 export function createStepProgress(
   bot: Telegraf,
   chatId: number,
   messageId: number,
-  step: string
+  startPhase: string
 ) {
-  const messages = STEP_MESSAGES[step] ?? ['🔄 Обрабатываем...'];
-  let index = 0;
+  const phaseIndex: Record<string, number> = { elim: 0, ai: 3, market: 7, send: 11 };
+  let tick = phaseIndex[startPhase] ?? 0;
 
-  bot.telegram.editMessageText(chatId, messageId, undefined, messages[0], { parse_mode: 'HTML' }).catch(() => {});
+  const edit = (idx: number) => {
+    const step = STEPS[idx] ?? STEPS[STEPS.length - 1];
+    const bar = buildBar(idx + 1, STEPS.length);
+    const text = `${bar}\n${step.text}...`;
+    bot.telegram.editMessageText(chatId, messageId, undefined, text).catch(() => {});
+    bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
+  };
+
+  edit(tick);
 
   const timer = setInterval(() => {
-    index = (index + 1) % messages.length;
-    bot.telegram.editMessageText(chatId, messageId, undefined, messages[index], { parse_mode: 'HTML' }).catch(() => {});
+    tick++;
+    if (tick >= STEPS.length) tick = STEPS.length - 1;
+    edit(tick);
   }, 5_000);
 
-  return { stop: () => clearInterval(timer) };
+  return {
+    step(phase: string) {
+      const newIdx = phaseIndex[phase];
+      if (newIdx !== undefined && newIdx > tick) {
+        tick = newIdx;
+        edit(tick);
+      }
+    },
+    stop() {
+      clearInterval(timer);
+    },
+  };
 }
