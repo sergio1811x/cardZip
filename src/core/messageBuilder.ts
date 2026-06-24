@@ -86,15 +86,15 @@ export function buildMessage1(product: ProductWithContent): string {
   L.push('🔍 <b>Рынок WB</b>');
 
   if (sim && sim.totalAnalyzed > 0) {
-    const confIcon = sim.marketStatus === 'confirmed' ? '🟢' : sim.marketStatus === 'limited' ? '🟡' : '🔴';
-    const confLabel = sim.marketStatus === 'confirmed' ? 'Высокая' : sim.marketStatus === 'limited' ? 'Средняя' : 'Низкая';
+    const confMap: Record<string, [string, string]> = {
+      high: ['🟢', 'Высокая'], medium: ['🟡', 'Средняя'], low: ['🟠', 'Низкая'],
+      category_only: ['🔵', 'Только категория'], no_market: ['🔴', 'Не подтверждён'],
+    };
+    const [confIcon, confLabel] = confMap[sim.confidence ?? ''] ?? ['🔴', 'Не подтверждён'];
     L.push(`  ${confIcon} Уверенность: <b>${confLabel}</b>`);
-
-    if (sim.highCount > 0) {
-      L.push(`  Близкие аналоги: ${sim.highCount} | Категория: ${sim.mediumCount}`);
-    } else {
-      L.push(`  Прямых аналогов не найдено. Показаны лидеры категории (${sim.mediumCount} карточек).`);
-    }
+    L.push(`  Прямые аналоги: ${sim.directCount ?? sim.highCount ?? 0}`);
+    L.push(`  Похожие товары: ${sim.similarCount ?? sim.mediumCount ?? 0}`);
+    if (sim.categoryCount) L.push(`  Широкая категория: ${sim.categoryCount}`);
   }
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {

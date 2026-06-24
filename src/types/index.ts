@@ -74,9 +74,14 @@ export interface ProductWithContent extends RawProduct1688 {
   similarityData?: {
     queries: string[];
     totalAnalyzed: number;
-    highCount: number;
-    mediumCount: number;
-    marketStatus: 'confirmed' | 'limited' | 'insufficient';
+    directCount?: number;
+    similarCount?: number;
+    categoryCount?: number;
+    highCount?: number;
+    mediumCount?: number;
+    confidence?: string;
+    marketStatus?: string;
+    leaders?: any[];
   };
   evidence?: FieldEvidence[];
   cachedAt?: Date;

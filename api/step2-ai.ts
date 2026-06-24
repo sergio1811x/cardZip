@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { aiContentGenerator } from '../src/providers/aiContentGenerator';
-import { understandAndPlan, validateQueries } from '../src/providers/productUnderstanding';
+import { analyzeProduct } from '../src/providers/productUnderstanding';
 import { createStepProgress } from '../src/core/progress';
 import { acquireStepLock } from '../src/lib/stepLock';
 import type { AiContentResult } from '../src/types';
@@ -48,8 +48,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       characteristics: {}, isFallback: true,
     }));
 
-    // Product Understanding + Query Planning (один LLM вызов)
-    const searchData = await understandAndPlan({
+    // Product Analysis: Understanding + Lexicon + Queries (один LLM вызов)
+    const analysis = await analyzeProduct({
       titleCn: raw.titleCn,
       titleEn: raw.titleEn,
       categoryName: raw.categoryName,
@@ -58,9 +58,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       skus: raw.skus,
     }).catch(() => null);
 
-    const productStructure = searchData?.structure ?? null;
-    const queryPlan = searchData?.plan ?? null;
-    const validatedQueries = searchData?.validatedQueries ?? [];
+    const productStructure = analysis?.structure ?? null;
+    const productLexicon = analysis?.lexicon ?? null;
+    const queryPlan = analysis?.queryPlan ?? null;
+    const validatedQueries = analysis?.validatedQueries ?? [];
 
     progress?.stop();
 
@@ -72,6 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...(job.result_json as any),
         seoContent,
         productStructure,
+        productLexicon,
         queryPlan,
         validatedQueries,
       },

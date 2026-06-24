@@ -1,179 +1,174 @@
 import type { WbCard } from '../types';
-import type { ProductStructure, WbQueryPlan } from '../providers/productUnderstanding';
+import type { ProductStructure, ProductLexicon, MatchLevel } from '../providers/productUnderstanding';
 
 export interface ScoredCard extends WbCard {
   similarity: number;
-  level: 'high' | 'medium' | 'low';
-  matched: string[];
-  missing: string[];
+  matchLevel: MatchLevel;
+  matchedTerms: string[];
+  missingTerms: string[];
+  hardConflictsFound: string[];
+  softConflictsFound: string[];
+  queryHits: Array<{ query: string; queryType: string }>;
+}
+
+export interface MatchBuckets {
+  directAnalogs: ScoredCard[];
+  similarProducts: ScoredCard[];
+  categoryOnly: ScoredCard[];
+  wrong: ScoredCard[];
 }
 
 export interface SimilarityResult {
   queries: string[];
   totalAnalyzed: number;
-  highCards: ScoredCard[];
-  mediumCards: ScoredCard[];
-  lowCards: ScoredCard[];
+  buckets: MatchBuckets;
   leaders: ScoredCard[];
-  marketStatus: 'confirmed' | 'limited' | 'insufficient';
+  confidence: 'high' | 'medium' | 'low' | 'category_only' | 'no_market';
 }
 
-function normalize(text: string): string {
-  return text.toLowerCase().replace(/[^а-яёa-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+function norm(text: string): string {
+  return text.toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function containsAny(text: string, terms: string[]): boolean {
-  return terms.some(t => text.includes(t.toLowerCase()));
+function hasAny(text: string, terms: string[]): boolean {
+  return terms.some(t => t.length > 1 && text.includes(t.toLowerCase()));
 }
 
-function containsAnyGroup(text: string, groups: string[][]): boolean {
-  return groups.some(group => group.some(t => text.includes(t.toLowerCase())));
+function findMatches(text: string, terms: string[]): string[] {
+  return terms.filter(t => t.length > 1 && text.includes(t.toLowerCase()));
 }
 
-function isExcludedOnly(text: string, required: string[][], excluded: string[][]): boolean {
-  if (containsAnyGroup(text, required)) return false;
-  return containsAnyGroup(text, excluded);
-}
+// ─── Score a single candidate ────────────────────────────────────────────────
 
-interface ScoreResult {
-  score: number;
-  hasType: boolean;
-  hasFunction: boolean;
-  matched: string[];
-  missing: string[];
-}
-
-function scoreCardSmart(
-  cardTitle: string,
+function scoreCandidate(
+  title: string,
   structure: ProductStructure,
-  plan: WbQueryPlan | null
-): ScoreResult {
-  const text = normalize(cardTitle);
-  let score = 0;
+  lexicon: ProductLexicon,
+  queryInfo?: { query: string; queryType: string }
+): { score: number; matchLevel: MatchLevel; matched: string[]; missing: string[]; hardFound: string[]; softFound: string[] } {
+  const text = norm(title);
   const matched: string[] = [];
   const missing: string[] = [];
 
-  // ─── ЖЁСТКИЕ ФИЛЬТРЫ (карточка сразу вылетает) ──────────────────────
-
-  // 1. Negative match → -100
-  for (const neg of structure.negativeMatches) {
-    if (text.includes(neg.toLowerCase())) {
-      return { score: 0, hasType: false, hasFunction: false, matched, missing: [neg] };
-    }
+  // ─── HARD FILTERS ──────────────────────────────────────────────────────
+  const hardFound = findMatches(text, [...structure.hardConflicts, ...lexicon.hardNegativeTerms]);
+  if (hardFound.length > 0) {
+    return { score: 0, matchLevel: 'wrong', matched, missing, hardFound, softFound: [] };
   }
 
-  // 2. coreNoun обязателен
-  const hasCoreNoun = text.includes(structure.coreNoun.toLowerCase());
-  const hasSynonym = plan ? containsAnyGroup(text, plan.requiredConcepts) : false;
-  if (!hasCoreNoun && !hasSynonym) {
-    missing.push(structure.coreNoun);
-    return { score: 0, hasType: false, hasFunction: false, matched, missing };
+  // coreObject или alternateName обязателен
+  const coreMatch = text.includes(structure.coreObject.toLowerCase());
+  const altMatch = hasAny(text, lexicon.alternateNames);
+  const mainMatch = hasAny(text, lexicon.mainTerms);
+  if (!coreMatch && !altMatch && !mainMatch) {
+    return { score: 0, matchLevel: 'wrong', matched, missing, hardFound: [], softFound: [] };
   }
 
-  // 3. formFactor — если другой форм-фактор, исключаем
-  if (structure.formFactor) {
-    const ff = structure.formFactor.toLowerCase();
-    const CONFLICTING_FORMS: Record<string, string[]> = {
-      'настольный': ['ручной', 'шейный', 'напольный', 'потолочный', 'карманный'],
-      'напольный': ['настольный', 'ручной', 'шейный', 'потолочный', 'карманный'],
-      'ручной': ['настольный', 'напольный', 'потолочный', 'стационарный'],
-      'складной': ['жёсткий', 'трость'],
-      'портативный': ['стационарный', 'встроенный'],
-    };
-    const conflicts = CONFLICTING_FORMS[ff] ?? [];
-    for (const c of conflicts) {
-      if (text.includes(c)) {
-        return { score: 0, hasType: false, hasFunction: false, matched, missing: [c + ' (другой формат)'] };
-      }
-    }
-  }
+  // Soft conflicts
+  const softFound = findMatches(text, [...structure.softConflicts, ...lexicon.softNegativeTerms]);
 
-  // 4. excludeIfOnlyMatch
-  if (plan && isExcludedOnly(text, plan.requiredConcepts, plan.excludeIfOnlyMatch)) {
-    return { score: 0, hasType: false, hasFunction: false, matched, missing };
-  }
+  // ─── SCORING ───────────────────────────────────────────────────────────
+  let score = 0;
 
-  // ─── СКОРИНГ ─────────────────────────────────────────────────────────
+  // Object match (+30)
+  if (coreMatch) { matched.push(structure.coreObject); score += 30; }
+  else if (altMatch) { score += 25; }
+  else { score += 20; }
 
-  // ProductType совпал (+50)
-  const typeMatch = text.includes(structure.productType.toLowerCase());
-  if (typeMatch) {
+  // ProductType match (+25)
+  if (text.includes(structure.productType.toLowerCase())) {
     matched.push(structure.productType);
-    score += 50;
-  }
-
-  // CoreNoun (+30)
-  if (hasCoreNoun) {
-    matched.push(structure.coreNoun);
-    score += 30;
-  } else {
-    score += 25; // synonym
-  }
-  let hasType = true;
-
-  // FormFactor (+25)
-  if (structure.formFactor && text.includes(structure.formFactor.toLowerCase())) {
-    matched.push(structure.formFactor);
     score += 25;
-  } else if (structure.formFactor) {
-    missing.push(structure.formFactor);
   }
 
-  // Must-have features / functions (+20 each)
-  let hasFunction = false;
-  for (const f of structure.mustHaveFeatures) {
-    if (text.includes(f.toLowerCase())) {
-      matched.push(f);
-      score += 20;
-      hasFunction = true;
+  // Required attributes (+15 each)
+  for (const attr of structure.requiredAttributes) {
+    const terms = attr.split('/').map(t => t.trim().toLowerCase());
+    if (terms.some(t => text.includes(t))) {
+      matched.push(attr);
+      score += 15;
     } else {
-      missing.push(f);
+      missing.push(attr);
     }
   }
 
-  // PowerType (+10)
-  for (const pt of structure.powerType) {
-    if (text.includes(pt.toLowerCase())) {
-      matched.push(pt);
-      score += 10;
-      break;
-    }
-  }
-
-  // Important features (+8 each, max 16)
+  // Important attributes (+8 each, max 24)
   let impScore = 0;
-  for (const f of structure.importantFeatures) {
-    if (text.includes(f.toLowerCase())) {
-      matched.push(f);
+  for (const attr of structure.importantAttributes) {
+    const terms = attr.split('/').map(t => t.trim().toLowerCase());
+    if (terms.some(t => text.includes(t))) {
+      matched.push(attr);
       impScore += 8;
     }
   }
-  score += Math.min(16, impScore);
+  score += Math.min(24, impScore);
 
-  // Bonus concepts (+5 each, max 10)
-  if (plan) {
-    let bonusScore = 0;
-    for (const group of plan.bonusConcepts) {
-      if (group.some(t => text.includes(t.toLowerCase()))) bonusScore += 5;
+  // Compatible alternatives bonus (+10)
+  if (hasAny(text, structure.compatibleAlternatives)) score += 10;
+
+  // Material match (+5)
+  if (hasAny(text, [...structure.material, ...lexicon.materialAliases])) score += 5;
+
+  // FormFactor match (+10) or conflict (-15)
+  if (structure.formFactor.length > 0) {
+    if (hasAny(text, structure.formFactor)) {
+      score += 10;
     }
-    score += Math.min(10, bonusScore);
   }
 
-  return { score: Math.min(100, score), hasType, hasFunction, matched, missing };
+  // Audience match (+5) or conflict
+  if (structure.audience) {
+    const audienceConflict =
+      (structure.audience === 'мужской' && /женск/i.test(text)) ||
+      (structure.audience === 'женский' && /мужск/i.test(text)) ||
+      (structure.audience !== 'детский' && /детск/i.test(text));
+    if (audienceConflict) {
+      return { score: 0, matchLevel: 'wrong', matched, missing, hardFound: ['audience conflict'], softFound };
+    }
+    if (text.includes(structure.audience.toLowerCase())) score += 5;
+  }
+
+  // Soft conflict penalty
+  if (softFound.length > 0) score -= 10;
+
+  // Query type bonus
+  if (queryInfo?.queryType === 'exact') score += 5;
+  else if (queryInfo?.queryType === 'synonym') score += 3;
+
+  score = Math.max(0, Math.min(100, score));
+
+  // ─── MATCH LEVEL ───────────────────────────────────────────────────────
+  const requiredMet = missing.length === 0 || (structure.requiredAttributes.length > 0 && missing.length < structure.requiredAttributes.length);
+  let matchLevel: MatchLevel;
+
+  if (score >= 60 && requiredMet && softFound.length === 0) {
+    matchLevel = 'direct_analog';
+  } else if (score >= 40 && coreMatch || altMatch) {
+    matchLevel = softFound.length > 0 ? 'similar' : (requiredMet ? 'direct_analog' : 'similar');
+  } else if (score >= 20) {
+    matchLevel = 'category_only';
+  } else {
+    matchLevel = 'wrong';
+  }
+
+  // Fallback-only source cannot be direct without required attributes
+  if (queryInfo?.queryType === 'fallback' && matchLevel === 'direct_analog' && missing.length > 0) {
+    matchLevel = 'similar';
+  }
+
+  return { score, matchLevel, matched, missing, hardFound, softFound };
 }
 
-function getLevel(score: number, hasType: boolean, hasFunction: boolean): 'high' | 'medium' | 'low' {
-  if (score >= 55 && hasType && hasFunction) return 'high';
-  if (score >= 30 && hasType) return 'medium';
-  return 'low';
-}
+// ─── Main scoring function ───────────────────────────────────────────────────
 
-export function scoreSimilarity(
+export function rankCandidates(
   cards: WbCard[],
   structure: ProductStructure | null,
-  plan: WbQueryPlan | null,
-  queries: string[]
+  lexicon: ProductLexicon | null,
+  queries: string[],
+  queryTypeMap?: Map<string, string>
 ): SimilarityResult {
+  // Dedup by URL
   const seen = new Set<string>();
   const unique = cards.filter(c => {
     if (seen.has(c.url)) return false;
@@ -181,50 +176,93 @@ export function scoreSimilarity(
     return true;
   });
 
-  if (!structure) {
-    const scored: ScoredCard[] = unique.map(card => ({
-      ...card, similarity: 30, level: 'medium' as const, matched: [], missing: [],
+  if (!structure || !lexicon) {
+    // No LLM data — all category_only
+    const scored: ScoredCard[] = unique.map(c => ({
+      ...c, similarity: 20, matchLevel: 'category_only' as MatchLevel,
+      matchedTerms: [], missingTerms: [], hardConflictsFound: [], softConflictsFound: [], queryHits: [],
     }));
     return {
       queries, totalAnalyzed: unique.length,
-      highCards: [], mediumCards: scored, lowCards: [],
+      buckets: { directAnalogs: [], similarProducts: [], categoryOnly: scored, wrong: [] },
       leaders: scored.sort((a, b) => b.feedbacks - a.feedbacks).slice(0, 10),
-      marketStatus: scored.length >= 15 ? 'limited' : 'insufficient',
+      confidence: scored.length >= 20 ? 'category_only' : 'no_market',
     };
   }
 
   const scored: ScoredCard[] = unique.map(card => {
-    const r = scoreCardSmart(card.title, structure, plan);
-    return { ...card, similarity: r.score, level: getLevel(r.score, r.hasType, r.hasFunction), matched: r.matched, missing: r.missing };
+    const qType = queryTypeMap?.get(card.url);
+    const r = scoreCandidate(card.title, structure, lexicon, qType ? { query: '', queryType: qType } : undefined);
+    return {
+      ...card,
+      similarity: r.score,
+      matchLevel: r.matchLevel,
+      matchedTerms: r.matched,
+      missingTerms: r.missing,
+      hardConflictsFound: r.hardFound,
+      softConflictsFound: r.softFound,
+      queryHits: [],
+    };
   });
 
-  const highCards = scored.filter(c => c.level === 'high').sort((a, b) => b.similarity - a.similarity);
-  const mediumCards = scored.filter(c => c.level === 'medium').sort((a, b) => b.similarity - a.similarity);
-  const lowCards = scored.filter(c => c.level === 'low');
+  const buckets: MatchBuckets = {
+    directAnalogs: scored.filter(c => c.matchLevel === 'direct_analog').sort((a, b) => b.similarity - a.similarity),
+    similarProducts: scored.filter(c => c.matchLevel === 'similar').sort((a, b) => b.similarity - a.similarity),
+    categoryOnly: scored.filter(c => c.matchLevel === 'category_only'),
+    wrong: scored.filter(c => c.matchLevel === 'wrong'),
+  };
 
-  // Лидеры рынка: дедупликация по продавцу (1 seller = 1 карточка)
-  const leaderCandidates = [...highCards, ...mediumCards]
-    .sort((a, b) => {
-      const scoreA = a.similarity * 0.6 + Math.log(Math.max(a.feedbacks, 1)) * 10 * 0.25 + a.rating * 20 * 0.15;
-      const scoreB = b.similarity * 0.6 + Math.log(Math.max(b.feedbacks, 1)) * 10 * 0.25 + b.rating * 20 * 0.15;
-      return scoreB - scoreA;
-    });
-
+  // Leaders: seller-dedup by price+feedbacks proxy
+  const leaderCandidates = [...buckets.directAnalogs, ...buckets.similarProducts];
   const leaders: ScoredCard[] = [];
-  const seenPrices = new Set<number>();
-  for (const card of leaderCandidates) {
-    // Дедуп по цене+отзывам (proxy для одного продавца)
+  const seenSellers = new Set<number>();
+  for (const card of leaderCandidates.sort((a, b) => {
+    const sa = a.similarity * 0.6 + Math.log(Math.max(a.feedbacks, 1)) * 10 * 0.25 + a.rating * 20 * 0.15;
+    const sb = b.similarity * 0.6 + Math.log(Math.max(b.feedbacks, 1)) * 10 * 0.25 + b.rating * 20 * 0.15;
+    return sb - sa;
+  })) {
     const key = card.price * 1000 + card.feedbacks;
-    if (seenPrices.has(key)) continue;
-    seenPrices.add(key);
+    if (seenSellers.has(key)) continue;
+    seenSellers.add(key);
     leaders.push(card);
     if (leaders.length >= 10) break;
   }
 
-  let marketStatus: 'confirmed' | 'limited' | 'insufficient';
-  if (highCards.length >= 10) marketStatus = 'confirmed';       // 🟢
-  else if (highCards.length >= 3) marketStatus = 'limited';     // 🟡
-  else marketStatus = 'insufficient';                           // 🔴
+  // Confidence
+  const dc = buckets.directAnalogs.length;
+  const sc = buckets.similarProducts.length;
+  const cc = buckets.categoryOnly.length;
+  let confidence: SimilarityResult['confidence'];
+  if (dc >= 10) confidence = 'high';
+  else if (dc >= 3) confidence = 'medium';
+  else if (dc >= 1) confidence = 'low';
+  else if (cc >= 20) confidence = 'category_only';
+  else confidence = 'no_market';
 
-  return { queries, totalAnalyzed: unique.length, highCards, mediumCards, lowCards, leaders, marketStatus };
+  return { queries, totalAnalyzed: unique.length, buckets, leaders, confidence };
 }
+
+// ─── WB Result Mining ────────────────────────────────────────────────────────
+
+export function mineResults(cards: WbCard[]): { tokens: string[]; bigrams: string[]; categories: string[] } {
+  const freq = new Map<string, number>();
+  const bigramFreq = new Map<string, number>();
+
+  for (const card of cards.slice(0, 100)) {
+    const words = norm(card.title).split(/\s+/).filter(w => w.length > 2);
+    for (const w of words) freq.set(w, (freq.get(w) ?? 0) + 1);
+    for (let i = 0; i < words.length - 1; i++) {
+      const bg = `${words[i]} ${words[i + 1]}`;
+      bigramFreq.set(bg, (bigramFreq.get(bg) ?? 0) + 1);
+    }
+  }
+
+  return {
+    tokens: [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(e => e[0]),
+    bigrams: [...bigramFreq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(e => e[0]),
+    categories: [],
+  };
+}
+
+// Legacy compat
+export { rankCandidates as scoreSimilarity };

@@ -5,50 +5,50 @@ import { supabase } from '../src/db/supabase';
 import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../src/core/economicsCalc';
 import { buildConclusion } from '../src/core/verdict';
 import { buildRiskFlags } from '../src/core/riskFlags';
+import { rankCandidates, mineResults } from '../src/core/wbSimilarity';
 import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
 import { getUserTariffs } from '../src/db/queries/userSettings';
-import { scoreSimilarity } from '../src/core/wbSimilarity';
-import { refineQueries } from '../src/providers/productUnderstanding';
+import { expandQueries, judgeCandidate, validateQueries } from '../src/providers/productUnderstanding';
 import { acquireStepLock } from '../src/lib/stepLock';
 import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
 
 export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-
 const WB_PARSER_URL = process.env.WB_PARSER_URL || 'http://50fc4ca33bd1.vps.myjino.ru';
 const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || 'cardzip-wb-2024';
 
-// ─── Text Search через VPS (российский IP) ──────────────────────────────────
-
-async function searchWbByText(query: string): Promise<WbCard[] | null> {
+async function searchWb(query: string): Promise<WbCard[] | null> {
   try {
     const params = new URLSearchParams({ secret: WB_PARSER_SECRET, query, limit: '100' });
-    const url = `${WB_PARSER_URL}/search-by-text?${params}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    const res = await fetch(`${WB_PARSER_URL}/search-by-text?${params}`, { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return null;
     const data = await res.json() as any;
     if (!data.success || !data.products?.length) return null;
-
     return data.products.map((p: any) => ({
-      title: p.name || '',
-      price: p.price,
+      title: p.name || '', price: p.price,
       url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
-      rating: p.rating || 0,
-      feedbacks: p.feedbacks || 0,
+      rating: p.rating || 0, feedbacks: p.feedbacks || 0,
     })).filter((c: WbCard) => c.price > 0);
-  } catch (e: any) {
-    console.warn(`[wb-text] "${query.slice(0, 30)}" failed:`, e.message);
-    return null;
-  }
+  } catch { return null; }
 }
 
-const DEFAULT_FILTER_KEYWORDS: WbFilterKeywords = { required: [], optional: [], exclude: [] };
+async function multiSearch(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string> }> {
+  const results = await Promise.all(queries.map(q => searchWb(q)));
+  const seenUrls = new Set<string>();
+  const cards: WbCard[] = [];
+  for (const batch of results) {
+    if (!batch) continue;
+    for (const card of batch) {
+      if (!seenUrls.has(card.url)) { seenUrls.add(card.url); cards.push(card); }
+    }
+  }
+  return { cards, seenUrls };
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
-
   const { jobId } = req.body ?? {};
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
@@ -61,135 +61,115 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const raw = (job.result_json as any).rawProduct;
     const seoContent = (job.result_json as any).seoContent;
+    const resultJson = job.result_json as any;
+    const structure = resultJson.productStructure ?? null;
+    const lexicon = resultJson.productLexicon ?? null;
+    const queryPlan = resultJson.queryPlan ?? null;
+    const validatedQueries: string[] = resultJson.validatedQueries ?? [];
 
     const progress = job.tg_message_id
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── ПОИСКОВЫЕ ЗАПРОСЫ: LLM Query Plan → fallback на старую логику ──
-    const resultJson = job.result_json as any;
-    const productStructure = resultJson.productStructure ?? null;
-    const queryPlan = resultJson.queryPlan ?? null;
-    const validatedQueries: string[] = resultJson.validatedQueries ?? [];
+    // ─── Запросы ─────────────────────────────────────────────────────────
+    const pass1Queries = validatedQueries.length >= 3
+      ? validatedQueries.slice(0, 8)
+      : [seoContent?.titleRu, ...(seoContent?.keywords?.slice(0, 3) ?? [])].filter((q): q is string => !!q && /[а-яё]/i.test(q)).slice(0, 5);
 
-    const isRussian = (s: string) => /[а-яё]/i.test(s);
+    console.log(`[step3] PASS 1: ${pass1Queries.length} queries`);
 
-    let searchQueries: string[];
-    if (validatedQueries.length >= 3) {
-      // LLM-сгенерированные и провалидированные запросы
-      searchQueries = validatedQueries.slice(0, 6);
-      console.log(`[step3] Using LLM queries: ${searchQueries.join(' | ')}`);
-    } else {
-      // Fallback: старая логика
-      const candidates = [
-        seoContent?.titleRu,
-        ...(seoContent?.searchQueries ?? []),
-        ...(seoContent?.keywords?.slice(0, 3) ?? []),
-      ].filter((q): q is string => !!q && q.length > 2 && isRussian(q));
-      searchQueries = candidates.filter((q, i, arr) => arr.indexOf(q) === i).slice(0, 5);
-      console.log(`[step3] Fallback queries: ${searchQueries.join(' | ')}`);
+    // ─── PASS 1 ──────────────────────────────────────────────────────────
+    const { cards: pass1Cards, seenUrls } = await multiSearch(pass1Queries);
+    console.log(`[step3] PASS 1 result: ${pass1Cards.length} unique cards`);
+
+    // ─── WB Result Mining ────────────────────────────────────────────────
+    const mining = mineResults(pass1Cards);
+
+    // ─── Pre-score to decide on PASS 2 ──────────────────────────────────
+    let allCards = [...pass1Cards];
+    let preRank = rankCandidates(allCards, structure, lexicon, pass1Queries);
+
+    // ─── PASS 2: Adaptive (only if direct < 10) ─────────────────────────
+    if (preRank.buckets.directAnalogs.length < 10 && structure) {
+      const adaptiveQueries = await expandQueries(structure, mining.tokens, mining.bigrams).catch(() => [] as string[]);
+      if (adaptiveQueries.length > 0) {
+        console.log(`[step3] PASS 2: ${adaptiveQueries.length} adaptive queries`);
+        const { cards: pass2Cards } = await multiSearch(adaptiveQueries);
+        for (const card of pass2Cards) {
+          if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
+        }
+        preRank = rankCandidates(allCards, structure, lexicon, [...pass1Queries, ...adaptiveQueries]);
+        console.log(`[step3] After PASS 2: ${allCards.length} cards, direct=${preRank.buckets.directAnalogs.length}`);
+      }
     }
 
-    console.log(`[step3] Multi-search: ${searchQueries.length} queries via VPS`);
+    // ─── FALLBACK: coreObject search (only if direct < 3) ───────────────
+    if (preRank.buckets.directAnalogs.length < 3 && structure?.coreObject) {
+      const fbQueries = [
+        structure.coreObject,
+        structure.productType !== structure.coreObject ? structure.productType : null,
+        ...(queryPlan?.fallbackQueries ?? []),
+      ].filter((q): q is string => !!q && q.length > 2).slice(0, 4);
 
-    const textResults = await Promise.all(
-      searchQueries.map(q => searchWbByText(q))
-    );
-
-    // Собираем все карточки в единый пул (дедупликация по URL)
-    const allCards: WbCard[] = [];
-    const seenUrls = new Set<string>();
-    for (const cards of textResults) {
-      if (!cards) continue;
-      for (const card of cards) {
+      console.log(`[step3] FALLBACK: ${fbQueries.join(' | ')}`);
+      const { cards: fbCards } = await multiSearch(fbQueries);
+      for (const card of fbCards) {
         if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
       }
     }
 
-    console.log(`[step3] Pass 1: ${allCards.length} unique cards from ${textResults.filter(Boolean).length} queries`);
+    // ─── Final ranking ───────────────────────────────────────────────────
+    const similarity = rankCandidates(allCards, structure, lexicon, pass1Queries);
 
-    // ─── ВТОРОЙ ПРОХОД: Query Refiner (только если мало high) ──────────
-    // Предварительный скоринг для проверки
-    const preScore = scoreSimilarity(allCards, productStructure, queryPlan, searchQueries);
-    if (productStructure && preScore.highCards.length < 10 && allCards.length > 0) {
-      const topTitles = allCards.slice(0, 20).map(c => c.title);
-      const refinedQueries = await refineQueries(productStructure, topTitles).catch(() => [] as string[]);
+    // ─── LLM Judge for top-30 (only if structure available) ──────────────
+    if (structure && similarity.buckets.directAnalogs.length + similarity.buckets.similarProducts.length > 0) {
+      const topCandidates = [
+        ...similarity.buckets.directAnalogs.slice(0, 20),
+        ...similarity.buckets.similarProducts.slice(0, 10),
+      ];
 
-      if (refinedQueries.length > 0) {
-        console.log(`[step3] Pass 2: ${refinedQueries.length} refined queries: ${refinedQueries.join(' | ')}`);
-        const refinedResults = await Promise.all(
-          refinedQueries.map(q => searchWbByText(q))
-        );
-        for (const cards of refinedResults) {
-          if (!cards) continue;
-          for (const card of cards) {
-            if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
+      // Judge only borderline candidates (skip obviously high scores)
+      const borderline = topCandidates.filter(c => c.similarity >= 35 && c.similarity <= 70);
+      if (borderline.length > 0 && borderline.length <= 15) {
+        console.log(`[step3] LLM Judge: ${borderline.length} borderline candidates`);
+        for (const card of borderline) {
+          const judgment = await judgeCandidate(structure, {
+            title: card.title, price: card.price,
+            detectedConflicts: [...card.hardConflictsFound, ...card.softConflictsFound],
+          }).catch(() => null);
+          if (judgment) {
+            card.matchLevel = judgment.matchLevel;
+            card.matchedTerms = judgment.matchedAttributes;
+            card.missingTerms = judgment.missingAttributes;
           }
         }
-        console.log(`[step3] After pass 2: ${allCards.length} total unique cards`);
+        // Re-sort buckets after judge
+        const all = [...similarity.buckets.directAnalogs, ...similarity.buckets.similarProducts, ...similarity.buckets.categoryOnly];
+        similarity.buckets.directAnalogs = all.filter(c => c.matchLevel === 'direct_analog').sort((a, b) => b.similarity - a.similarity);
+        similarity.buckets.similarProducts = all.filter(c => c.matchLevel === 'similar').sort((a, b) => b.similarity - a.similarity);
+        similarity.buckets.categoryOnly = all.filter(c => c.matchLevel === 'category_only');
       }
     }
 
-    // Скоринг — первый проход
-    let similarity = scoreSimilarity(allCards, productStructure, queryPlan, searchQueries);
+    console.log(`[step3] Final: direct=${similarity.buckets.directAnalogs.length} similar=${similarity.buckets.similarProducts.length} category=${similarity.buckets.categoryOnly.length} confidence=${similarity.confidence}`);
 
-    // ─── FALLBACK SEARCH: если мало high-similarity, поиск по coreNoun ──
-    if (similarity.highCards.length < 3 && productStructure?.coreNoun) {
-      const fallbackQueries = [
-        productStructure.coreNoun,
-        productStructure.formFactor ? `${productStructure.coreNoun} ${productStructure.formFactor}` : null,
-        productStructure.productType !== productStructure.coreNoun ? productStructure.productType : null,
-      ].filter((q): q is string => !!q && q.length > 2);
-
-      if (fallbackQueries.length) {
-        console.log(`[step3] Fallback search (high=${similarity.highCards.length}): ${fallbackQueries.join(' | ')}`);
-        const fallbackResults = await Promise.all(fallbackQueries.map(q => searchWbByText(q)));
-        for (const cards of fallbackResults) {
-          if (!cards) continue;
-          for (const card of cards) {
-            if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
-          }
-        }
-        // Пересчитываем скоринг с расширенным пулом
-        similarity = scoreSimilarity(allCards, productStructure, queryPlan, [...searchQueries, ...fallbackQueries]);
-        console.log(`[step3] After fallback: ${allCards.length} cards, high=${similarity.highCards.length}`);
-      }
-    }
-
-    // Экономика ТОЛЬКО по high similarity
-    const relevantCards = similarity.highCards;
-
-    const wbData: WbSearchResult | null = relevantCards.length > 0 ? {
-      avgPrice: Math.round(relevantCards.reduce((s, c) => s + c.price, 0) / relevantCards.length),
-      minPrice: Math.min(...relevantCards.map(c => c.price)),
-      maxPrice: Math.max(...relevantCards.map(c => c.price)),
+    // ─── Build WbData for economics (only from direct analogs) ──────────
+    const directCards = similarity.buckets.directAnalogs;
+    const wbData: WbSearchResult | null = directCards.length > 0 ? {
+      avgPrice: Math.round(directCards.reduce((s, c) => s + c.price, 0) / directCards.length),
+      minPrice: Math.min(...directCards.map(c => c.price)),
+      maxPrice: Math.max(...directCards.map(c => c.price)),
       totalCards: allCards.length,
-      topExamples: similarity.highCards.slice(0, 3),
-      allCards: relevantCards,
+      topExamples: directCards.slice(0, 3),
+      allCards: directCards,
       photoSearchConfirmed: false,
     } : null;
 
-    const filterKeywords = seoContent?.filterKeywords ?? DEFAULT_FILTER_KEYWORDS;
-    const wbFiltered = filterWbData(wbData, filterKeywords, searchQueries);
+    const filterKeywords = seoContent?.filterKeywords ?? { required: [], optional: [], exclude: [] };
+    const wbFiltered = filterWbData(wbData, filterKeywords, pass1Queries);
 
-    // Сохраняем similarity данные в result_json для вывода
-    const similarityData = {
-      queries: similarity.queries,
-      totalAnalyzed: similarity.totalAnalyzed,
-      highCount: similarity.highCards.length,
-      mediumCount: similarity.mediumCards.length,
-      marketStatus: similarity.marketStatus,
-      leaders: similarity.leaders.slice(0, 10).map(c => ({
-        title: c.title, price: c.price, url: c.url,
-        rating: c.rating, feedbacks: c.feedbacks,
-        similarity: c.similarity,
-      })),
-    };
-
-    // Тарифы
+    // ─── Economics ───────────────────────────────────────────────────────
     const userTariffs = await getUserTariffs(job.user_id).catch(() => null);
-
-    // Экономика
     const economics = await calcEconomics({
       platform: raw.platform,
       priceYuan: raw.priceYuan,
@@ -208,57 +188,66 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     progress?.stop();
 
-    console.log(`[step3] WB: ${wbFiltered?.quality ?? 'null'} (${wbFiltered?.relevantCount ?? 0} relevant) | ${conclusion.icon} ${conclusion.headline.slice(0, 40)}`);
+    // ─── Similarity data for display ─────────────────────────────────────
+    const similarityData = {
+      queries: pass1Queries.filter(q => /[а-яё]/i.test(q)).slice(0, 5),
+      totalAnalyzed: allCards.length,
+      directCount: similarity.buckets.directAnalogs.length,
+      similarCount: similarity.buckets.similarProducts.length,
+      categoryCount: similarity.buckets.categoryOnly.length,
+      confidence: similarity.confidence,
+      leaders: similarity.leaders.slice(0, 10).map(c => ({
+        title: c.title, price: c.price, url: c.url,
+        rating: c.rating, feedbacks: c.feedbacks,
+        similarity: c.similarity, matchLevel: c.matchLevel,
+      })),
+    };
+
+    // ─── Debug trace ─────────────────────────────────────────────────────
+    const debugTrace = {
+      pass1Queries,
+      pass1Cards: pass1Cards.length,
+      mining: { tokens: mining.tokens.slice(0, 10), bigrams: mining.bigrams.slice(0, 5) },
+      pass2Used: preRank.buckets.directAnalogs.length < 10,
+      fallbackUsed: preRank.buckets.directAnalogs.length < 3,
+      totalCards: allCards.length,
+      finalBuckets: {
+        direct: similarity.buckets.directAnalogs.length,
+        similar: similarity.buckets.similarProducts.length,
+        category: similarity.buckets.categoryOnly.length,
+        wrong: similarity.buckets.wrong.length,
+      },
+      confidence: similarity.confidence,
+    };
 
     await supabase.from('jobs').update({
       status: 'done',
       result_json: {
-        ...(job.result_json as any),
+        ...resultJson,
         product: {
           ...raw,
           titleRu: seoContent?.titleRu ?? raw.titleEn ?? raw.titleCn,
-          seoContent,
-          wbData,
-          wbFiltered,
-          riskFlags,
-          economics,
-          budgets,
-          maxPurchasePrice,
-          conclusion,
+          seoContent, wbData, wbFiltered, riskFlags,
+          economics, budgets, maxPurchasePrice, conclusion,
           similarityData,
         },
+        debugTrace,
       },
       finished_at: new Date().toISOString(),
     }).eq('id', jobId);
 
-    // Chain → step4-send
+    // ─── Chain → step4 ──────────────────────────────────────────────────
     const host = req.headers.host || 'card-zip.vercel.app';
-    let sent = false;
-    for (let i = 0; i < 2 && !sent; i++) {
+    for (let i = 0; i < 2; i++) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
         await fetch(`https://${host}/api/step4-send`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId }),
-          signal: ac.signal,
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }), signal: ac.signal,
         });
-        sent = true;
-      } catch {
-        if (i === 0) await new Promise(r => setTimeout(r, 500));
-      }
-    }
-
-    if (!sent) {
-      console.error(`[step3] Failed to trigger step4 for job ${jobId}`);
-      if (job.tg_message_id) {
-        await bot.telegram.editMessageText(
-          job.tg_chat_id, job.tg_message_id, undefined,
-          '❌ Не удалось отправить результат. Попробуйте ещё раз.',
-          { parse_mode: 'HTML' }
-        ).catch(() => {});
-      }
+        break;
+      } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
     }
 
     res.status(200).json({ ok: true });
