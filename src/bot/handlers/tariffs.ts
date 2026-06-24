@@ -24,25 +24,45 @@ export async function handleTariffsMenu(ctx: Context) {
   }
 
   const tariffs = await getUserTariffs(userId);
+  const val = (key: keyof typeof tariffs, def: string, unit: string) =>
+    tariffs?.[key] ? `<b>${tariffs[key]} ${unit}</b> (ваш)` : `<b>${def} ${unit}</b> (авто)`;
+
   const lines = [
-    '⚙️ <b>Ваши тарифы для расчёта экономики</b>',
+    '⚙️ <b>Параметры расчёта экономики</b>',
     '',
-    `Карго: <b>${tariffs?.cargoPerKgUsd ?? '~4'} $/кг</b> ${tariffs?.cargoPerKgUsd ? '(ваш)' : '(авто)'}`,
-    `Фулфилмент: <b>${tariffs?.fulfillmentRub ?? '80'} ₽/шт</b> ${tariffs?.fulfillmentRub ? '(ваш)' : '(авто)'}`,
-    `Налог: <b>${tariffs?.taxPercent ?? '7'}%</b> ${tariffs?.taxPercent ? '(ваш)' : '(авто)'}`,
-    `Целевая маржа: <b>${tariffs?.targetMarginPercent ?? '35'}%</b> ${tariffs?.targetMarginPercent ? '(ваш)' : '(авто)'}`,
-    `ДРР (реклама): <b>${tariffs?.drrPercent ?? '15'}%</b> ${tariffs?.drrPercent ? '(ваш)' : '(авто)'}`,
+    'Эти значения бот использует для расчёта себестоимости, прибыли и ROI.',
     '',
-    'Нажмите на параметр, чтобы изменить:',
+    `🚚 Карго из Китая: ${val('cargoPerKgUsd', '~4', '$/кг')}`,
+    'Стоимость доставки товара из Китая до РФ.',
+    '',
+    `📦 Фулфилмент: ${val('fulfillmentRub', '80', '₽/шт')}`,
+    'Подготовка и обработка 1 товара перед отправкой на WB.',
+    '',
+    `🏦 Налог: ${val('taxPercent', '7', '%')}`,
+    'Налог с продажи.',
+    '',
+    `🎯 Желаемая маржа: ${val('targetMarginPercent', '35', '%')}`,
+    'Какую прибыльность вы хотите получить.',
+    '',
+    `📣 Реклама / ДРР: ${val('drrPercent', '15', '%')}`,
+    'Доля расходов на рекламу от выручки.',
+    '',
+    'Нажмите на параметр, чтобы изменить.',
   ];
 
-  const buttons = TARIFF_FIELDS.map((f) => [
-    Markup.button.callback(
-      `${f.label}: ${tariffs?.[f.key] ?? 'авто'} ${f.unit}`,
-      `edit_tariff_${f.key}`
-    ),
-  ]);
-  buttons.push([Markup.button.callback('🔄 Сбросить все на авто', 'reset_tariffs')]);
+  const btn = (key: keyof typeof tariffs, emoji: string, label: string, def: string, unit: string) => {
+    const v = tariffs?.[key] ? `${tariffs[key]} ${unit}` : `авто · ${def} ${unit}`;
+    return Markup.button.callback(`${emoji} ${label}: ${v}`, `edit_tariff_${key}`);
+  };
+
+  const buttons = [
+    [btn('cargoPerKgUsd', '🚚', 'Карго', '$4', '/кг')],
+    [btn('fulfillmentRub', '📦', 'Фулфилмент', '80', '₽/шт')],
+    [btn('taxPercent', '🏦', 'Налог', '7', '%')],
+    [btn('targetMarginPercent', '🎯', 'Маржа', '35', '%')],
+    [btn('drrPercent', '📣', 'Реклама', '15', '%')],
+    [Markup.button.callback('🔄 Сбросить на авто', 'reset_tariffs')],
+  ];
 
   await ctx.reply(lines.join('\n'), {
     parse_mode: 'HTML',
