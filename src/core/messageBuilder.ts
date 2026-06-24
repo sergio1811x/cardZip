@@ -352,9 +352,9 @@ export function buildMessage3(status: SubscriptionStatus): {
 
   if (status.creditsRemaining <= 0) {
     buttons.push([
-      Markup.button.callback('10 · 160⭐', 'pay_pack10'),
-      Markup.button.callback('30 · 330⭐', 'pay_pack30'),
-      Markup.button.callback('7дн · 550⭐', 'pay_week'),
+      Markup.button.callback('10 · 150⭐', 'pay_pack10'),
+      Markup.button.callback('30 · 300⭐', 'pay_pack30'),
+      Markup.button.callback('100/7дн · 500⭐', 'pay_week'),
     ]);
   }
 

@@ -20,9 +20,9 @@ export async function handleUpgrade(ctx: Context): Promise<void> {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
         [Markup.button.callback('🧪 Тест · 1 ⭐', 'pay_test')],
-        [Markup.button.callback('10 разборов · 160 ⭐', 'pay_pack10')],
-        [Markup.button.callback('30 разборов · 330 ⭐ Выгоднее', 'pay_pack30')],
-        [Markup.button.callback('Неделя (100) · 550 ⭐', 'pay_week')],
+        [Markup.button.callback('10 анализов · 150 ⭐', 'pay_pack10')],
+        [Markup.button.callback('30 анализов · 300 ⭐', 'pay_pack30')],
+        [Markup.button.callback('100 на 7 дней · 500 ⭐', 'pay_week')],
       ]),
     }
   );
