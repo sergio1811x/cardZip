@@ -86,16 +86,24 @@ export function buildMessage1(product: ProductWithContent): string {
   L.push('🔍 <b>Рынок WB</b>');
 
   if (sim && sim.totalAnalyzed > 0) {
-    // Confidence
     const confIcon = sim.marketStatus === 'confirmed' ? '🟢' : sim.marketStatus === 'limited' ? '🟡' : '🔴';
     const confLabel = sim.marketStatus === 'confirmed' ? 'Высокая' : sim.marketStatus === 'limited' ? 'Средняя' : 'Низкая';
     L.push(`  ${confIcon} Уверенность: <b>${confLabel}</b>`);
-    L.push(`  Близкие аналоги: ${sim.highCount} | Категория: ${sim.mediumCount}`);
+
+    if (sim.highCount > 0) {
+      L.push(`  Близкие аналоги: ${sim.highCount} | Категория: ${sim.mediumCount}`);
+    } else {
+      L.push(`  Прямых аналогов не найдено. Показаны лидеры категории (${sim.mediumCount} карточек).`);
+    }
   }
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {
-    // Цены
+    // Цены с источником
+    const priceSource = sim?.highCount && sim.highCount > 0
+      ? `${sim.highCount} близких аналогов`
+      : `${sim?.mediumCount ?? wbFiltered.relevantCount} карточек категории`;
     L.push('');
+    L.push(`  Источник: ${priceSource}`);
     L.push('  <b>Цена аналогов:</b>');
     L.push(`  P25: ${fP(wbFiltered.p25Price)} | Медиана: <b>${fP(wbFiltered.medianPrice)}</b> | P75: ${fP(wbFiltered.p75Price)}`);
 

@@ -126,11 +126,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Скоринг похожести через LLM-структуру
-    const similarity = scoreSimilarity(allCards, productStructure, queryPlan, searchQueries);
+    // Скоринг — первый проход
+    let similarity = scoreSimilarity(allCards, productStructure, queryPlan, searchQueries);
 
-    // Для фильтрации и экономики используем только high-similarity карточки
-    // Экономика ТОЛЬКО по high similarity. Medium — для контекста, не для цен.
+    // ─── FALLBACK SEARCH: если мало high-similarity, поиск по coreNoun ──
+    if (similarity.highCards.length < 3 && productStructure?.coreNoun) {
+      const fallbackQueries = [
+        productStructure.coreNoun,
+        productStructure.formFactor ? `${productStructure.coreNoun} ${productStructure.formFactor}` : null,
+        productStructure.productType !== productStructure.coreNoun ? productStructure.productType : null,
+      ].filter((q): q is string => !!q && q.length > 2);
+
+      if (fallbackQueries.length) {
+        console.log(`[step3] Fallback search (high=${similarity.highCards.length}): ${fallbackQueries.join(' | ')}`);
+        const fallbackResults = await Promise.all(fallbackQueries.map(q => searchWbByText(q)));
+        for (const cards of fallbackResults) {
+          if (!cards) continue;
+          for (const card of cards) {
+            if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
+          }
+        }
+        // Пересчитываем скоринг с расширенным пулом
+        similarity = scoreSimilarity(allCards, productStructure, queryPlan, [...searchQueries, ...fallbackQueries]);
+        console.log(`[step3] After fallback: ${allCards.length} cards, high=${similarity.highCards.length}`);
+      }
+    }
+
+    // Экономика ТОЛЬКО по high similarity
     const relevantCards = similarity.highCards;
 
     const wbData: WbSearchResult | null = relevantCards.length > 0 ? {

@@ -244,9 +244,9 @@ ${topCardTitles.slice(0, 10).map((t, i) => `${i + 1}. ${t}`).join('\n')}
 
 // ─── Query Validator ─────────────────────────────────────────────────────────
 
-const JUNK_WORDS = /новинка|опт|горячая|хит|популярн|бестселлер|модн|тренд/i;
+const JUNK_WORDS = /новинка|опт|горячая|хит|популярн|бестселлер|модн|тренд|премиум|professional|super|bright|outdoor|portable|ультра|мощный|дальний свет|4 ядра|четырёхъядерный|четырехъядерный/i;
 const HAS_CHINESE = /[一-鿿]/;
-const HAS_ENGLISH = /[a-zA-Z]{3,}/;
+const HAS_ENGLISH = /[a-zA-Z]{4,}/;
 
 export function validateQueries(queries: Array<{ query: string; purpose: string; priority: number }>): string[] {
   return queries
