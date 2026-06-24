@@ -24,21 +24,22 @@ export interface WbQueryPlan {
   excludeIfOnlyMatch: string[][];
 }
 
-const MODELS = [
-  process.env.CONTENT_MODEL || 'google/gemini-2.5-flash-lite-preview-09-2025',
-  process.env.FALLBACK_MODEL || 'deepseek/deepseek-v4-flash',
-  process.env.SECONDARY_FALLBACK_MODEL || 'meta-llama/llama-4-scout',
+// Поиск и структура: Gemini → Llama → DeepSeek
+const SEARCH_MODELS = [
+  'google/gemini-2.5-flash-lite-preview-09-2025',
+  'meta-llama/llama-4-scout',
+  'deepseek/deepseek-v4-flash',
 ];
 
 function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 }
 
-async function callLlm(prompt: string, systemMsg: string): Promise<any> {
+async function callLlm(prompt: string, systemMsg: string, models?: string[]): Promise<any> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
 
-  for (const model of MODELS) {
+  for (const model of (models ?? SEARCH_MODELS)) {
     try {
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',

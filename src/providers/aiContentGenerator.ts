@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import type { AiContentGenerator, AiContentRequest, AiContentResult } from '../types';
 
+// Тексты: DeepSeek → Gemini → Llama
 const MODELS = [
-  process.env.CONTENT_MODEL || 'google/gemini-2.5-flash-lite-preview-09-2025',
-  process.env.FALLBACK_MODEL || 'deepseek/deepseek-v4-flash',
-  process.env.SECONDARY_FALLBACK_MODEL || 'meta-llama/llama-4-scout',
+  'deepseek/deepseek-v4-flash',
+  'google/gemini-2.5-flash-lite-preview-09-2025',
+  'meta-llama/llama-4-scout',
 ];
 
 const AiResponseSchema = z.object({
