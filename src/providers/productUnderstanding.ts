@@ -388,6 +388,45 @@ JSON: {"matchLevel": "direct_analog|similar|category_only|wrong", "confidence": 
   } catch { return null; }
 }
 
+// ─── LLM Judge Batch (1 вызов на все кандидаты) ──────────────────────────────
+
+export async function judgeCandidateBatch(
+  source: ProductStructure,
+  candidates: Array<{ title: string; price: number; detectedConflicts: string[] }>
+): Promise<JudgeResult[]> {
+  const list = candidates.map((c, i) =>
+    `${i + 1}. "${c.title}" (${c.price}₽)${c.detectedConflicts.length ? ' [конфликты: ' + c.detectedConflicts.join(', ') + ']' : ''}`
+  ).join('\n');
+
+  const prompt = `Оцени ${candidates.length} WB-карточек — являются ли они аналогами товара.
+
+ТОВАР:
+Тип: ${source.productType}
+Объект: ${source.coreObject}
+Аудитория: ${source.audience}
+Обязательные: ${source.requiredAttributes.join(', ')}
+Жёсткие конфликты: ${source.hardConflicts.join(', ')}
+Мягкие конфликты: ${source.softConflicts.join(', ')}
+
+КАНДИДАТЫ:
+${list}
+
+ПРАВИЛА:
+- Сомнение → similar (не direct_analog)
+- Hard conflict → wrong
+- Одно общее слово ≠ direct_analog
+
+Верни JSON массив (по порядку кандидатов):
+[{"matchLevel": "direct_analog|similar|category_only|wrong", "matchedAttributes": [], "missingAttributes": [], "reason": ""}]`;
+
+  try {
+    const result = await callLlm(prompt, 'Ты судья продуктового матчинга. Строго. ТОЛЬКО JSON массив.');
+    if (Array.isArray(result)) return result;
+    if (result?.results) return result.results;
+    return [];
+  } catch { return []; }
+}
+
 // ─── Search Repair Agent ─────────────────────────────────────────────────────
 
 export async function repairSearch(

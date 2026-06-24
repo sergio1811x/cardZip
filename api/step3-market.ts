@@ -9,7 +9,7 @@ import { rankCandidates, mineResults } from '../src/core/wbSimilarity';
 import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
 import { getUserTariffs } from '../src/db/queries/userSettings';
-import { expandQueries, judgeCandidate, validateQueries, repairSearch } from '../src/providers/productUnderstanding';
+import { expandQueries, judgeCandidateBatch, validateQueries, repairSearch } from '../src/providers/productUnderstanding';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
 
@@ -184,33 +184,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ─── Final ranking ───────────────────────────────────────────────────
     const similarity = rankCandidates(allCards, structure, lexicon, pass1Queries);
 
-    // ─── LLM Judge for top-30 (only if structure available) ──────────────
+    // ─── LLM Judge batch (1 вызов на все borderline кандидаты) ──────────
     if (structure && similarity.buckets.directLocalAnalogs.length + similarity.buckets.similarLocalProducts.length > 0) {
       const topCandidates = [
-        ...similarity.buckets.directLocalAnalogs.slice(0, 20),
+        ...similarity.buckets.directLocalAnalogs.slice(0, 15),
         ...similarity.buckets.similarLocalProducts.slice(0, 10),
       ];
+      const borderline = topCandidates.filter(c => c.similarity >= 35 && c.similarity <= 70).slice(0, 10);
 
-      // Judge only borderline candidates (skip obviously high scores)
-      const borderline = topCandidates.filter(c => c.similarity >= 35 && c.similarity <= 70);
-      if (borderline.length > 0 && borderline.length <= 15) {
-        console.log(`[step3] LLM Judge: ${borderline.length} borderline candidates`);
-        for (const card of borderline) {
-          const judgment = await judgeCandidate(structure, {
-            title: card.title, price: card.price,
-            detectedConflicts: [...card.hardConflictsFound, ...card.softConflictsFound],
-          }).catch(() => null);
-          if (judgment) {
-            card.matchLevel = judgment.matchLevel;
-            card.matchedTerms = judgment.matchedAttributes;
-            card.missingTerms = judgment.missingAttributes;
-          }
+      if (borderline.length > 0) {
+        console.log(`[step3] LLM Judge batch: ${borderline.length} candidates`);
+        const judgments = await judgeCandidateBatch(structure, borderline.map(c => ({
+          title: c.title, price: c.price,
+          detectedConflicts: [...c.hardConflictsFound, ...c.softConflictsFound],
+        }))).catch(() => [] as any[]);
+
+        if (judgments.length === borderline.length) {
+          borderline.forEach((card, i) => {
+            if (judgments[i]?.matchLevel) {
+              card.matchLevel = judgments[i].matchLevel;
+              card.matchedTerms = judgments[i].matchedAttributes ?? card.matchedTerms;
+              card.missingTerms = judgments[i].missingAttributes ?? card.missingTerms;
+            }
+          });
+          const all = [...similarity.buckets.directLocalAnalogs, ...similarity.buckets.similarLocalProducts, ...similarity.buckets.categoryOnly];
+          similarity.buckets.directLocalAnalogs = all.filter(c => c.matchLevel === 'direct_analog' && c.marketType !== 'crossborder_market').sort((a, b) => b.similarity - a.similarity);
+          similarity.buckets.similarLocalProducts = all.filter(c => c.matchLevel === 'similar' && c.marketType !== 'crossborder_market').sort((a, b) => b.similarity - a.similarity);
+          similarity.buckets.categoryOnly = all.filter(c => c.matchLevel === 'category_only');
         }
-        // Re-sort local buckets after judge
-        const all = [...similarity.buckets.directLocalAnalogs, ...similarity.buckets.similarLocalProducts, ...similarity.buckets.categoryOnly];
-        similarity.buckets.directLocalAnalogs = all.filter(c => c.matchLevel === 'direct_analog' && c.marketType !== 'crossborder_market').sort((a, b) => b.similarity - a.similarity);
-        similarity.buckets.similarLocalProducts = all.filter(c => c.matchLevel === 'similar' && c.marketType !== 'crossborder_market').sort((a, b) => b.similarity - a.similarity);
-        similarity.buckets.categoryOnly = all.filter(c => c.matchLevel === 'category_only');
       }
     }
 
