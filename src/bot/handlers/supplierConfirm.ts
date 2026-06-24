@@ -172,31 +172,14 @@ interface ExtractedData {
   sizes?: string;
 }
 
-async function extractSupplierData(text: string): Promise<ExtractedData | null> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) return null;
+const EXTRACT_MODELS = [
+  { base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-flash', key: 'OPENROUTER_API_KEY' },
+  { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite-preview-09-2025', key: 'OPENROUTER_API_KEY' },
+  { base: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-4-scout', key: 'OPENROUTER_API_KEY' },
+  { base: 'https://api.fireworks.ai/inference/v1', model: 'accounts/fireworks/models/deepseek-v4-flash', key: 'FIREWORKS_API_KEY' },
+];
 
-  const model = process.env.CONTENT_MODEL || 'deepseek/deepseek-v4-flash';
-
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 500,
-        temperature: 0,
-        messages: [
-          {
-            role: 'system',
-            content: 'Извлеки структурированные данные из ответа китайского поставщика. Верни ТОЛЬКО JSON.',
-          },
-          {
-            role: 'user',
-            content: `Извлеки из текста ответа поставщика:
+const EXTRACT_PROMPT = `Извлеки из текста ответа поставщика:
 - weightKg: вес 1 единицы с упаковкой в кг (число)
 - composition: состав ткани/материала (строка)
 - priceCny: цена в юанях при оптовом заказе (число)
@@ -204,22 +187,35 @@ async function extractSupplierData(text: string): Promise<ExtractedData | null> 
 - productionDays: срок производства в днях (число)
 - sizes: доступные размеры (строка)
 
-Если данных нет — не включай поле.
-Текст: ${text.slice(0, 2000)}
+Если данных нет — не включай поле. Верни ТОЛЬКО JSON.`;
 
-JSON:`,
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
+async function extractSupplierData(text: string): Promise<ExtractedData | null> {
+  for (const cfg of EXTRACT_MODELS) {
+    const apiKey = process.env[cfg.key];
+    if (!apiKey) continue;
 
-    const data = await res.json() as any;
-    const raw = data.choices?.[0]?.message?.content ?? '';
-    const cleaned = raw.replace(/```json\s*/i, '').replace(/```\s*$/i, '').trim();
-    return JSON.parse(cleaned);
-  } catch (e) {
-    console.error('[extract]', e);
-    return null;
+    try {
+      const res = await fetch(`${cfg.base}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: cfg.model, max_tokens: 500, temperature: 0,
+          messages: [
+            { role: 'system', content: 'Извлеки данные из ответа поставщика. ТОЛЬКО JSON.' },
+            { role: 'user', content: `${EXTRACT_PROMPT}\n\nТекст: ${text.slice(0, 2000)}` },
+          ],
+        }),
+        signal: AbortSignal.timeout(12_000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json() as any;
+      const raw = data.choices?.[0]?.message?.content ?? '';
+      const cleaned = raw.replace(/```json\s*/i, '').replace(/```\s*$/i, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (parsed) return parsed;
+    } catch {
+      continue;
+    }
   }
+  return null;
 }

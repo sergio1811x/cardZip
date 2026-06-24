@@ -50,30 +50,36 @@ export async function handleRewrite(ctx: Context) {
   await ctx.answerCbQuery('Переписываю...');
 
   try {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) throw new Error('No API key');
+    const REWRITE_MODELS = [
+      { base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-flash', key: 'OPENROUTER_API_KEY' },
+      { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite-preview-09-2025', key: 'OPENROUTER_API_KEY' },
+      { base: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-4-scout', key: 'OPENROUTER_API_KEY' },
+      { base: 'https://api.fireworks.ai/inference/v1', model: 'accounts/fireworks/models/deepseek-v4-flash', key: 'FIREWORKS_API_KEY' },
+    ];
 
-    const model = process.env.CONTENT_MODEL || 'deepseek/deepseek-v4-flash';
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 3000,
-        temperature: 0.8,
-        messages: [
-          { role: 'system', content: 'Ты копирайтер для Wildberries. Пиши на русском.' },
-          { role: 'user', content: `${prompt}\n\nИСХОДНЫЙ ТЕКСТ:\n${originalText}` },
-        ],
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    const data = await res.json() as any;
-    const rewritten = data.choices?.[0]?.message?.content ?? '';
+    let rewritten = '';
+    for (const cfg of REWRITE_MODELS) {
+      const apiKey = process.env[cfg.key];
+      if (!apiKey) continue;
+      try {
+        const res = await fetch(`${cfg.base}/chat/completions`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: cfg.model, max_tokens: 3000, temperature: 0.8,
+            messages: [
+              { role: 'system', content: 'Ты копирайтер для Wildberries. Пиши на русском.' },
+              { role: 'user', content: `${prompt}\n\nИСХОДНЫЙ ТЕКСТ:\n${originalText}` },
+            ],
+          }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!res.ok) continue;
+        const data = await res.json() as any;
+        rewritten = data.choices?.[0]?.message?.content ?? '';
+        if (rewritten) break;
+      } catch { continue; }
+    }
 
     if (!rewritten) {
       await ctx.reply('❌ Не удалось переписать текст.');
