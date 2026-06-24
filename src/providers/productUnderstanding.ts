@@ -4,7 +4,10 @@ export interface ProductStructure {
   productFamily: string;
   productType: string;
   coreNoun: string;
+  formFactor: string;
   modifiers: string[];
+  powerType: string[];
+  useCase: string[];
   subtype: string | null;
   coreIntent: string;
   mustHaveFeatures: string[];
@@ -123,8 +126,11 @@ export async function understandProduct(raw: {
 {
   "productFamily": "категория (Автотовары, Одежда, Электроника, Дом, Аксессуары, ...)",
   "productType": "полный тип (аккумуляторная минимойка, складной зонт автомат, ...)",
-  "coreNoun": "главное существительное товара (мойка, зонт, леггинсы, ...)",
-  "modifiers": ["ключевые прилагательные (аккумуляторная, портативная, складной, ...)"],
+  "coreNoun": "главное существительное (мойка, зонт, вентилятор, леггинсы, ...)",
+  "formFactor": "форм-фактор (настольный, напольный, ручной, складной, портативный, ...)",
+  "modifiers": ["ключевые прилагательные (аккумуляторная, автоматический, ...)"],
+  "powerType": ["тип питания (USB, аккумулятор, сеть 220V, батарейки, ...)"],
+  "useCase": ["назначение (для дома, для авто, для офиса, для спорта, ...)"],
   "subtype": "подтип или null",
   "coreIntent": "зачем покупают",
   "mustHaveFeatures": ["обязательные признаки аналога"],
@@ -147,7 +153,10 @@ ${info}`;
       productFamily: result.productFamily ?? '',
       productType: result.productType ?? '',
       coreNoun: result.coreNoun ?? '',
+      formFactor: result.formFactor ?? '',
       modifiers: result.modifiers ?? [],
+      powerType: result.powerType ?? [],
+      useCase: result.useCase ?? [],
       subtype: result.subtype ?? null,
       coreIntent: result.coreIntent ?? '',
       mustHaveFeatures: result.mustHaveFeatures ?? [],

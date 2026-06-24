@@ -130,7 +130,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const similarity = scoreSimilarity(allCards, productStructure, queryPlan, searchQueries);
 
     // Для фильтрации и экономики используем только high-similarity карточки
-    const relevantCards = similarity.highCards.length >= 5 ? similarity.highCards : [...similarity.highCards, ...similarity.mediumCards];
+    // Экономика ТОЛЬКО по high similarity. Medium — для контекста, не для цен.
+    const relevantCards = similarity.highCards;
 
     const wbData: WbSearchResult | null = relevantCards.length > 0 ? {
       avgPrice: Math.round(relevantCards.reduce((s, c) => s + c.price, 0) / relevantCards.length),
