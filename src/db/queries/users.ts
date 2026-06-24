@@ -1,8 +1,9 @@
 import { supabase } from '../supabase';
 import type { DbUser } from '../../types';
 
+const FREE_CREDITS = 3;
+
 export async function getOrCreateUser(tgId: number): Promise<DbUser> {
-  // Сначала пробуем найти
   const { data: existing } = await supabase
     .from('users')
     .select('*')
@@ -19,7 +20,6 @@ export async function getOrCreateUser(tgId: number): Promise<DbUser> {
     .single();
 
   if (error || !created) {
-    // Race condition: другой запрос уже создал — читаем ещё раз
     const { data: retry } = await supabase
       .from('users')
       .select('*')
@@ -28,6 +28,15 @@ export async function getOrCreateUser(tgId: number): Promise<DbUser> {
     if (!retry) throw new Error(`Не удалось создать пользователя tg_id=${tgId}`);
     return retry as DbUser;
   }
+
+  // Создаём subscription с бесплатными кредитами
+  await supabase.from('subscriptions').insert({
+    user_id: created.id,
+    credits_remaining: FREE_CREDITS,
+    unlimited_until: null,
+    unlimited_used: 0,
+    unlimited_limit: 0,
+  }).catch(() => {});
 
   return created as DbUser;
 }
