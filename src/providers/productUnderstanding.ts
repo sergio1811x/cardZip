@@ -99,7 +99,105 @@ async function callLlm(prompt: string, systemMsg: string, models?: string[]): Pr
   return null;
 }
 
-// ─── Product Understanding ───────────────────────────────────────────────────
+// ─── Combined: Product Understanding + Query Planning (1 LLM call) ───────────
+
+export async function understandAndPlan(raw: {
+  titleCn: string;
+  titleEn?: string;
+  categoryName?: string;
+  attributes?: Array<{ name: string; value: string }>;
+  description?: string;
+  skus?: Array<{ name: string; price?: number }>;
+}): Promise<{ structure: ProductStructure; plan: WbQueryPlan; validatedQueries: string[] } | null> {
+  let info = `Название (CN): ${raw.titleCn}`;
+  if (raw.titleEn) info += `\nНазвание (EN): ${raw.titleEn}`;
+  if (raw.categoryName) info += `\nКатегория 1688: ${raw.categoryName}`;
+  if (raw.attributes?.length) {
+    info += '\nХарактеристики:';
+    raw.attributes.slice(0, 20).forEach(a => { info += `\n  ${a.name}: ${a.value}`; });
+  }
+  if (raw.description) info += `\nОписание: ${raw.description.slice(0, 300)}`;
+  if (raw.skus?.length) {
+    info += '\nSKU:';
+    raw.skus.slice(0, 8).forEach(s => { info += `\n  ${s.name} — ${s.price ?? '?'} ¥`; });
+  }
+
+  const prompt = `Проанализируй товар и сгенерируй поисковые запросы для Wildberries. Верни ТОЛЬКО JSON:
+{
+  "productFamily": "категория (Автотовары, Одежда, Электроника, ...)",
+  "productType": "полный тип (настольный вентилятор USB, складной зонт автомат, ...)",
+  "coreNoun": "главное существительное (вентилятор, зонт, мойка, ...)",
+  "formFactor": "форм-фактор (настольный, напольный, ручной, складной, портативный, ...)",
+  "modifiers": ["ключевые прилагательные"],
+  "powerType": ["тип питания (USB, аккумулятор, сеть 220V, ...)"],
+  "useCase": ["назначение (для дома, для авто, ...)"],
+  "subtype": "подтип или null",
+  "coreIntent": "зачем покупают",
+  "mustHaveFeatures": ["обязательные признаки аналога"],
+  "importantFeatures": ["важные но не обязательные"],
+  "optionalFeatures": ["второстепенные"],
+  "technicalSpecs": {"ключ": "значение"},
+  "negativeMatches": ["что НЕ является этим товаром (другие форм-факторы, аксессуары, запчасти)"],
+  "kitType": "body_only|basic_kit|full_kit|unknown",
+  "kitContents": ["что в комплекте"],
+  "confidence": 0.0-1.0,
+  "queries": [
+    {"query": "русский запрос 2-4 слова", "purpose": "broad|functional|synonym|technical", "priority": 1-3}
+  ],
+  "requiredConcepts": [["синоним1", "синоним2"]],
+  "bonusConcepts": [["доп.признак"]],
+  "excludeIfOnlyMatch": [["слово без основного товара = мусор"]]
+}
+
+ПРАВИЛА ЗАПРОСОВ:
+- Только русский, 2-4 слова. 5-8 запросов.
+- НЕ: "новинка", "опт", "хит", "premium", китайский, английский.
+- Типы: базовый (категория), функциональный, синоним, технический.
+
+ДАННЫЕ:
+${info}`;
+
+  try {
+    const result = await callLlm(prompt, 'Ты аналитик товаров из Китая + генератор WB-запросов. ТОЛЬКО JSON.');
+    if (!result?.coreNoun) return null;
+
+    const structure: ProductStructure = {
+      productFamily: result.productFamily ?? '',
+      productType: result.productType ?? '',
+      coreNoun: result.coreNoun ?? '',
+      formFactor: result.formFactor ?? '',
+      modifiers: result.modifiers ?? [],
+      powerType: result.powerType ?? [],
+      useCase: result.useCase ?? [],
+      subtype: result.subtype ?? null,
+      coreIntent: result.coreIntent ?? '',
+      mustHaveFeatures: result.mustHaveFeatures ?? [],
+      importantFeatures: result.importantFeatures ?? [],
+      optionalFeatures: result.optionalFeatures ?? [],
+      technicalSpecs: result.technicalSpecs ?? {},
+      negativeMatches: result.negativeMatches ?? [],
+      kitType: result.kitType ?? 'unknown',
+      kitContents: result.kitContents ?? [],
+      confidence: result.confidence ?? 0.5,
+    };
+
+    const plan: WbQueryPlan = {
+      queries: result.queries ?? [],
+      requiredConcepts: result.requiredConcepts ?? [],
+      bonusConcepts: result.bonusConcepts ?? [],
+      excludeIfOnlyMatch: result.excludeIfOnlyMatch ?? [],
+    };
+
+    const validatedQueries = validateQueries(plan.queries);
+
+    return { structure, plan, validatedQueries };
+  } catch (e) {
+    console.error('[understandAndPlan]', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+// ─── Product Understanding (standalone, kept for compatibility) ──────────────
 
 export async function understandProduct(raw: {
   titleCn: string;

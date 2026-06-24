@@ -106,8 +106,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`[step3] Pass 1: ${allCards.length} unique cards from ${textResults.filter(Boolean).length} queries`);
 
-    // ─── ВТОРОЙ ПРОХОД: Query Refiner ──────────────────────────────────
-    if (productStructure && allCards.length > 0) {
+    // ─── ВТОРОЙ ПРОХОД: Query Refiner (только если мало high) ──────────
+    // Предварительный скоринг для проверки
+    const preScore = scoreSimilarity(allCards, productStructure, queryPlan, searchQueries);
+    if (productStructure && preScore.highCards.length < 10 && allCards.length > 0) {
       const topTitles = allCards.slice(0, 20).map(c => c.title);
       const refinedQueries = await refineQueries(productStructure, topTitles).catch(() => [] as string[]);
 

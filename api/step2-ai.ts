@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { aiContentGenerator } from '../src/providers/aiContentGenerator';
-import { understandProduct, planQueries, validateQueries } from '../src/providers/productUnderstanding';
+import { understandAndPlan, validateQueries } from '../src/providers/productUnderstanding';
 import { createStepProgress } from '../src/core/progress';
 import type { AiContentResult } from '../src/types';
 
@@ -46,8 +46,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       characteristics: {}, isFallback: true,
     }));
 
-    // Product Understanding + Query Planning (параллельно с SEO)
-    const productStructure = await understandProduct({
+    // Product Understanding + Query Planning (один LLM вызов)
+    const searchData = await understandAndPlan({
       titleCn: raw.titleCn,
       titleEn: raw.titleEn,
       categoryName: raw.categoryName,
@@ -56,14 +56,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       skus: raw.skus,
     }).catch(() => null);
 
-    let queryPlan = null;
-    let validatedQueries: string[] = [];
-    if (productStructure) {
-      queryPlan = await planQueries(productStructure).catch(() => null);
-      if (queryPlan?.queries) {
-        validatedQueries = validateQueries(queryPlan.queries);
-      }
-    }
+    const productStructure = searchData?.structure ?? null;
+    const queryPlan = searchData?.plan ?? null;
+    const validatedQueries = searchData?.validatedQueries ?? [];
 
     progress?.stop();
 
