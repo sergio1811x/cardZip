@@ -47,6 +47,19 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
+// Auto-cleanup stuck jobs при любом действии юзера
+bot.use(async (ctx, next) => {
+  const userId = (ctx as any).dbUserId as string | undefined;
+  const chatId = ctx.chat?.id;
+  if (userId && chatId) {
+    try {
+      const { cleanupStuckJobs } = require('../lib/jobCleanup');
+      await cleanupStuckJobs(userId, chatId, ctx);
+    } catch {}
+  }
+  return next();
+});
+
 // ─── Команды ──────────────────────────────────────────────────────────────────
 bot.command('start', handleStart);
 bot.command('upgrade', handleUpgrade);

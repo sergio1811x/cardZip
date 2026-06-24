@@ -1,10 +1,9 @@
 import { supabase } from '../db/supabase';
 import { redis } from './redis';
 
-const STUCK_TIMEOUT_MS = 90_000; // 90с — чуть больше 60с лимита Vercel
+const STUCK_TIMEOUT_MS = 75_000; // 75с — чуть больше 60с лимита Vercel
 
-export async function cleanupStuckJobs(userId: string, chatId: number, bot: any): Promise<boolean> {
-  // Ищем jobs в промежуточных статусах старше 3 минут
+export async function cleanupStuckJobs(userId: string, chatId: number, botOrTelegram: any): Promise<boolean> {
   const cutoff = new Date(Date.now() - STUCK_TIMEOUT_MS).toISOString();
 
   const { data: stuckJobs } = await supabase
@@ -17,29 +16,29 @@ export async function cleanupStuckJobs(userId: string, chatId: number, bot: any)
 
   if (!stuckJobs?.length) return false;
 
+  // Определяем telegram API (может быть bot.telegram или ctx.telegram)
+  const tg = botOrTelegram.telegram ?? botOrTelegram;
+
   for (const job of stuckJobs) {
-    // Помечаем как failed
     await supabase.from('jobs').update({
       status: 'failed',
       error: 'timeout',
       finished_at: new Date().toISOString(),
     }).eq('id', job.id);
 
-    // Удаляем прогресс-сообщение
     if (job.tg_message_id) {
-      await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+      await tg.editMessageText(
+        chatId, job.tg_message_id, undefined,
+        '❌ Анализ не завершился из-за таймаута.\n\nПопробуйте ещё раз.\nКредит не списан.'
+      ).catch(() => {
+        tg.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+      });
     }
   }
 
-  // Снимаем processing lock
   if (redis) {
     await redis.del(`processing:${userId}`).catch(() => {});
   }
-
-  // Сообщаем пользователю
-  await bot.telegram.sendMessage(chatId,
-    '❌ Предыдущий анализ не завершился.\n\nПопробуйте ещё раз через минуту.\nКредит не списан.'
-  ).catch(() => {});
 
   return true;
 }
