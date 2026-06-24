@@ -152,11 +152,7 @@ bot.on('text', async (ctx) => {
   const urlMatch = text.match(/https?:\/\/[^\s]*(1688|taobao|tmall|qr\.1688)\.com[^\s]*/);
   if (!urlMatch) {
     await ctx.reply(
-      'Пришли ссылку на товар с 1688 или Taobao.\n\n' +
-      'Примеры:\n' +
-      '<code>https://detail.1688.com/offer/XXX.html</code>\n' +
-      '<code>https://item.taobao.com/item.htm?id=XXX</code>\n' +
-      'Также поддерживаются короткие ссылки из приложения 1688.',
+      'Вставьте ссылку на товар из Китая — бот разберёт за ~60 секунд.\n\nПоддерживаются: 1688, Taobao, Tmall.',
       { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
     );
     return;
