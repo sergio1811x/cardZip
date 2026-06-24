@@ -7,6 +7,7 @@ import { getStatus } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { supabase } from '../src/db/supabase';
 import { redis } from '../src/lib/redis';
+import { checkLinkLimit, checkCallbackLimit, checkGlobalLimit } from '../src/bot/middleware/rateLimit';
 
 export const config = { maxDuration: 10 };
 
@@ -65,6 +66,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (urlMatch && msg?.from?.id && msg?.chat?.id) {
     try {
       const dbUser = await getOrCreateUser(msg.from.id);
+
+      // Rate limit: 1 ссылка в 30с
+      const linkRL = await checkLinkLimit(dbUser.id);
+      if (!linkRL.allowed) {
+        await bot.telegram.sendMessage(msg.chat.id, `⏳ Подождите ${linkRL.retryAfterSec ?? 30}с перед следующим разбором.`);
+        return res.status(200).json({ ok: true });
+      }
+
       const status = await getStatus(dbUser.id);
       if (!status.canGenerate) {
         await track(dbUser.id, 'upgrade_shown');

@@ -1,40 +1,39 @@
-import type { Context, MiddlewareFn } from 'telegraf';
 import { redis } from '../../lib/redis';
-import { AppError } from '../../lib/errors';
 
-const FREE_WINDOW_SECONDS = 10;
+interface RateLimitResult {
+  allowed: boolean;
+  retryAfterSec?: number;
+}
 
-/**
- * Rate limit для free-пользователей: 1 запрос / 10 секунд.
- * Paid-пользователи получают окно 1 сек для защиты от abuse.
- */
-export function rateLimitMiddleware(isPaid: boolean): MiddlewareFn<Context> {
-  return async (ctx, next) => {
-    const userId = (ctx as any).dbUserId as string | undefined;
-    if (!userId || !redis) return next();
+async function checkLimit(key: string, maxHits: number, windowSec: number): Promise<RateLimitResult> {
+  if (!redis) return { allowed: true };
 
-    const window = isPaid ? 1 : FREE_WINDOW_SECONDS;
-    const key = `rl:${userId}`;
-
-    let current: number | null = null;
-    try {
-      current = await redis.get<number>(key);
-    } catch {
-      return next();
+  try {
+    const current = await redis.incr(key);
+    if (current === 1) {
+      await redis.expire(key, windowSec);
     }
-
-    if (current !== null && current !== undefined) {
-      throw new AppError(
-        'RATE_LIMITED',
-        `Rate limit: userId=${userId}`,
-        `⏳ Подожди ${window} секунд перед следующим запросом.`
-      );
+    if (current > maxHits) {
+      const ttl = await redis.ttl(key);
+      return { allowed: false, retryAfterSec: ttl > 0 ? ttl : windowSec };
     }
+    return { allowed: true };
+  } catch {
+    return { allowed: true };
+  }
+}
 
-    try {
-      await redis.set(key, 1, { ex: window });
-    } catch {}
+// 1 ссылка в 30с
+export async function checkLinkLimit(userId: string): Promise<RateLimitResult> {
+  return checkLimit(`rl:link:${userId}`, 1, 30);
+}
 
-    return next();
-  };
+// 5 callback нажатий в 10с
+export async function checkCallbackLimit(userId: string): Promise<RateLimitResult> {
+  return checkLimit(`rl:cb:${userId}`, 5, 10);
+}
+
+// Глобальный: 10 любых действий в минуту
+export async function checkGlobalLimit(userId: string): Promise<RateLimitResult> {
+  return checkLimit(`rl:global:${userId}`, 10, 60);
 }

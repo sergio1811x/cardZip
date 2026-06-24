@@ -6,10 +6,8 @@ import { handleLink } from './handlers/link';
 import { handleUpgrade, handlePayTest, handlePayPack10, handlePayPack30, handlePayWeek, handleSuccessPayment } from './handlers/upgrade';
 import { handleLast } from './handlers/last';
 import { handleAdmin } from './handlers/admin';
-import { productImporter } from '../providers/productImporter';
 import { isAppError } from '../lib/errors';
-import { getStatus } from '../services/subscriptionService';
-import { rateLimitMiddleware } from './middleware/rateLimit';
+import { checkCallbackLimit, checkGlobalLimit } from './middleware/rateLimit';
 import { handleSupplierQuestions, handleSupplierQuestionsLang } from './handlers/supplierQuestions';
 import { handleTariffsMenu, handleEditTariff, handleResetTariffs, handleTariffInput, getPendingEdit } from './handlers/tariffs';
 import { handleRewrite } from './handlers/rewrite';
@@ -25,6 +23,28 @@ export const bot = new Telegraf(token);
 
 // ─── Глобальные middleware ─────────────────────────────────────────────────────
 bot.use(userMiddleware);
+
+// Rate limit для callbacks
+bot.use(async (ctx, next) => {
+  if (!ctx.callbackQuery) return next();
+  const userId = (ctx as any).dbUserId as string | undefined;
+  if (!userId) return next();
+
+  const [cbRL, globalRL] = await Promise.all([
+    checkCallbackLimit(userId),
+    checkGlobalLimit(userId),
+  ]);
+
+  if (!cbRL.allowed) {
+    await ctx.answerCbQuery('⏳ Слишком быстро. Подождите пару секунд.').catch(() => {});
+    return;
+  }
+  if (!globalRL.allowed) {
+    await ctx.answerCbQuery('⏳ Слишком много действий. Подождите минуту.').catch(() => {});
+    return;
+  }
+  return next();
+});
 
 // ─── Команды ──────────────────────────────────────────────────────────────────
 bot.command('start', handleStart);
@@ -139,17 +159,6 @@ bot.on('text', async (ctx) => {
   if (!userId) {
     await ctx.reply('❌ Не удалось определить пользователя. Попробуй /start');
     return;
-  }
-
-  try {
-    const status = await getStatus(userId);
-    const isPaid = status.plan !== 'free';
-    await rateLimitMiddleware(isPaid)(ctx, async () => {});
-  } catch (e) {
-    if (isAppError(e) && e.code === 'RATE_LIMITED') {
-      await ctx.reply(e.userMessage);
-      return;
-    }
   }
 
   return handleLink(ctx, urlMatch[0]);
