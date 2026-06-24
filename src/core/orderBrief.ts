@@ -21,7 +21,7 @@ export function formatOrderBrief(
   L.push('# ТЗ для байера / карго');
   L.push('');
   L.push(`**Дата:** ${new Date().toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' })}`);
-  L.push(`**Площадка:** ${product.platform.toUpperCase()} · ${PLATFORM_STATUS[product.platform] ?? product.platform}`);
+  L.push(`**Площадка:** ${(product.platform ?? '1688').toUpperCase()} · ${PLATFORM_STATUS[product.platform ?? '1688'] ?? product.platform ?? '1688'}`);
   L.push(`**Бот:** @cardzip_bot`);
   L.push('');
 
