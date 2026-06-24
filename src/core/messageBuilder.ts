@@ -337,7 +337,9 @@ export function buildMessage3(status: SubscriptionStatus): {
 
   if (status.plan === 'free') {
     if (status.creditsRemaining > 0) {
-      text = `🎁 Осталось: <b>${status.creditsRemaining} из ${status.creditsTotal}</b> бесплатных разборов.`;
+      text = status.isTrial
+        ? `🎁 Осталось: <b>${status.creditsRemaining}</b> бесплатных анализов.`
+        : `🎁 Осталось: <b>${status.creditsRemaining}</b> анализов.`;
     } else {
       text = '🔎 Бесплатные разборы использованы.';
     }

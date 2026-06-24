@@ -30,13 +30,14 @@ export async function getOrCreateUser(tgId: number): Promise<DbUser> {
   }
 
   // Создаём subscription с бесплатными кредитами
-  await supabase.from('subscriptions').insert({
+  await supabase.from('subscriptions').upsert({
     user_id: created.id,
     credits_remaining: FREE_CREDITS,
+    is_trial: true,
     unlimited_until: null,
     unlimited_used: 0,
     unlimited_limit: 0,
-  }).catch(() => {});
+  }, { onConflict: 'user_id' });
 
   return created as DbUser;
 }

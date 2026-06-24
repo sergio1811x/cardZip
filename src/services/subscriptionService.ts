@@ -14,34 +14,34 @@ export async function getStatus(userId: string): Promise<SubscriptionStatus> {
   const sub = await getSub(userId);
 
   if (!sub) {
-    // Нет записи — новый юзер без subscription (не должно быть, но fallback)
-    return { plan: 'free', creditsRemaining: 0, creditsTotal: 0, canGenerate: false };
+    return { plan: 'free', creditsRemaining: 0, creditsTotal: 0, canGenerate: false, isTrial: true };
   }
 
   const creditsRemaining = (sub.credits_remaining as number) ?? 0;
+  const isTrial = (sub.is_trial as boolean) ?? false;
   const unlimitedUntil = sub.unlimited_until ? new Date(sub.unlimited_until as string) : null;
   const unlimitedUsed = (sub.unlimited_used as number) ?? 0;
   const unlimitedLimit = (sub.unlimited_limit as number) ?? 0;
   const unlimitedActive = unlimitedUntil ? unlimitedUntil > new Date() : false;
   const unlimitedRemaining = unlimitedActive ? Math.max(0, unlimitedLimit - unlimitedUsed) : 0;
 
-  // Безлимит активен
   if (unlimitedActive && unlimitedRemaining > 0) {
     return {
       plan: 'week',
       creditsRemaining: unlimitedRemaining,
       creditsTotal: unlimitedLimit,
       canGenerate: true,
+      isTrial: false,
       activeUntil: unlimitedUntil ?? undefined,
     };
   }
 
-  // Кредиты
   return {
     plan: creditsRemaining > 0 ? 'pack10' : 'free',
     creditsRemaining,
     creditsTotal: creditsRemaining,
     canGenerate: creditsRemaining > 0,
+    isTrial,
   };
 }
 
@@ -59,9 +59,13 @@ export async function consumeCredit(userId: string): Promise<void> {
       .update({ unlimited_used: unlimitedUsed + 1 })
       .eq('user_id', userId);
   } else if ((sub.credits_remaining as number) > 0) {
-    await supabase.from('subscriptions')
-      .update({ credits_remaining: (sub.credits_remaining as number) - 1 })
-      .eq('user_id', userId);
+    const newRemaining = (sub.credits_remaining as number) - 1;
+    const update: any = { credits_remaining: newRemaining };
+    // Если триал и кредиты закончились — снимаем триал
+    if (newRemaining <= 0 && sub.is_trial) {
+      update.is_trial = false;
+    }
+    await supabase.from('subscriptions').update(update).eq('user_id', userId);
   }
 }
 

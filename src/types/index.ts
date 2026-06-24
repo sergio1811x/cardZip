@@ -274,6 +274,7 @@ export interface SubscriptionStatus {
   creditsRemaining: number;
   creditsTotal: number;
   canGenerate: boolean;
+  isTrial: boolean;
   activeUntil?: Date;
 }
 
