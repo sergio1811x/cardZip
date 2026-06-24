@@ -259,7 +259,8 @@ export function buildMessage2(product: ProductWithContent, jobId: string): {
   text: string;
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
 } {
-  const { riskFlags, budgets, economics, seoContent } = product;
+  const riskFlags = product.riskFlags ?? { hasBrand: false, isElectrical: false, isChildren: false, isCosmetic: false, isFood: false, isMedical: false, supplierOrdersLow: false, supplierTypeUnknown: false, weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: false };
+  const { budgets, economics, seoContent } = product;
   const L: string[] = [];
   const wm = economics.weightMissing;
 

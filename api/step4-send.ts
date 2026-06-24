@@ -42,9 +42,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, chatId, job.tg_message_id, 'send')
       : null;
 
+    const safeRiskFlags = product.riskFlags ?? { hasBrand: false, isElectrical: false, isChildren: false, isCosmetic: false, isFood: false, isMedical: false, supplierOrdersLow: false, supplierTypeUnknown: false, weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: false };
+
     const [seoText, briefText, zipBuffer, freshStatus] = await Promise.all([
-      Promise.resolve(formatSeoText(product, product.seoContent, product.riskFlags)),
-      Promise.resolve(formatOrderBrief(product, product.seoContent, product.economics, product.riskFlags, job.input_url, product.budgets, product.conclusion)),
+      Promise.resolve(formatSeoText(product, product.seoContent, safeRiskFlags)),
+      Promise.resolve(formatOrderBrief(product, product.seoContent, product.economics, safeRiskFlags, job.input_url, product.budgets, product.conclusion)),
       result.imageUrls?.length
         ? zipBuilder.buildFromUrls(result.imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null as Buffer | null)
         : Promise.resolve(null as Buffer | null),
