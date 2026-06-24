@@ -3,14 +3,7 @@ import type { Plan, SubscriptionStatus } from '../types';
 
 const FREE_LIMIT = 3;
 
-const PLAN_CREDITS: Record<string, number> = {
-  pack10: 10,
-  pack30: 30,
-  week: 50,
-};
-
-// Считаем использованные кредиты по завершённым jobs
-async function countUsedCredits(userId: string): Promise<number> {
+async function countFreeUsed(userId: string): Promise<number> {
   const { count } = await supabase
     .from('jobs')
     .select('*', { count: 'exact', head: true })
@@ -19,7 +12,6 @@ async function countUsedCredits(userId: string): Promise<number> {
   return count ?? 0;
 }
 
-// Получаем подписку
 async function getSub(userId: string) {
   const { data } = await supabase
     .from('subscriptions')
@@ -31,10 +23,9 @@ async function getSub(userId: string) {
 
 export async function getStatus(userId: string): Promise<SubscriptionStatus> {
   const sub = await getSub(userId);
-  const plan: Plan = (sub?.plan as Plan) ?? 'free';
-  const used = await countUsedCredits(userId);
 
-  if (plan === 'free') {
+  if (!sub) {
+    const used = await countFreeUsed(userId);
     return {
       plan: 'free',
       creditsRemaining: Math.max(0, FREE_LIMIT - used),
@@ -43,43 +34,42 @@ export async function getStatus(userId: string): Promise<SubscriptionStatus> {
     };
   }
 
-  // Пакет кредитов
-  if (plan === 'pack10' || plan === 'pack30') {
-    const totalCredits = (sub?.credits_total as number) ?? PLAN_CREDITS[plan] ?? 0;
-    const creditsUsedSincePurchase = (sub?.credits_used as number) ?? 0;
-    const remaining = Math.max(0, totalCredits - creditsUsedSincePurchase);
-    return {
-      plan,
-      creditsRemaining: remaining,
-      creditsTotal: totalCredits,
-      canGenerate: remaining > 0,
-    };
-  }
+  const creditsRemaining = (sub.credits_remaining as number) ?? 0;
+  const unlimitedUntil = sub.unlimited_until ? new Date(sub.unlimited_until as string) : null;
+  const unlimitedUsed = (sub.unlimited_used as number) ?? 0;
+  const unlimitedLimit = (sub.unlimited_limit as number) ?? 0;
+  const unlimitedActive = unlimitedUntil ? unlimitedUntil > new Date() : false;
+  const unlimitedRemaining = unlimitedActive ? Math.max(0, unlimitedLimit - unlimitedUsed) : 0;
 
-  // Неделя безлимит
-  if (plan === 'week') {
-    const activeUntil = sub?.active_until ? new Date(sub.active_until) : null;
-    const isActive = activeUntil ? activeUntil > new Date() : false;
-    const weekCreditsUsed = (sub?.credits_used as number) ?? 0;
-    const remaining = isActive ? Math.max(0, 50 - weekCreditsUsed) : 0;
+  // Безлимит активен и не исчерпан
+  if (unlimitedActive && unlimitedRemaining > 0) {
     return {
       plan: 'week',
-      creditsRemaining: remaining,
-      creditsTotal: 50,
-      canGenerate: isActive && remaining > 0,
-      activeUntil: activeUntil ?? undefined,
+      creditsRemaining: unlimitedRemaining,
+      creditsTotal: unlimitedLimit,
+      canGenerate: true,
+      activeUntil: unlimitedUntil ?? undefined,
     };
   }
 
-  // Fallback — старые планы seller/business
-  const activeUntil = sub?.active_until ? new Date(sub.active_until) : null;
-  const isActive = activeUntil ? activeUntil > new Date() : false;
+  // Кредиты
+  if (creditsRemaining > 0) {
+    return {
+      plan: 'pack10',
+      creditsRemaining,
+      creditsTotal: creditsRemaining,
+      canGenerate: true,
+    };
+  }
+
+  // Бесплатные
+  const used = await countFreeUsed(userId);
+  const freeRemaining = Math.max(0, FREE_LIMIT - used);
   return {
-    plan,
-    creditsRemaining: isActive ? 999 : 0,
-    creditsTotal: 999,
-    canGenerate: isActive,
-    activeUntil: activeUntil ?? undefined,
+    plan: 'free',
+    creditsRemaining: freeRemaining,
+    creditsTotal: FREE_LIMIT,
+    canGenerate: freeRemaining > 0,
   };
 }
 
@@ -87,36 +77,82 @@ export async function consumeCredit(userId: string): Promise<void> {
   const sub = await getSub(userId);
   if (!sub) return;
 
-  const plan = sub.plan as Plan;
-  if (plan === 'free') return; // free считается по jobs
+  const unlimitedUntil = sub.unlimited_until ? new Date(sub.unlimited_until as string) : null;
+  const unlimitedActive = unlimitedUntil ? unlimitedUntil > new Date() : false;
+  const unlimitedUsed = (sub.unlimited_used as number) ?? 0;
+  const unlimitedLimit = (sub.unlimited_limit as number) ?? 0;
 
-  await supabase
-    .from('subscriptions')
-    .update({ credits_used: (sub.credits_used ?? 0) + 1 })
-    .eq('user_id', userId);
-}
-
-export async function activate(userId: string, plan: Plan, creditsOverride?: number): Promise<void> {
-  const totalCredits = creditsOverride ?? PLAN_CREDITS[plan] ?? 0;
-  const now = new Date();
-
-  let activeUntil: Date | null = null;
-  if (plan === 'week') {
-    activeUntil = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  if (unlimitedActive && unlimitedUsed < unlimitedLimit) {
+    // Тратим из безлимита
+    await supabase
+      .from('subscriptions')
+      .update({ unlimited_used: unlimitedUsed + 1 })
+      .eq('user_id', userId);
+  } else if ((sub.credits_remaining as number) > 0) {
+    // Тратим кредит
+    await supabase
+      .from('subscriptions')
+      .update({ credits_remaining: (sub.credits_remaining as number) - 1 })
+      .eq('user_id', userId);
   }
-
-  await supabase.from('subscriptions').upsert(
-    {
-      user_id: userId,
-      plan,
-      credits_total: totalCredits,
-      credits_used: 0,
-      active_until: activeUntil?.toISOString() ?? null,
-      updated_at: now.toISOString(),
-    },
-    { onConflict: 'user_id' }
-  );
 }
 
-// Для обратной совместимости
-export { getStatus as default };
+export async function addCredits(userId: string, amount: number): Promise<void> {
+  const sub = await getSub(userId);
+
+  if (sub) {
+    await supabase
+      .from('subscriptions')
+      .update({
+        credits_remaining: ((sub.credits_remaining as number) ?? 0) + amount,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId);
+  } else {
+    await supabase.from('subscriptions').insert({
+      user_id: userId,
+      credits_remaining: amount,
+      unlimited_until: null,
+      unlimited_used: 0,
+      unlimited_limit: 0,
+      updated_at: new Date().toISOString(),
+    });
+  }
+}
+
+export async function activateUnlimited(userId: string, days: number, limit: number): Promise<void> {
+  const until = new Date();
+  until.setDate(until.getDate() + days);
+
+  const sub = await getSub(userId);
+  if (sub) {
+    await supabase
+      .from('subscriptions')
+      .update({
+        unlimited_until: until.toISOString(),
+        unlimited_used: 0,
+        unlimited_limit: limit,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId);
+  } else {
+    await supabase.from('subscriptions').insert({
+      user_id: userId,
+      credits_remaining: 0,
+      unlimited_until: until.toISOString(),
+      unlimited_used: 0,
+      unlimited_limit: limit,
+      updated_at: new Date().toISOString(),
+    });
+  }
+}
+
+// Legacy compat
+export async function activate(userId: string, plan: Plan, creditsOverride?: number): Promise<void> {
+  if (plan === 'week') {
+    await activateUnlimited(userId, 7, 200);
+  } else {
+    const amount = creditsOverride ?? (plan === 'pack30' ? 30 : 10);
+    await addCredits(userId, amount);
+  }
+}
