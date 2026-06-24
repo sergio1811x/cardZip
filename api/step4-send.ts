@@ -12,7 +12,7 @@ import { zipBuilder } from '../src/core/zipBuilder';
 import { createStepProgress } from '../src/core/progress';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
-import { acquireStepLock } from '../src/lib/stepLock';
+import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import { redis } from '../src/lib/redis';
 import type { ProductWithContent } from '../src/types';
 
@@ -28,6 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     if (!await acquireStepLock('step4', jobId)) return res.status(200).json({ ok: true, skip: true });
+    await extendProcessingLock(job.user_id);
 
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
     if (!job || job.status !== 'done' || job.sent_to_telegram) return res.status(200).json({ ok: true, skip: true });

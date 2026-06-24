@@ -5,7 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { aiContentGenerator } from '../src/providers/aiContentGenerator';
 import { analyzeProduct } from '../src/providers/productUnderstanding';
 import { createStepProgress } from '../src/core/progress';
-import { acquireStepLock } from '../src/lib/stepLock';
+import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import type { AiContentResult } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -22,6 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
     if (!job || job.status !== 'elim_done') return res.status(200).json({ ok: true, skip: true });
     if (!await acquireStepLock('step2', jobId)) return res.status(200).json({ ok: true, skip: true });
+    await extendProcessingLock(job.user_id);
 
     await supabase.from('jobs').update({ status: 'ai_processing' }).eq('id', jobId);
 

@@ -1,7 +1,7 @@
 import { supabase } from '../db/supabase';
 import { redis } from './redis';
 
-const STUCK_TIMEOUT_MS = 180_000; // 3 минуты
+const STUCK_TIMEOUT_MS = 90_000; // 90с — чуть больше 60с лимита Vercel
 
 export async function cleanupStuckJobs(userId: string, chatId: number, bot: any): Promise<boolean> {
   // Ищем jobs в промежуточных статусах старше 3 минут

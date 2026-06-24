@@ -127,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       const job = await createJob(dbUser.id, msg.chat.id, progressMsg.message_id, urlMatch[0]);
-      if (redis) await redis.set(`processing:${dbUser.id}`, job.id, { ex: 180 });
+      if (redis) await redis.set(`processing:${dbUser.id}`, job.id, { ex: 75 });
       await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
 
       const host = req.headers.host || 'card-zip.vercel.app';
