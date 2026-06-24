@@ -26,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!job || job.status !== 'pending') return res.status(200).json({ ok: true, skip: true });
 
     // Обновляем статус
-    await supabase.from('jobs').update({ status: 'elim', started_at: new Date().toISOString() }).eq('id', jobId);
+    await supabase.from('jobs').update({ status: 'elim', started_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', jobId);
 
     // Прогресс с анимацией
     const progress = job.tg_message_id

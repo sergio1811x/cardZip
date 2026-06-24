@@ -88,7 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!await acquireStepLock('step3', jobId)) return res.status(200).json({ ok: true, skip: true });
     await extendProcessingLock(job.user_id);
 
-    await supabase.from('jobs').update({ status: 'market_processing' }).eq('id', jobId);
+    await supabase.from('jobs').update({ status: 'market_processing', updated_at: new Date().toISOString() }).eq('id', jobId);
 
     const raw = (job.result_json as any).rawProduct;
     const seoContent = (job.result_json as any).seoContent;
