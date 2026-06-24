@@ -5,6 +5,8 @@ import { supabase } from '../src/db/supabase';
 import { productImporter } from '../src/providers/productImporter';
 import { normalizeCnText } from '../src/core/cnNormalize';
 import { createStepProgress } from '../src/core/progress';
+import { findProductByKey } from '../src/db/queries/products';
+import { buildCacheKey } from '../src/lib/cache';
 
 export const config = { maxDuration: 60 };
 
@@ -40,6 +42,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (rawProduct.description) rawProduct.description = normalizeCnText(rawProduct.description);
 
     console.log(`[step1] Elim: ${rawProduct.titleCn?.slice(0, 30)} | imgs:${rawProduct.images.length} | skus:${rawProduct.skus?.length ?? 0}`);
+
+    // Кэш-проверка: если товар уже разбирали — сразу в step4
+    const cacheKey = buildCacheKey(rawProduct.productId, rawProduct.titleCn, rawProduct.mainImageUrl);
+    const cached = await findProductByKey(cacheKey);
+    if (cached?.data_json) {
+      console.log(`[step1] Cache hit: ${cacheKey.slice(0, 12)}`);
+      await supabase.from('jobs').update({
+        status: 'done',
+        result_json: {
+          rawProduct: cached.data_json,
+          imageUrls: rawProduct.images,
+          product: cached.data_json,
+        },
+        finished_at: new Date().toISOString(),
+      }).eq('id', jobId);
+
+      // Сразу в step4-send
+      const host = req.headers.host || 'card-zip.vercel.app';
+      for (let i = 0; i < 2; i++) {
+        try {
+          const ac = new AbortController();
+          setTimeout(() => ac.abort(), 4000);
+          await fetch(`https://${host}/api/step4-send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jobId }),
+            signal: ac.signal,
+          });
+          break;
+        } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
+      }
+      res.status(200).json({ ok: true, cached: true });
+      return;
+    }
 
     const rawForJob = {
       productId: rawProduct.productId,

@@ -10,6 +10,8 @@ import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
 import { zipBuilder } from '../src/core/zipBuilder';
 import { createStepProgress } from '../src/core/progress';
+import { upsertProduct } from '../src/db/queries/products';
+import { buildCacheKey } from '../src/lib/cache';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -78,6 +80,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...keyboard });
 
     await markSent(job.id);
+
+    // Кэшируем для быстрого повторного доступа
+    const cacheKey = buildCacheKey(product.productId, product.titleCn, product.mainImageUrl);
+    upsertProduct(job.user_id, { ...product, cacheKey }).catch((e) =>
+      console.warn('[step4] Cache save failed:', e instanceof Error ? e.message : e)
+    );
+
     console.log(`[step4] Job ${job.id} sent`);
 
     res.status(200).json({ ok: true });
