@@ -295,7 +295,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (failedJob.tg_message_id) {
           await bot.telegram.editMessageText(
             failedJob.tg_chat_id, failedJob.tg_message_id, undefined,
-            '❌ Не удалось завершить анализ. Попробуйте ещё раз через минуту.'
+            '❌ Не удалось завершить анализ.\n\nПопробуйте ещё раз через минуту.\nКредит не списан.'
           ).catch(() => {});
         }
         // Снимаем processing lock

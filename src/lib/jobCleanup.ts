@@ -38,7 +38,7 @@ export async function cleanupStuckJobs(userId: string, chatId: number, bot: any)
 
   // Сообщаем пользователю
   await bot.telegram.sendMessage(chatId,
-    '⚠️ Предыдущий анализ не завершился из-за таймаута. Попробуйте отправить ссылку ещё раз.'
+    '❌ Предыдущий анализ не завершился.\n\nПопробуйте ещё раз через минуту.\nКредит не списан.'
   ).catch(() => {});
 
   return true;
