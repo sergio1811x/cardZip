@@ -131,6 +131,34 @@ function scoreCandidate(
   // Soft conflict penalty
   if (softFound.length > 0) score -= 10;
 
+  // ─── SUBTYPE / FORM CONFLICTS ──────────────────────────────────────────
+  // hardFormConflicts → cannot be direct_analog
+  const hardFormFound = findMatches(text, structure.hardFormConflicts ?? []);
+  if (hardFormFound.length > 0) {
+    return { score: 0, matchLevel: 'wrong', matched, missing, hardFound: hardFormFound, softFound };
+  }
+
+  // softFormConflicts → max similar, not direct
+  const softFormFound = findMatches(text, structure.softFormConflicts ?? []);
+  let hasSubTypeConflict = softFormFound.length > 0;
+
+  // lengthClass conflict: short vs long
+  if (structure.lengthClass && structure.lengthClass !== 'unknown') {
+    const longMarkers = ['длинн', 'long', 'travel', 'для документов', 'органайзер', 'на молнии'];
+    const shortMarkers = ['коротк', 'компактн', 'мини', 'small', 'bifold'];
+    if (structure.lengthClass === 'short' && hasAny(text, longMarkers)) hasSubTypeConflict = true;
+    if (structure.lengthClass === 'long' && hasAny(text, shortMarkers)) hasSubTypeConflict = true;
+  }
+
+  // shapeType conflict
+  if (structure.shapeType && structure.shapeType !== 'unknown') {
+    const clutchMarkers = ['клатч', 'clutch', 'с ремешком', 'на запястье'];
+    const docMarkers = ['для документов', 'для паспорта', 'travel', 'органайзер'];
+    if (['bifold', 'trifold', 'short'].includes(structure.shapeType)) {
+      if (hasAny(text, [...clutchMarkers, ...docMarkers])) hasSubTypeConflict = true;
+    }
+  }
+
   // Query type bonus
   if (queryInfo?.queryType === 'exact') score += 5;
   else if (queryInfo?.queryType === 'synonym') score += 3;
@@ -141,10 +169,10 @@ function scoreCandidate(
   const requiredMet = missing.length === 0 || (structure.requiredAttributes.length > 0 && missing.length < structure.requiredAttributes.length);
   let matchLevel: MatchLevel;
 
-  if (score >= 60 && requiredMet && softFound.length === 0) {
+  if (score >= 60 && requiredMet && softFound.length === 0 && !hasSubTypeConflict) {
     matchLevel = 'direct_analog';
-  } else if (score >= 40 && coreMatch || altMatch) {
-    matchLevel = softFound.length > 0 ? 'similar' : (requiredMet ? 'direct_analog' : 'similar');
+  } else if (score >= 40 && (coreMatch || altMatch)) {
+    matchLevel = hasSubTypeConflict || softFound.length > 0 ? 'similar' : (requiredMet ? 'direct_analog' : 'similar');
   } else if (score >= 20) {
     matchLevel = 'category_only';
   } else {

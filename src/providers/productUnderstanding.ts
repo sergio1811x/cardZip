@@ -20,6 +20,13 @@ export interface ProductStructure {
   requiredAttributes: string[];
   importantAttributes: string[];
   optionalAttributes: string[];
+  subType: string;
+  lengthClass: string;
+  shapeType: string;
+  closureType: string;
+  visualStyle: string[];
+  hardFormConflicts: string[];
+  softFormConflicts: string[];
   hardConflicts: string[];
   softConflicts: string[];
   compatibleAlternatives: string[];
@@ -156,8 +163,15 @@ export async function analyzeProduct(raw: {
     "requiredAttributes": ["обязательные признаки для прямого аналога"],
     "importantAttributes": ["важные но не обязательные"],
     "optionalAttributes": ["второстепенные"],
-    "hardConflicts": ["если найдено → товар точно НЕ аналог (женский кошелек, сумка, клатч, ...)"],
-    "softConflicts": ["похожие но другие товары (кардхолдер, визитница, ...)"],
+    "subType": "узкий подтип (короткий складной кошелек, настольный USB вентилятор, ...)",
+    "lengthClass": "short|long|compact|full_size|unknown",
+    "shapeType": "форма (bifold, trifold, long_wallet, clutch, cardholder, ...)",
+    "closureType": "тип застёжки (button, zipper, magnet, none, unknown)",
+    "visualStyle": ["визуальный стиль (мультяшное тиснение, минимализм, ...)"],
+    "hardFormConflicts": ["жёсткие конфликты по подтипу/форме (женский клатч, сумка, ...)"],
+    "softFormConflicts": ["мягкие конфликты подтипа (длинное портмоне, кошелек для документов, органайзер, travel wallet, кошелек с ремешком, ...)"],
+    "hardConflicts": ["если найдено → товар точно НЕ аналог"],
+    "softConflicts": ["похожие но другие товары"],
     "compatibleAlternatives": ["допустимые рыночные альтернативы (портмоне мужское, бумажник мужской, ...)"],
     "categoryHypotheses": ["гипотезы WB-категорий"],
     "searchIntent": "что ищет покупатель на WB",
@@ -219,6 +233,13 @@ ${info}`;
       requiredAttributes: s.requiredAttributes ?? [],
       importantAttributes: s.importantAttributes ?? [],
       optionalAttributes: s.optionalAttributes ?? [],
+      subType: s.subType ?? '',
+      lengthClass: s.lengthClass ?? 'unknown',
+      shapeType: s.shapeType ?? 'unknown',
+      closureType: s.closureType ?? 'unknown',
+      visualStyle: s.visualStyle ?? [],
+      hardFormConflicts: s.hardFormConflicts ?? [],
+      softFormConflicts: s.softFormConflicts ?? [],
       hardConflicts: s.hardConflicts ?? [],
       softConflicts: s.softConflicts ?? [],
       compatibleAlternatives: s.compatibleAlternatives ?? [],
