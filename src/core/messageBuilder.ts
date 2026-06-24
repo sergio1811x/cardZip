@@ -86,9 +86,11 @@ export function buildMessage1(product: ProductWithContent): string {
   L.push('🔍 <b>Рынок WB — текстовая выборка</b>');
 
   if (sim) {
-    if (sim.queries?.length) {
+    // Показываем только русские запросы
+    const ruQueries = (sim.queries ?? []).filter((q: string) => /[а-яё]/i.test(q));
+    if (ruQueries.length) {
       L.push('  Запросы:');
-      sim.queries.slice(0, 3).forEach((q: string) => L.push(`  • ${esc(q)}`));
+      ruQueries.slice(0, 3).forEach((q: string) => L.push(`  • ${esc(q)}`));
     }
     L.push(`  Проанализировано: ${sim.totalAnalyzed} карточек`);
     if (sim.highCount > 0) L.push(`  Высокая похожесть: ${sim.highCount}`);
@@ -97,8 +99,7 @@ export function buildMessage1(product: ProductWithContent): string {
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {
     L.push('');
-    const priceLabel = sim?.highCount >= 5 ? 'Цена по высокой похожести' : 'Ценовой ориентир';
-    L.push(`  <b>${priceLabel}:</b>`);
+    L.push(`  <b>Ценовой ориентир аналогов:</b>`);
     L.push(`  Медиана: <b>${fP(wbFiltered.medianPrice)}</b>`);
     L.push(`  P25–P75: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
     if (wbFiltered.topExamples.length) {
@@ -109,11 +110,11 @@ export function buildMessage1(product: ProductWithContent): string {
     }
 
     if (sim?.marketStatus === 'confirmed') {
-      L.push('  <i>Рынок подтверждён по текстовой выборке.</i>');
+      L.push('  <i>Ниша подтверждена. Есть ориентир по аналогам.</i>');
     } else if (sim?.marketStatus === 'limited') {
-      L.push('  <i>⚠️ Ориентир ограничен. Проверьте вручную.</i>');
+      L.push('  <i>⚠️ Ниша есть, но сопоставимость модели не подтверждена.</i>');
     } else {
-      L.push('  <i>⚠️ Недостаточно данных. Идентичность не подтверждена.</i>');
+      L.push('  <i>⚠️ Недостаточно данных для оценки рынка.</i>');
     }
   } else {
     L.push('  ⚠️ Похожие товары не найдены');
@@ -148,16 +149,26 @@ export function buildMessage1(product: ProductWithContent): string {
       L.push(`  <b>Себестоимость: ${fP(economics.costRub)}</b>`);
       L.push('');
 
-      if (!economics.isSyntheticPrice) {
-        L.push(`  Цена продажи (медиана WB): ${fP(economics.avgSaleRub)}`);
-        L.push(`  Комиссия WB 20%: −${fP(b.wbCommissionRub)}`);
-        L.push(`  Логистика WB: −${fP(b.wbLogisticsRub)}`);
-        L.push(`  Реклама (ДРР ${b.drrPercent}%): −${fP(b.drrRub)}`);
-        L.push(`  Налог ~7%: −${fP(b.taxRub)}`);
+      if (!economics.isSyntheticPrice && wbFiltered) {
+        // 3 сценария: P25 / медиана / P75
+        const calcProfit = (salePrice: number) => {
+          const comm = Math.round(salePrice * 0.20);
+          const drr = Math.round(salePrice * b.drrPercent / 100);
+          const tax = Math.round(salePrice * 0.07);
+          return salePrice - economics.costRub - comm - 100 - drr - tax;
+        };
+
+        const profitP25 = calcProfit(wbFiltered.p25Price);
+        const profitMed = calcProfit(wbFiltered.medianPrice);
+        const profitP75 = calcProfit(wbFiltered.p75Price);
+
         L.push('');
-        const sign = economics.grossProfitRub >= 0 ? '+' : '';
-        L.push(`  <b>Ориентировочная прибыль: ${sign}${fP(economics.grossProfitRub)} (${economics.grossMarginPercent}%)</b>`);
-        L.push(`  ROI: ${economics.roiPercent}%`);
+        L.push('  <b>Экономика по аналогам:</b>');
+        const fSign = (n: number) => (n >= 0 ? '+' : '') + fP(n);
+        L.push(`  Консервативный (P25: ${fP(wbFiltered.p25Price)}): ${fSign(profitP25)}`);
+        L.push(`  Базовый (медиана: ${fP(wbFiltered.medianPrice)}): <b>${fSign(profitMed)}</b>`);
+        L.push(`  Оптимистичный (P75: ${fP(wbFiltered.p75Price)}): ${fSign(profitP75)}`);
+        L.push(`  <i>Комиссия 20%, ДРР ${b.drrPercent}%, налог 7%, логистика WB 100₽</i>`);
       } else {
         L.push('  <i>Для расчёта прибыли проверьте цену продажи на WB.</i>');
       }

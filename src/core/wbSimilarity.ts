@@ -78,18 +78,24 @@ const GENDER_WORDS = [
   '女', '男', '儿童',
 ];
 
-function scoreCard(cardTitle: string, sourceTraits: ProductTraits): number {
+interface CardScore {
+  score: number;
+  hasCategoryMatch: boolean;
+  hasFunctionMatch: boolean;
+}
+
+function scoreCard(cardTitle: string, sourceTraits: ProductTraits): CardScore {
   const title = cardTitle.toLowerCase();
   let score = 0;
 
   const catMatch = sourceTraits.category.some(w => title.includes(w));
   if (catMatch) score += 35;
 
-  const funcMatch = sourceTraits.functions.filter(w => title.includes(w)).length;
-  if (funcMatch >= 1) score += Math.min(25, funcMatch * 12);
+  const funcMatches = sourceTraits.functions.filter(w => title.includes(w)).length;
+  if (funcMatches >= 1) score += Math.min(25, funcMatches * 12);
 
-  const techMatch = sourceTraits.tech.filter(w => title.includes(w)).length;
-  if (techMatch >= 1) score += Math.min(20, techMatch * 10);
+  const techMatches = sourceTraits.tech.filter(w => title.includes(w)).length;
+  if (techMatches >= 1) score += Math.min(20, techMatches * 10);
 
   const genderMatch = sourceTraits.gender.some(w => title.includes(w));
   if (genderMatch) score += 10;
@@ -97,12 +103,14 @@ function scoreCard(cardTitle: string, sourceTraits: ProductTraits): number {
   const matMatch = sourceTraits.material.some(w => title.includes(w));
   if (matMatch) score += 10;
 
-  return Math.min(100, score);
+  return { score: Math.min(100, score), hasCategoryMatch: catMatch, hasFunctionMatch: funcMatches >= 1 };
 }
 
-function getLevel(score: number): 'high' | 'medium' | 'low' {
-  if (score >= 55) return 'high';
-  if (score >= 30) return 'medium';
+function getLevel(cs: CardScore): 'high' | 'medium' | 'low' {
+  // High требует: категория + функция + score >= 55
+  if (cs.score >= 55 && cs.hasCategoryMatch && cs.hasFunctionMatch) return 'high';
+  // Medium: категория совпала + score >= 30
+  if (cs.score >= 30 && cs.hasCategoryMatch) return 'medium';
   return 'low';
 }
 
@@ -123,8 +131,8 @@ export function scoreSimilarity(
   });
 
   const scored: ScoredCard[] = unique.map(card => {
-    const similarity = scoreCard(card.title, traits);
-    return { ...card, similarity, level: getLevel(similarity) };
+    const cs = scoreCard(card.title, traits);
+    return { ...card, similarity: cs.score, level: getLevel(cs) };
   });
 
   const highCards = scored.filter(c => c.level === 'high').sort((a, b) => b.similarity - a.similarity);
@@ -132,8 +140,8 @@ export function scoreSimilarity(
   const lowCards = scored.filter(c => c.level === 'low');
 
   let marketStatus: 'confirmed' | 'limited' | 'insufficient';
-  if (highCards.length >= 5) marketStatus = 'confirmed';
-  else if (highCards.length + mediumCards.length >= 10) marketStatus = 'limited';
+  if (highCards.length >= 15) marketStatus = 'confirmed';
+  else if (highCards.length >= 5 || highCards.length + mediumCards.length >= 15) marketStatus = 'limited';
   else marketStatus = 'insufficient';
 
   return {

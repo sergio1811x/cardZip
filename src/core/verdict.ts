@@ -50,39 +50,24 @@ export function buildConclusion(
     };
   }
 
-  if (hasStrongWb && marginPositive && !economics.isSyntheticPrice) {
+  const hasAnyWb = hasStrongWb || hasWeakWb;
+
+  if (hasAnyWb && !economics.isSyntheticPrice) {
     if (riskFlags.hasBrand) disclaimers.push('Обнаружен бренд — проверьте права перед закупкой.');
-    return {
-      platform,
-      icon: '🟢',
-      headline: 'Ориентировочная маржа положительная. Товар можно протестировать.',
-      disclaimers,
-    };
-  }
+    disclaimers.push('Сопоставимость модели не подтверждена — цена по аналогам.');
 
-  if (hasStrongWb && !marginPositive && !economics.isSyntheticPrice) {
-    return {
-      platform,
-      icon: '🔴',
-      headline: 'Маржа отрицательная при текущей закупочной цене. Проверьте оптовые цены.',
-      disclaimers,
-    };
-  }
-
-  if (hasWeakWb && !economics.isSyntheticPrice) {
-    disclaimers.push('Выборка WB ограничена — проверьте выдачу вручную.');
     if (marginPositive) {
       return {
         platform,
-        icon: '🟡',
-        headline: 'Маржа предварительно положительная, но выборка мала. Проверьте рынок вручную.',
+        icon: '🟢',
+        headline: 'Ниша есть. Базовый сценарий положительный. Подтвердите параметры.',
         disclaimers,
       };
     }
     return {
       platform,
       icon: '🔴',
-      headline: 'Маржа отрицательная при ограниченной выборке. Проверьте оптовые цены.',
+      headline: 'Маржа отрицательная по базовому сценарию. Проверьте оптовые цены.',
       disclaimers,
     };
   }

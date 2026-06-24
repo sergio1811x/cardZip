@@ -63,19 +63,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── МУЛЬТИЗАПРОСНЫЙ ПОИСК: оригинальное название + LLM queries ─────
-    // Приоритет: оригинальное название товара (даёт лучшие результаты на WB)
-    const rawTitle = (raw.titleEn || raw.titleCn || '').replace(/[\[\]【】「」]/g, '').trim();
-    const shortTitle = rawTitle.length > 60 ? rawTitle.slice(0, 60) : rawTitle;
+    // ─── МУЛЬТИЗАПРОСНЫЙ ПОИСК: только русские запросы ───────────────────
+    const isRussian = (s: string) => /[а-яё]/i.test(s);
 
-    const searchQueries: string[] = [
-      shortTitle,                                          // оригинальное название — главный запрос
-      seoContent?.titleRu,                                // LLM перевод
+    const candidates: string[] = [
+      seoContent?.titleRu,                                // LLM русское название
       ...(seoContent?.searchQueries ?? []),                // LLM поисковые запросы
-      ...(seoContent?.keywords?.slice(0, 2) ?? []),        // ключевые слова
-    ].filter((q): q is string => !!q && q.length > 2)
-     .filter((q, i, arr) => arr.indexOf(q) === i)          // дедупликация
-     .slice(0, 6);
+      ...(seoContent?.keywords?.slice(0, 3) ?? []),        // ключевые слова
+      raw.titleEn,                                         // английское (fallback)
+    ].filter((q): q is string => !!q && q.length > 2);
+
+    // Приоритет: русские запросы, английские только если русских < 3
+    const ruQueries = candidates.filter(isRussian);
+    const enQueries = candidates.filter(q => !isRussian(q));
+    const searchQueries = [
+      ...ruQueries,
+      ...(ruQueries.length < 3 ? enQueries : []),
+    ].filter((q, i, arr) => arr.indexOf(q) === i).slice(0, 5);
 
     console.log(`[step3] Multi-search: ${searchQueries.length} queries via VPS`);
 
