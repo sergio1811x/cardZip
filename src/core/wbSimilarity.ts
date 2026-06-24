@@ -1,4 +1,5 @@
-import type { WbCard, RawProduct1688 } from '../types';
+import type { WbCard } from '../types';
+import type { ProductStructure, WbQueryPlan } from '../providers/productUnderstanding';
 
 export interface ScoredCard extends WbCard {
   similarity: number;
@@ -14,114 +15,94 @@ export interface SimilarityResult {
   marketStatus: 'confirmed' | 'limited' | 'insufficient';
 }
 
-interface ProductTraits {
-  category: string[];
-  functions: string[];
-  tech: string[];
-  material: string[];
-  gender: string[];
+function normalize(text: string): string {
+  return text.toLowerCase().replace(/[^а-яёa-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function extractTraits(product: RawProduct1688, titleRu?: string): ProductTraits {
-  const text = [
-    product.titleCn,
-    product.titleEn ?? '',
-    titleRu ?? '',
-    product.categoryName ?? '',
-    ...(product.attributes ?? []).map(a => `${a.name} ${a.value}`),
-  ].join(' ').toLowerCase();
-
-  return {
-    category: extractWords(text, CATEGORY_WORDS),
-    functions: extractWords(text, FUNCTION_WORDS),
-    tech: extractWords(text, TECH_WORDS),
-    material: extractWords(text, MATERIAL_WORDS),
-    gender: extractWords(text, GENDER_WORDS),
-  };
+function containsAny(text: string, terms: string[]): boolean {
+  return terms.some(t => text.includes(t.toLowerCase()));
 }
 
-function extractWords(text: string, dictionary: string[]): string[] {
-  return dictionary.filter(w => text.includes(w));
+function containsAnyGroup(text: string, groups: string[][]): boolean {
+  return groups.some(group => group.some(t => text.includes(t.toLowerCase())));
 }
 
-const CATEGORY_WORDS = [
-  'леггинсы', 'брюки', 'штаны', 'джинсы', 'юбка', 'платье', 'куртка', 'пальто',
-  'зонт', 'сумка', 'рюкзак', 'кошелек', 'часы', 'очки', 'шапка', 'шарф',
-  'вентилятор', 'лампа', 'фен', 'утюг', 'блендер', 'чайник', 'кофеварка',
-  'пусковое', 'компрессор', 'зарядное', 'аккумулятор', 'наушники', 'колонка',
-  'leggings', 'pants', 'dress', 'jacket', 'umbrella', 'bag', 'fan', 'lamp',
-  '打底裤', '裤', '裙', '伞', '包', '风扇', '灯',
-];
-
-const FUNCTION_WORDS = [
-  'автомат', 'ручной', 'складной', 'беспроводной', 'bluetooth', 'usb',
-  'утягивающие', 'компрессионные', 'спортивные', 'антиветер', 'водонепроницаемый',
-  'пусковое устройство', 'компрессор', 'насос', 'зарядка',
-  'automatic', 'wireless', 'portable', 'foldable',
-];
-
-const TECH_WORDS = [
-  '12v', '24v', '220v', '110v', '3000a', '1500a', '2000a', '5v', '2a',
-  'mah', 'вт', 'квт', 'w', 'kw', 'rpm', 'db', 'led',
-  'type-c', 'usb-c', 'micro-usb', 'lightning',
-];
-
-const MATERIAL_WORDS = [
-  'полиэстер', 'спандекс', 'хлопок', 'нейлон', 'шелк', 'кожа', 'замша',
-  'пластик', 'металл', 'алюминий', 'сталь', 'стекло', 'керамика', 'дерево',
-  'polyester', 'spandex', 'cotton', 'nylon', 'leather', 'plastic', 'metal',
-];
-
-const GENDER_WORDS = [
-  'женские', 'мужские', 'детские', 'унисекс', 'для девочек', 'для мальчиков',
-  'women', 'men', 'kids', 'unisex',
-  '女', '男', '儿童',
-];
-
-interface CardScore {
-  score: number;
-  hasCategoryMatch: boolean;
-  hasFunctionMatch: boolean;
+function isExcludedOnly(text: string, required: string[][], excluded: string[][]): boolean {
+  const hasRequired = containsAnyGroup(text, required);
+  if (hasRequired) return false;
+  return containsAnyGroup(text, excluded);
 }
 
-function scoreCard(cardTitle: string, sourceTraits: ProductTraits): CardScore {
-  const title = cardTitle.toLowerCase();
+function scoreCardSmart(
+  cardTitle: string,
+  structure: ProductStructure,
+  plan: WbQueryPlan | null
+): { score: number; hasType: boolean; hasFunction: boolean } {
+  const text = normalize(cardTitle);
   let score = 0;
+  let hasType = false;
+  let hasFunction = false;
 
-  const catMatch = sourceTraits.category.some(w => title.includes(w));
-  if (catMatch) score += 35;
+  // Проверка на negative match (полное исключение)
+  for (const neg of structure.negativeMatches) {
+    const negNorm = neg.toLowerCase();
+    if (text.includes(negNorm) && !text.includes(structure.productType.toLowerCase())) {
+      return { score: 0, hasType: false, hasFunction: false };
+    }
+  }
 
-  const funcMatches = sourceTraits.functions.filter(w => title.includes(w)).length;
-  if (funcMatches >= 1) score += Math.min(25, funcMatches * 12);
+  // excludeIfOnlyMatch
+  if (plan && isExcludedOnly(text, plan.requiredConcepts, plan.excludeIfOnlyMatch)) {
+    return { score: 0, hasType: false, hasFunction: false };
+  }
 
-  const techMatches = sourceTraits.tech.filter(w => title.includes(w)).length;
-  if (techMatches >= 1) score += Math.min(20, techMatches * 10);
+  // Product type match (+40)
+  const typeWords = [structure.productType, ...(structure.subtype ? [structure.subtype] : [])];
+  if (containsAny(text, typeWords)) {
+    score += 40;
+    hasType = true;
+  } else if (plan && containsAnyGroup(text, plan.requiredConcepts)) {
+    score += 35;
+    hasType = true;
+  }
 
-  const genderMatch = sourceTraits.gender.some(w => title.includes(w));
-  if (genderMatch) score += 10;
+  // Must-have features (+25 max)
+  const mustMatches = structure.mustHaveFeatures.filter(f => text.includes(f.toLowerCase())).length;
+  if (mustMatches > 0) {
+    score += Math.min(25, mustMatches * 12);
+    hasFunction = true;
+  }
 
-  const matMatch = sourceTraits.material.some(w => title.includes(w));
-  if (matMatch) score += 10;
+  // Important features (+20 max)
+  const impMatches = structure.importantFeatures.filter(f => text.includes(f.toLowerCase())).length;
+  score += Math.min(20, impMatches * 8);
+  if (impMatches > 0) hasFunction = true;
 
-  return { score: Math.min(100, score), hasCategoryMatch: catMatch, hasFunctionMatch: funcMatches >= 1 };
+  // Bonus concepts (+10 max)
+  if (plan) {
+    const bonusMatches = plan.bonusConcepts.filter(g => g.some(t => text.includes(t.toLowerCase()))).length;
+    score += Math.min(10, bonusMatches * 5);
+  }
+
+  // Technical specs (+5 each, max 10)
+  const specMatches = Object.values(structure.technicalSpecs).filter(v => text.includes(v.toLowerCase())).length;
+  score += Math.min(10, specMatches * 5);
+
+  return { score: Math.min(100, score), hasType, hasFunction };
 }
 
-function getLevel(cs: CardScore): 'high' | 'medium' | 'low' {
-  // High требует: категория + функция + score >= 55
-  if (cs.score >= 55 && cs.hasCategoryMatch && cs.hasFunctionMatch) return 'high';
-  // Medium: категория совпала + score >= 30
-  if (cs.score >= 30 && cs.hasCategoryMatch) return 'medium';
+function getLevel(score: number, hasType: boolean, hasFunction: boolean): 'high' | 'medium' | 'low' {
+  if (score >= 55 && hasType && hasFunction) return 'high';
+  if (score >= 30 && hasType) return 'medium';
   return 'low';
 }
 
 export function scoreSimilarity(
   cards: WbCard[],
-  product: RawProduct1688,
-  titleRu?: string,
-  queries?: string[]
+  structure: ProductStructure | null,
+  plan: WbQueryPlan | null,
+  queries: string[]
 ): SimilarityResult {
-  const traits = extractTraits(product, titleRu);
-
   // Дедупликация по URL
   const seen = new Set<string>();
   const unique = cards.filter(c => {
@@ -130,9 +111,22 @@ export function scoreSimilarity(
     return true;
   });
 
+  if (!structure) {
+    // Fallback без LLM-структуры — все карточки medium
+    const scored: ScoredCard[] = unique.map(card => ({ ...card, similarity: 30, level: 'medium' as const }));
+    return {
+      queries,
+      totalAnalyzed: unique.length,
+      highCards: [],
+      mediumCards: scored,
+      lowCards: [],
+      marketStatus: scored.length >= 15 ? 'limited' : 'insufficient',
+    };
+  }
+
   const scored: ScoredCard[] = unique.map(card => {
-    const cs = scoreCard(card.title, traits);
-    return { ...card, similarity: cs.score, level: getLevel(cs) };
+    const { score, hasType, hasFunction } = scoreCardSmart(card.title, structure, plan);
+    return { ...card, similarity: score, level: getLevel(score, hasType, hasFunction) };
   });
 
   const highCards = scored.filter(c => c.level === 'high').sort((a, b) => b.similarity - a.similarity);
@@ -144,12 +138,5 @@ export function scoreSimilarity(
   else if (highCards.length >= 5 || highCards.length + mediumCards.length >= 15) marketStatus = 'limited';
   else marketStatus = 'insufficient';
 
-  return {
-    queries: queries ?? [],
-    totalAnalyzed: unique.length,
-    highCards,
-    mediumCards,
-    lowCards,
-    marketStatus,
-  };
+  return { queries, totalAnalyzed: unique.length, highCards, mediumCards, lowCards, marketStatus };
 }

@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { aiContentGenerator } from '../src/providers/aiContentGenerator';
+import { understandProduct, planQueries, validateQueries } from '../src/providers/productUnderstanding';
 import { createStepProgress } from '../src/core/progress';
 import type { AiContentResult } from '../src/types';
 
@@ -45,15 +46,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       characteristics: {}, isFallback: true,
     }));
 
+    // Product Understanding + Query Planning (параллельно с SEO)
+    const productStructure = await understandProduct({
+      titleCn: raw.titleCn,
+      titleEn: raw.titleEn,
+      categoryName: raw.categoryName,
+      attributes: raw.attributes,
+      description: raw.description,
+      skus: raw.skus,
+    }).catch(() => null);
+
+    let queryPlan = null;
+    let validatedQueries: string[] = [];
+    if (productStructure) {
+      queryPlan = await planQueries(productStructure).catch(() => null);
+      if (queryPlan?.queries) {
+        validatedQueries = validateQueries(queryPlan.queries);
+      }
+    }
+
     progress?.stop();
 
-    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | fallback: ${!!seoContent.isFallback}`);
+    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | structure: ${productStructure?.productType ?? 'null'} | queries: ${validatedQueries.length}`);
 
     await supabase.from('jobs').update({
       status: 'ai_done',
       result_json: {
         ...(job.result_json as any),
         seoContent,
+        productStructure,
+        queryPlan,
+        validatedQueries,
       },
     }).eq('id', jobId);
 

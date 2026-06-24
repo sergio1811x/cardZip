@@ -10,6 +10,7 @@ import { createStepProgress } from '../src/core/progress';
 import { getUserTariffs } from '../src/db/queries/userSettings';
 import { scoreSimilarity } from '../src/core/wbSimilarity';
 import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
+import type { ProductStructure, WbQueryPlan } from '../src/providers/productUnderstanding';
 
 export const config = { maxDuration: 60 };
 
@@ -63,23 +64,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── МУЛЬТИЗАПРОСНЫЙ ПОИСК: только русские запросы ───────────────────
+    // ─── ПОИСКОВЫЕ ЗАПРОСЫ: LLM Query Plan → fallback на старую логику ──
+    const resultJson = job.result_json as any;
+    const productStructure = resultJson.productStructure ?? null;
+    const queryPlan = resultJson.queryPlan ?? null;
+    const validatedQueries: string[] = resultJson.validatedQueries ?? [];
+
     const isRussian = (s: string) => /[а-яё]/i.test(s);
 
-    const candidates: string[] = [
-      seoContent?.titleRu,                                // LLM русское название
-      ...(seoContent?.searchQueries ?? []),                // LLM поисковые запросы
-      ...(seoContent?.keywords?.slice(0, 3) ?? []),        // ключевые слова
-      raw.titleEn,                                         // английское (fallback)
-    ].filter((q): q is string => !!q && q.length > 2);
-
-    // Приоритет: русские запросы, английские только если русских < 3
-    const ruQueries = candidates.filter(isRussian);
-    const enQueries = candidates.filter(q => !isRussian(q));
-    const searchQueries = [
-      ...ruQueries,
-      ...(ruQueries.length < 3 ? enQueries : []),
-    ].filter((q, i, arr) => arr.indexOf(q) === i).slice(0, 5);
+    let searchQueries: string[];
+    if (validatedQueries.length >= 3) {
+      // LLM-сгенерированные и провалидированные запросы
+      searchQueries = validatedQueries.slice(0, 6);
+      console.log(`[step3] Using LLM queries: ${searchQueries.join(' | ')}`);
+    } else {
+      // Fallback: старая логика
+      const candidates = [
+        seoContent?.titleRu,
+        ...(seoContent?.searchQueries ?? []),
+        ...(seoContent?.keywords?.slice(0, 3) ?? []),
+      ].filter((q): q is string => !!q && q.length > 2 && isRussian(q));
+      searchQueries = candidates.filter((q, i, arr) => arr.indexOf(q) === i).slice(0, 5);
+      console.log(`[step3] Fallback queries: ${searchQueries.join(' | ')}`);
+    }
 
     console.log(`[step3] Multi-search: ${searchQueries.length} queries via VPS`);
 
@@ -99,8 +106,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`[step3] Collected: ${allCards.length} unique cards from ${textResults.filter(Boolean).length} queries`);
 
-    // Скоринг похожести
-    const similarity = scoreSimilarity(allCards, raw, seoContent?.titleRu, searchQueries);
+    // Скоринг похожести через LLM-структуру
+    const similarity = scoreSimilarity(allCards, productStructure, queryPlan, searchQueries);
 
     // Для фильтрации и экономики используем только high-similarity карточки
     const relevantCards = similarity.highCards.length >= 5 ? similarity.highCards : [...similarity.highCards, ...similarity.mediumCards];
