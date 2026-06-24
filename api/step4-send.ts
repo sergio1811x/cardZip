@@ -71,8 +71,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
     const prefix = product.productId?.slice(-8) ?? Date.now().toString().slice(-8);
 
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), `seo_${prefix}.md`));
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), `brief_${prefix}.md`));
+    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), `wb_card_${prefix}.md`));
+    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), `buyer_brief_${prefix}.md`));
     if (zipBuffer) {
       await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, `photos_${prefix}.zip`));
     }
