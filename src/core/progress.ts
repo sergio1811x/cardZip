@@ -1,25 +1,27 @@
 import { Telegraf } from 'telegraf';
 
 const STEPS = [
-  { text: 'Загружаем данные с площадки', phase: 'elim' },
-  { text: 'Читаем карточку товара', phase: 'elim' },
-  { text: 'Извлекаем характеристики', phase: 'elim' },
-  { text: 'Генерируем SEO-контент', phase: 'ai' },
-  { text: 'Подбираем ключевые слова', phase: 'ai' },
-  { text: 'Анализируем товар', phase: 'ai' },
-  { text: 'Готовим вопросы поставщику', phase: 'ai' },
-  { text: 'Ищем аналоги на Wildberries', phase: 'market' },
-  { text: 'Анализируем цены конкурентов', phase: 'market' },
-  { text: 'Фильтруем нерелевантные товары', phase: 'market' },
-  { text: 'Рассчитываем экономику', phase: 'market' },
-  { text: 'Собираем архив с фотографиями', phase: 'send' },
-  { text: 'Упаковываем материалы', phase: 'send' },
-  { text: 'Почти готово', phase: 'send' },
+  { text: '📡 Загружаем данные с площадки', phase: 'elim' },
+  { text: '📡 Читаем карточку товара', phase: 'elim' },
+  { text: '📡 Извлекаем характеристики', phase: 'elim' },
+  { text: '🤖 Генерируем SEO-контент', phase: 'ai' },
+  { text: '🤖 Подбираем ключевые слова', phase: 'ai' },
+  { text: '🤖 Анализируем товар', phase: 'ai' },
+  { text: '🤖 Готовим вопросы поставщику', phase: 'ai' },
+  { text: '🔍 Ищем аналоги на Wildberries', phase: 'market' },
+  { text: '🔍 Анализируем цены конкурентов', phase: 'market' },
+  { text: '🔍 Фильтруем нерелевантные товары', phase: 'market' },
+  { text: '📊 Рассчитываем экономику', phase: 'market' },
+  { text: '📦 Собираем архив с фотографиями', phase: 'send' },
+  { text: '📦 Упаковываем материалы', phase: 'send' },
+  { text: '✅ Почти готово', phase: 'send' },
 ];
 
 function buildBar(current: number, total: number): string {
-  const filled = Math.round((current / total) * 10);
-  return '▓'.repeat(filled) + '░'.repeat(10 - filled);
+  const pct = Math.round((current / total) * 100);
+  const filled = Math.round((current / total) * 15);
+  const bar = '●'.repeat(filled) + '○'.repeat(15 - filled);
+  return `⏳  ${bar}`;
 }
 
 export function createStepProgress(
@@ -34,7 +36,7 @@ export function createStepProgress(
   const edit = (idx: number) => {
     const step = STEPS[idx] ?? STEPS[STEPS.length - 1];
     const bar = buildBar(idx + 1, STEPS.length);
-    const text = `${bar}\n${step.text}...`;
+    const text = `${bar}\n\n${step.text}...`;
     bot.telegram.editMessageText(chatId, messageId, undefined, text).catch(() => {});
     bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
   };
