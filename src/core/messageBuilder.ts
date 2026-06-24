@@ -81,27 +81,42 @@ export function buildMessage1(product: ProductWithContent): string {
   }
   L.push('');
 
-  // WB ориентир
-  L.push('🔍 <b>Рынок WB — ориентир</b>');
-  L.push(`  ${getWbStatusLabel(wbFiltered)}`);
+  // WB ориентир с данными похожести
+  const sim = (product as any).similarityData;
+  L.push('🔍 <b>Рынок WB — текстовая выборка</b>');
+
+  if (sim) {
+    if (sim.queries?.length) {
+      L.push('  Запросы:');
+      sim.queries.slice(0, 3).forEach((q: string) => L.push(`  • ${esc(q)}`));
+    }
+    L.push(`  Проанализировано: ${sim.totalAnalyzed} карточек`);
+    if (sim.highCount > 0) L.push(`  Высокая похожесть: ${sim.highCount}`);
+    if (sim.mediumCount > 0) L.push(`  Средняя похожесть: ${sim.mediumCount}`);
+  }
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {
+    L.push('');
+    const priceLabel = sim?.highCount >= 5 ? 'Цена по высокой похожести' : 'Ценовой ориентир';
+    L.push(`  <b>${priceLabel}:</b>`);
     L.push(`  Медиана: <b>${fP(wbFiltered.medianPrice)}</b>`);
-    L.push(`  Диапазон: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
+    L.push(`  P25–P75: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
     if (wbFiltered.topExamples.length) {
       wbFiltered.topExamples.slice(0, 3).forEach((ex) => {
         const t = ex.title.length > 35 ? ex.title.slice(0, 32) + '...' : ex.title;
         L.push(`  • <a href="${ex.url}">${fP(ex.price)}</a> — ${esc(t)}`);
       });
     }
-    if (wbFiltered.relevantCount < 10) {
-      L.push('');
-      const queries = wbFiltered.searchQueries?.slice(0, 3) ?? [];
-      if (queries.length) {
-        L.push('  ⚠️ Проверьте вручную:');
-        queries.forEach((q) => L.push(`  • ${esc(q)}`));
-      }
+
+    if (sim?.marketStatus === 'confirmed') {
+      L.push('  <i>Рынок подтверждён по текстовой выборке.</i>');
+    } else if (sim?.marketStatus === 'limited') {
+      L.push('  <i>⚠️ Ориентир ограничен. Проверьте вручную.</i>');
+    } else {
+      L.push('  <i>⚠️ Недостаточно данных. Идентичность не подтверждена.</i>');
     }
+  } else {
+    L.push('  ⚠️ Похожие товары не найдены');
   }
   L.push('');
 

@@ -8,7 +8,8 @@ import { buildRiskFlags } from '../src/core/riskFlags';
 import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
 import { getUserTariffs } from '../src/db/queries/userSettings';
-import type { WbFilterKeywords, WbCard } from '../src/types';
+import { scoreSimilarity } from '../src/core/wbSimilarity';
+import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
 
 export const config = { maxDuration: 60 };
 
@@ -115,29 +116,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── ПАРАЛЛЕЛЬНЫЙ ПОИСК: Text API (2с) + Photo VPS (30с) ─────────────
-    const textQuery = seoContent?.keywords?.[0] ?? seoContent?.titleRu ?? raw.titleEn ?? raw.titleCn;
+    // ─── МУЛЬТИЗАПРОСНЫЙ ПОИСК: 3-5 text queries + Photo VPS параллельно ───
+    const searchQueries: string[] = [
+      ...(seoContent?.searchQueries ?? []),
+      ...(seoContent?.keywords?.slice(0, 2) ?? []),
+      seoContent?.titleRu,
+    ].filter((q): q is string => !!q && q.length > 2).slice(0, 5);
+
     const photoUrl = raw.mainImageUrl;
 
-    console.log(`[step3] Parallel search: text="${textQuery?.slice(0, 30)}" + photo=${photoUrl ? 'yes' : 'no'}`);
+    console.log(`[step3] Multi-search: ${searchQueries.length} queries + photo=${photoUrl ? 'yes' : 'no'}`);
 
-    const [textResult, photoResult] = await Promise.all([
-      searchWbByText(textQuery),
+    // Все text запросы + photo запускаются одновременно
+    const [textResults, photoResult] = await Promise.all([
+      Promise.all(searchQueries.map(q => searchWbByText(q).catch(() => null))),
       photoUrl ? searchWbByPhoto(photoUrl) : Promise.resolve(null),
     ]);
 
-    // Приоритет: photo (visual match) > text (keyword match)
-    const wbData = (photoResult && photoResult.allCards.length >= 5) ? photoResult
-      : (textResult && textResult.allCards.length > (photoResult?.allCards.length ?? 0)) ? textResult
-      : photoResult ?? textResult;
+    // Собираем все карточки в единый пул (дедупликация по URL)
+    const allCards: WbCard[] = [];
+    const seenUrls = new Set<string>();
 
-    const searchSource = wbData === photoResult ? 'photo' : wbData === textResult ? 'text' : 'none';
-    console.log(`[step3] WB source: ${searchSource} | photo: ${photoResult?.allCards.length ?? 0} cards | text: ${textResult?.allCards.length ?? 0} cards`);
+    // Photo результаты приоритетнее
+    if (photoResult?.allCards) {
+      for (const card of photoResult.allCards) {
+        if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
+      }
+    }
+    for (const result of textResults) {
+      if (!result?.allCards) continue;
+      for (const card of result.allCards) {
+        if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
+      }
+    }
 
-    // Фильтрация
+    console.log(`[step3] Collected: ${allCards.length} unique cards (photo: ${photoResult?.allCards?.length ?? 0}, text: ${textResults.filter(Boolean).reduce((s, r) => s + (r?.allCards?.length ?? 0), 0)})`);
+
+    // Скоринг похожести
+    const similarity = scoreSimilarity(allCards, raw, seoContent?.titleRu, searchQueries);
+
+    // Для фильтрации и экономики используем только high-similarity карточки
+    const relevantCards = similarity.highCards.length >= 5 ? similarity.highCards : [...similarity.highCards, ...similarity.mediumCards];
+
+    const wbData: WbSearchResult | null = relevantCards.length > 0 ? {
+      avgPrice: Math.round(relevantCards.reduce((s, c) => s + c.price, 0) / relevantCards.length),
+      minPrice: Math.min(...relevantCards.map(c => c.price)),
+      maxPrice: Math.max(...relevantCards.map(c => c.price)),
+      totalCards: allCards.length,
+      topExamples: similarity.highCards.slice(0, 3),
+      allCards: relevantCards,
+      photoSearchConfirmed: photoResult?.photoSearchConfirmed ?? false,
+    } : null;
+
     const filterKeywords = seoContent?.filterKeywords ?? DEFAULT_FILTER_KEYWORDS;
-    const searchQueries = seoContent?.searchQueries ?? seoContent?.keywords?.slice(0, 3) ?? [];
     const wbFiltered = filterWbData(wbData, filterKeywords, searchQueries);
+
+    // Сохраняем similarity данные в result_json для вывода
+    const similarityData = {
+      queries: similarity.queries,
+      totalAnalyzed: similarity.totalAnalyzed,
+      highCount: similarity.highCards.length,
+      mediumCount: similarity.mediumCards.length,
+      marketStatus: similarity.marketStatus,
+    };
 
     // Тарифы
     const userTariffs = await getUserTariffs(job.user_id).catch(() => null);
@@ -178,6 +219,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           budgets,
           maxPurchasePrice,
           conclusion,
+          similarityData,
         },
       },
       finished_at: new Date().toISOString(),

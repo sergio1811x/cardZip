@@ -71,6 +71,13 @@ export interface ProductWithContent extends RawProduct1688 {
   budgets: BudgetScenarios | null;
   maxPurchasePrice: MaxPurchasePrice | null;
   conclusion: PlatformConclusion;
+  similarityData?: {
+    queries: string[];
+    totalAnalyzed: number;
+    highCount: number;
+    mediumCount: number;
+    marketStatus: 'confirmed' | 'limited' | 'insufficient';
+  };
   evidence?: FieldEvidence[];
   cachedAt?: Date;
 }
