@@ -138,7 +138,13 @@ export function buildMessage1(product: ProductWithContent): string {
       }
     }
   } else if (!sim || sim.totalAnalyzed === 0) {
-    L.push('  ⚠️ Похожие товары не найдены');
+    if (sim?.categoryCount && sim.categoryCount > 0) {
+      L.push('  ⚠️ Прямые аналоги не подтверждены, но категория на WB найдена.');
+      L.push('  Экономика не рассчитана.');
+    } else {
+      L.push('  ⚠️ Не удалось подтвердить аналоги на WB.');
+      L.push('  Проверьте рынок вручную или попробуйте другой товар.');
+    }
   }
   L.push('');
 

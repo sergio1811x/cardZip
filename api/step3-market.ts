@@ -9,7 +9,7 @@ import { rankCandidates, mineResults } from '../src/core/wbSimilarity';
 import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
 import { getUserTariffs } from '../src/db/queries/userSettings';
-import { expandQueries, judgeCandidate, validateQueries } from '../src/providers/productUnderstanding';
+import { expandQueries, judgeCandidate, validateQueries, repairSearch } from '../src/providers/productUnderstanding';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
 
@@ -102,50 +102,82 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── Запросы ─────────────────────────────────────────────────────────
+    // ─── PASS 1: Query Ladder L1-L5 ────────────────────────────────────
+    const ladder = queryPlan ?? {} as any;
     const pass1Queries = validatedQueries.length >= 3
-      ? validatedQueries.slice(0, 8)
-      : [seoContent?.titleRu, ...(seoContent?.keywords?.slice(0, 3) ?? [])].filter((q): q is string => !!q && /[а-яё]/i.test(q)).slice(0, 5);
+      ? validatedQueries.slice(0, 10)
+      : [
+          ...(ladder.L1_exact ?? []),
+          ...(ladder.L2_commercial ?? []),
+          ...(ladder.L3_subtype ?? []),
+          seoContent?.titleRu,
+          ...(seoContent?.keywords?.slice(0, 2) ?? []),
+        ].filter((q): q is string => !!q && q.length > 2 && /[а-яё]/i.test(q))
+         .filter((q, i, a) => a.indexOf(q) === i).slice(0, 8);
 
-    console.log(`[step3] PASS 1: ${pass1Queries.length} queries`);
-
-    // ─── PASS 1 ──────────────────────────────────────────────────────────
+    console.log(`[step3] PASS 1 (L1-L3): ${pass1Queries.length} queries`);
     const { cards: pass1Cards, seenUrls } = await batchSearch(pass1Queries);
-    console.log(`[step3] PASS 1 result: ${pass1Cards.length} unique cards`);
+    console.log(`[step3] PASS 1: ${pass1Cards.length} cards`);
 
-    // ─── WB Result Mining ────────────────────────────────────────────────
     const mining = mineResults(pass1Cards);
-
-    // ─── Pre-score to decide on PASS 2 ──────────────────────────────────
     let allCards = [...pass1Cards];
-    let preRank = rankCandidates(allCards, structure, lexicon, pass1Queries);
+    let allQueries = [...pass1Queries];
+    let preRank = rankCandidates(allCards, structure, lexicon, allQueries);
 
-    // ─── PASS 2: Adaptive (only if direct < 10) ─────────────────────────
-    if (preRank.buckets.directLocalAnalogs.length < 10 && structure) {
-      const adaptiveQueries = await expandQueries(structure, mining.tokens, mining.bigrams).catch(() => [] as string[]);
-      if (adaptiveQueries.length > 0) {
-        console.log(`[step3] PASS 2: ${adaptiveQueries.length} adaptive queries`);
-        const { cards: pass2Cards } = await batchSearch(adaptiveQueries);
-        for (const card of pass2Cards) {
-          if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
-        }
-        preRank = rankCandidates(allCards, structure, lexicon, [...pass1Queries, ...adaptiveQueries]);
+    // ─── PASS 2: L4-L5 + Adaptive (if direct < 10) ─────────────────────
+    if (preRank.buckets.directLocalAnalogs.length < 10) {
+      const pass2Queries = [
+        ...(ladder.L4_core ?? []),
+        ...(ladder.L5_category ?? []),
+      ].filter((q): q is string => !!q && q.length > 2 && !allQueries.includes(q));
+
+      // Adaptive from mining
+      const adaptiveQueries = structure
+        ? await expandQueries(structure, mining.tokens, mining.bigrams).catch(() => [] as string[])
+        : [];
+
+      const combined = [...pass2Queries, ...adaptiveQueries]
+        .filter((q, i, a) => a.indexOf(q) === i && !allQueries.includes(q)).slice(0, 8);
+
+      if (combined.length) {
+        console.log(`[step3] PASS 2 (L4-L5+adaptive): ${combined.length} queries`);
+        const { cards: p2Cards } = await batchSearch(combined);
+        for (const c of p2Cards) { if (!seenUrls.has(c.url)) { seenUrls.add(c.url); allCards.push(c); } }
+        allQueries.push(...combined);
+        preRank = rankCandidates(allCards, structure, lexicon, allQueries);
         console.log(`[step3] After PASS 2: ${allCards.length} cards, direct=${preRank.buckets.directLocalAnalogs.length}`);
       }
     }
 
-    // ─── FALLBACK: coreObject search (only if direct < 3) ───────────────
+    // ─── PASS 3: Search Repair Agent (if direct < 3) ────────────────────
+    if (preRank.buckets.directLocalAnalogs.length < 3 && structure) {
+      const rejected = preRank.buckets.wrong.slice(0, 5).map(c => c.title);
+      const found = [...preRank.buckets.directLocalAnalogs, ...preRank.buckets.similarLocalProducts].slice(0, 10).map(c => c.title);
+      const repair = await repairSearch(structure, allQueries, found, rejected, mining);
+
+      if (repair.newQueries.length) {
+        console.log(`[step3] PASS 3 (repair): ${repair.newQueries.length} queries. Reason: ${repair.reason}`);
+        const { cards: p3Cards } = await batchSearch(repair.newQueries);
+        for (const c of p3Cards) { if (!seenUrls.has(c.url)) { seenUrls.add(c.url); allCards.push(c); } }
+        allQueries.push(...repair.newQueries);
+        preRank = rankCandidates(allCards, structure, lexicon, allQueries);
+        console.log(`[step3] After PASS 3: ${allCards.length} cards, direct=${preRank.buckets.directLocalAnalogs.length}`);
+      }
+    }
+
+    // ─── PASS 4: Fallback by coreObject (if still < 3) ──────────────────
     if (preRank.buckets.directLocalAnalogs.length < 3 && structure?.coreObject) {
       const fbQueries = [
         structure.coreObject,
         structure.productType !== structure.coreObject ? structure.productType : null,
-        ...(queryPlan?.fallbackQueries ?? []),
-      ].filter((q): q is string => !!q && q.length > 2).slice(0, 4);
+        ...(structure.marketSynonyms ?? []).slice(0, 2),
+      ].filter((q): q is string => !!q && q.length > 2 && !allQueries.includes(q)).slice(0, 4);
 
-      console.log(`[step3] FALLBACK: ${fbQueries.join(' | ')}`);
-      const { cards: fbCards } = await batchSearch(fbQueries);
-      for (const card of fbCards) {
-        if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
+      if (fbQueries.length) {
+        console.log(`[step3] PASS 4 (fallback): ${fbQueries.join(' | ')}`);
+        const { cards: fbCards } = await batchSearch(fbQueries);
+        for (const c of fbCards) { if (!seenUrls.has(c.url)) { seenUrls.add(c.url); allCards.push(c); } }
+        allQueries.push(...fbQueries);
       }
     }
 
@@ -237,11 +269,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ─── Debug trace ─────────────────────────────────────────────────────
     const debugTrace = {
-      pass1Queries,
+      queryLadder: queryPlan,
+      allQueriesTried: allQueries,
       pass1Cards: pass1Cards.length,
       mining: { tokens: mining.tokens.slice(0, 10), bigrams: mining.bigrams.slice(0, 5) },
-      pass2Used: preRank.buckets.directLocalAnalogs.length < 10,
-      fallbackUsed: preRank.buckets.directLocalAnalogs.length < 3,
       totalCards: allCards.length,
       finalBuckets: {
         directLocal: similarity.buckets.directLocalAnalogs.length,
@@ -251,6 +282,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         wrong: similarity.buckets.wrong.length,
       },
       confidence: similarity.confidence,
+      searchFailureReason: similarity.buckets.directLocalAnalogs.length === 0
+        ? (similarity.buckets.categoryOnly.length > 0 ? 'category_only_found' : 'no_relevant_cards')
+        : '',
     };
 
     await supabase.from('jobs').update({

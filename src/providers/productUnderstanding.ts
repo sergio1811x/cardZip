@@ -27,6 +27,11 @@ export interface ProductStructure {
   visualStyle: string[];
   hardFormConflicts: string[];
   softFormConflicts: string[];
+  mustKeep: string[];
+  canDrop: string[];
+  doNotSearch: string[];
+  marketSynonyms: string[];
+  directAnalogBlockers: string[];
   hardConflicts: string[];
   softConflicts: string[];
   compatibleAlternatives: string[];
@@ -50,11 +55,11 @@ export interface ProductLexicon {
 }
 
 export interface QueryPlan {
-  exactQueries: string[];
-  synonymQueries: string[];
-  attributeQueries: string[];
-  broadQueries: string[];
-  fallbackQueries: string[];
+  L1_exact: string[];
+  L2_commercial: string[];
+  L3_subtype: string[];
+  L4_core: string[];
+  L5_category: string[];
 }
 
 export interface FullProductAnalysis {
@@ -175,6 +180,11 @@ export async function analyzeProduct(raw: {
     "compatibleAlternatives": ["допустимые рыночные альтернативы (портмоне мужское, бумажник мужской, ...)"],
     "categoryHypotheses": ["гипотезы WB-категорий"],
     "searchIntent": "что ищет покупатель на WB",
+    "mustKeep": ["признаки, которые НЕЛЬЗЯ убирать из поиска"],
+    "canDrop": ["признаки, которые МОЖНО убрать если поиск слишком узкий (артикул, модель, редкий цвет, ...)"],
+    "doNotSearch": ["слова, которые НЕ НАДО использовать в WB-запросах (артикулы, модели, маркетинг, китайские фразы)"],
+    "marketSynonyms": ["как товар может называться на WB"],
+    "directAnalogBlockers": ["что запрещает считать товар прямым аналогом"],
     "kitType": "body_only|basic_kit|full_kit|unknown",
     "kitContents": [],
     "confidence": 0.0-1.0
@@ -190,22 +200,24 @@ export async function analyzeProduct(raw: {
     "softNegativeTerms": ["маркеры похожих но не аналогичных"],
     "broadCategoryTerms": ["широкие категорийные термины"]
   },
-  "queryPlan": {
-    "exactQueries": ["точные запросы 2-4 слова"],
-    "synonymQueries": ["через синонимы"],
-    "attributeQueries": ["через атрибуты"],
-    "broadQueries": ["широкие запросы"],
-    "fallbackQueries": ["последний уровень, 1-2 слова"]
+  "queryLadder": {
+    "L1_exact": ["точные запросы: productType + ключевые атрибуты, 2-4 слова"],
+    "L2_commercial": ["запросы языком покупателя WB, как ищет обычный человек"],
+    "L3_subtype": ["запросы по подтипу/формату товара"],
+    "L4_core": ["запросы по базовому объекту + широкий признак"],
+    "L5_category": ["самые широкие категорийные запросы, 1-2 слова"]
   }
 }
 
 ПРАВИЛА ЗАПРОСОВ:
-- Только русский, 2-4 слова. НЕ: "новинка", "опт", "хит", "premium", китайский, английский.
-- exactQueries: 3-4 штуки, максимально точные.
-- synonymQueries: 2-3 штуки через альтернативные названия.
-- attributeQueries: 2-3 штуки через ключевые атрибуты.
-- broadQueries: 1-2 штуки широкие.
-- fallbackQueries: 1-2 штуки последний уровень.
+- Только русский, 2-4 слова.
+- НЕ использовать: "новинка", "опт", "хит", "premium", артикулы, модели, маркетинг, китайский, английский.
+- НЕ использовать слова из doNotSearch.
+- L1: 2-3 точных запроса.
+- L2: 2-3 запроса как ищет покупатель.
+- L3: 1-2 запроса по подтипу.
+- L4: 1-2 запроса по coreObject.
+- L5: 1 широкий категорийный запрос.
 
 ДАННЫЕ:
 ${info}`;
@@ -245,6 +257,11 @@ ${info}`;
       compatibleAlternatives: s.compatibleAlternatives ?? [],
       categoryHypotheses: s.categoryHypotheses ?? [],
       searchIntent: s.searchIntent ?? '',
+      mustKeep: s.mustKeep ?? [],
+      canDrop: s.canDrop ?? [],
+      doNotSearch: s.doNotSearch ?? [],
+      marketSynonyms: s.marketSynonyms ?? [],
+      directAnalogBlockers: s.directAnalogBlockers ?? [],
       kitType: s.kitType ?? 'unknown',
       kitContents: s.kitContents ?? [],
       confidence: s.confidence ?? 0.5,
@@ -263,20 +280,20 @@ ${info}`;
       broadCategoryTerms: l.broadCategoryTerms ?? [],
     };
 
-    const q = result.queryPlan ?? {};
+    const q = result.queryLadder ?? result.queryPlan ?? {};
     const queryPlan: QueryPlan = {
-      exactQueries: q.exactQueries ?? [],
-      synonymQueries: q.synonymQueries ?? [],
-      attributeQueries: q.attributeQueries ?? [],
-      broadQueries: q.broadQueries ?? [],
-      fallbackQueries: q.fallbackQueries ?? [],
+      L1_exact: q.L1_exact ?? q.exactQueries ?? [],
+      L2_commercial: q.L2_commercial ?? q.synonymQueries ?? [],
+      L3_subtype: q.L3_subtype ?? q.attributeQueries ?? [],
+      L4_core: q.L4_core ?? q.broadQueries ?? [],
+      L5_category: q.L5_category ?? q.fallbackQueries ?? [],
     };
 
     const allQueries = [
-      ...queryPlan.exactQueries,
-      ...queryPlan.synonymQueries,
-      ...queryPlan.attributeQueries,
-      ...queryPlan.broadQueries,
+      ...queryPlan.L1_exact,
+      ...queryPlan.L2_commercial,
+      ...queryPlan.L3_subtype,
+      ...queryPlan.L4_core,
     ];
     const validatedQueries = validateQueries(allQueries);
 
@@ -369,6 +386,51 @@ JSON: {"matchLevel": "direct_analog|similar|category_only|wrong", "confidence": 
       reason: result.reason ?? '',
     };
   } catch { return null; }
+}
+
+// ─── Search Repair Agent ─────────────────────────────────────────────────────
+
+export async function repairSearch(
+  structure: ProductStructure,
+  queriesTried: string[],
+  topFoundTitles: string[],
+  topRejectedTitles: string[],
+  mining: { tokens: string[]; bigrams: string[] }
+): Promise<{ newQueries: string[]; reason: string }> {
+  const prompt = `Ты Search Repair Agent. Поиск WB не нашёл достаточно прямых аналогов.
+
+ТОВАР: ${structure.productType} (${structure.coreObject})
+Подтип: ${structure.subType || 'нет'}
+mustKeep: ${structure.mustKeep?.join(', ') || 'нет'}
+canDrop: ${structure.canDrop?.join(', ') || 'нет'}
+doNotSearch: ${structure.doNotSearch?.join(', ') || 'нет'}
+marketSynonyms: ${structure.marketSynonyms?.join(', ') || 'нет'}
+
+Попробованные запросы: ${queriesTried.join(' | ')}
+
+Топ найденных карточек: ${topFoundTitles.slice(0, 8).join(' | ')}
+Топ отклонённых карточек: ${topRejectedTitles.slice(0, 5).join(' | ')}
+
+Частотные слова WB: ${mining.tokens.slice(0, 10).join(', ')}
+Частотные биграммы WB: ${mining.bigrams.slice(0, 5).join(', ')}
+
+Проанализируй почему не нашлись аналоги и сгенерируй НОВЫЕ запросы:
+- Убери слова из doNotSearch/canDrop
+- Используй marketSynonyms и частотные слова из WB
+- Попробуй другие формулировки
+- Только русский, 2-4 слова
+
+JSON: {"newQueries": ["запрос1", "запрос2", ...], "reason": "почему предыдущие запросы не сработали"}`;
+
+  try {
+    const result = await callLlm(prompt, 'Ты Search Repair Agent. Исправляешь поисковые запросы. ТОЛЬКО JSON.');
+    const queries = validateQueries(
+      (result?.newQueries ?? []).map((q: string) => ({ query: q, purpose: 'repair', priority: 1 }))
+    );
+    return { newQueries: queries, reason: result?.reason ?? '' };
+  } catch {
+    return { newQueries: [], reason: 'repair failed' };
+  }
 }
 
 // ─── Query Validator ─────────────────────────────────────────────────────────
