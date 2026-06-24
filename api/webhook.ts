@@ -8,6 +8,7 @@ import { track } from '../src/services/analyticsService';
 import { supabase } from '../src/db/supabase';
 import { redis } from '../src/lib/redis';
 import { checkLinkLimit, checkCallbackLimit, checkGlobalLimit } from '../src/bot/middleware/rateLimit';
+import { cleanupStuckJobs } from '../src/lib/jobCleanup';
 
 export const config = { maxDuration: 10 };
 
@@ -80,8 +81,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (redis) {
         const processing = await redis.get(`processing:${dbUser.id}`);
         if (processing) {
-          await bot.telegram.sendMessage(msg.chat.id, '⏳ Предыдущий анализ ещё выполняется. Дождитесь результата.');
-          return res.status(200).json({ ok: true });
+          // Проверяем — может job завис (Vercel убил функцию)
+          const cleaned = await cleanupStuckJobs(dbUser.id, msg.chat.id, bot);
+          if (!cleaned) {
+            await bot.telegram.sendMessage(msg.chat.id, '⏳ Предыдущий анализ ещё выполняется. Дождитесь результата.');
+            return res.status(200).json({ ok: true });
+          }
+          // Job был зависшим — cleanup сделан, продолжаем обработку новой ссылки
         }
       }
 
