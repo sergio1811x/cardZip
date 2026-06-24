@@ -173,14 +173,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   } catch (e: any) {
     console.error('[step1]', e.message);
-    await supabase.from('jobs').update({ status: 'failed', error: e.message, finished_at: new Date().toISOString() }).eq('id', jobId);
-
-    // Сообщаем юзеру
-    const { data: job } = await supabase.from('jobs').select('tg_chat_id, tg_message_id').eq('id', jobId).single();
-    if (job) {
-      if (job.tg_message_id) await bot.telegram.deleteMessage(job.tg_chat_id, job.tg_message_id).catch(() => {});
-      await bot.telegram.sendMessage(job.tg_chat_id, `❌ ${e.userMessage || 'Не удалось получить данные товара. Попробуйте ещё раз.'}`).catch(() => {});
-    }
+    const { handleStepError } = require('../src/lib/stepError');
+    await handleStepError(jobId, e.message, bot);
     res.status(200).json({ ok: false });
   }
 }

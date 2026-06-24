@@ -321,23 +321,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step3]', e.message);
-    await supabase.from('jobs').update({ status: 'failed', error: e.message, finished_at: new Date().toISOString() }).eq('id', jobId);
-
-    // Сообщаем пользователю об ошибке
-    try {
-      const { data: failedJob } = await supabase.from('jobs').select('tg_chat_id, tg_message_id, user_id').eq('id', jobId).single();
-      if (failedJob) {
-        if (failedJob.tg_message_id) {
-          await bot.telegram.editMessageText(
-            failedJob.tg_chat_id, failedJob.tg_message_id, undefined,
-            '❌ Не удалось завершить анализ.\n\nПопробуйте ещё раз через минуту.\nКредит не списан.'
-          ).catch(() => {});
-        }
-        // Снимаем processing lock
-        const { redis: r } = require('../src/lib/redis');
-        if (r) await r.del(`processing:${failedJob.user_id}`).catch(() => {});
-      }
-    } catch {}
+    const { handleStepError } = require('../src/lib/stepError');
+    await handleStepError(jobId, e.message, bot);
 
     res.status(200).json({ ok: false });
   }

@@ -100,21 +100,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (!sent) {
-      console.error(`[step2-ai] Failed to trigger step3-market for job ${jobId}`);
-      await supabase.from('jobs').update({ status: 'failed', error: 'step3_trigger_failed', finished_at: new Date().toISOString() }).eq('id', jobId);
-      if (job.tg_message_id) {
-        await bot.telegram.editMessageText(
-          job.tg_chat_id, job.tg_message_id, undefined,
-          '❌ Сервер перегружен. Попробуйте ещё раз через минуту.',
-          { parse_mode: 'HTML' }
-        ).catch(() => {});
-      }
+      const { handleStepError } = require('../src/lib/stepError');
+      await handleStepError(jobId, 'step3_trigger_failed', bot);
     }
 
     res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step2-ai]', e.message);
-    await supabase.from('jobs').update({ status: 'failed', error: e.message, finished_at: new Date().toISOString() }).eq('id', jobId);
+    const { handleStepError } = require('../src/lib/stepError');
+    await handleStepError(jobId, e.message, bot);
     res.status(200).json({ ok: false });
   }
 }
