@@ -18,79 +18,26 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const WB_PARSER_URL = process.env.WB_PARSER_URL || 'http://50fc4ca33bd1.vps.myjino.ru';
 const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || 'cardzip-wb-2024';
 
-// ─── Text Search API (быстрый, стабильный, с Vercel) ─────────────────────────
+// ─── Text Search через VPS (российский IP) ──────────────────────────────────
 
-async function searchWbByText(query: string) {
+async function searchWbByText(query: string): Promise<WbCard[] | null> {
   try {
-    const encoded = encodeURIComponent(query);
-    const url = `https://search.wb.ru/exactmatch/ru/common/v7/search?appType=1&curr=rub&dest=-1257786&query=${encoded}&resultset=catalog&sort=popular&spp=30`;
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)' },
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as any;
-    const products = data?.products ?? [];
-    if (!products.length) return null;
-
-    const cards: WbCard[] = products.slice(0, 50).map((p: any) => ({
-      title: p.name || '',
-      price: p.sizes?.[0]?.price?.product ? Math.round(p.sizes[0].price.product / 100) : 0,
-      url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
-      rating: p.reviewRating || 0,
-      feedbacks: p.feedbacks || 0,
-    })).filter((c: WbCard) => c.price > 0);
-
-    if (!cards.length) return null;
-
-    const prices = cards.map(c => c.price);
-    return {
-      avgPrice: Math.round(prices.reduce((a, b) => a + b, 0) / prices.length),
-      minPrice: Math.min(...prices),
-      maxPrice: Math.max(...prices),
-      totalCards: products.length,
-      topExamples: cards.slice(0, 3),
-      allCards: cards,
-      photoSearchConfirmed: false,
-    };
-  } catch (e: any) {
-    console.warn('[wb-text] Search failed:', e.message);
-    return null;
-  }
-}
-
-// ─── Photo Search via VPS (медленный, visual match) ──────────────────────────
-
-async function searchWbByPhoto(imageUrl: string) {
-  try {
-    const params = new URLSearchParams({ secret: WB_PARSER_SECRET, limit: '50', image_url: imageUrl });
-    const url = `${WB_PARSER_URL}/search-by-image?${params}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(40_000) });
+    const params = new URLSearchParams({ secret: WB_PARSER_SECRET, query, limit: '100' });
+    const url = `${WB_PARSER_URL}/search-by-text?${params}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!res.ok) return null;
     const data = await res.json() as any;
     if (!data.success || !data.products?.length) return null;
 
-    const cards: WbCard[] = data.products.filter((p: any) => p.price > 0).map((p: any) => ({
+    return data.products.map((p: any) => ({
       title: p.name || '',
       price: p.price,
       url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
-      rating: p.rating || p.reviewRating || 0,
+      rating: p.rating || 0,
       feedbacks: p.feedbacks || 0,
-    }));
-
-    if (!cards.length) return null;
-    const prices = cards.map(c => c.price);
-    return {
-      avgPrice: Math.round(prices.reduce((a, b) => a + b, 0) / prices.length),
-      minPrice: Math.min(...prices),
-      maxPrice: Math.max(...prices),
-      totalCards: data.total || cards.length,
-      topExamples: cards.slice(0, 3),
-      allCards: cards,
-      photoSearchConfirmed: data.photoSearchConfirmed ?? true,
-    };
+    })).filter((c: WbCard) => c.price > 0);
   } catch (e: any) {
-    console.warn('[wb-photo] VPS failed:', e.message);
+    console.warn(`[wb-text] "${query.slice(0, 30)}" failed:`, e.message);
     return null;
   }
 }
@@ -116,41 +63,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── МУЛЬТИЗАПРОСНЫЙ ПОИСК: 3-5 text queries + Photo VPS параллельно ───
+    // ─── МУЛЬТИЗАПРОСНЫЙ ПОИСК: 3-5 text queries через VPS ──────────────
     const searchQueries: string[] = [
       ...(seoContent?.searchQueries ?? []),
       ...(seoContent?.keywords?.slice(0, 2) ?? []),
       seoContent?.titleRu,
     ].filter((q): q is string => !!q && q.length > 2).slice(0, 5);
 
-    const photoUrl = raw.mainImageUrl;
+    console.log(`[step3] Multi-search: ${searchQueries.length} queries via VPS`);
 
-    console.log(`[step3] Multi-search: ${searchQueries.length} queries + photo=${photoUrl ? 'yes' : 'no'}`);
-
-    // Все text запросы + photo запускаются одновременно
-    const [textResults, photoResult] = await Promise.all([
-      Promise.all(searchQueries.map(q => searchWbByText(q).catch(() => null))),
-      photoUrl ? searchWbByPhoto(photoUrl) : Promise.resolve(null),
-    ]);
+    const textResults = await Promise.all(
+      searchQueries.map(q => searchWbByText(q))
+    );
 
     // Собираем все карточки в единый пул (дедупликация по URL)
     const allCards: WbCard[] = [];
     const seenUrls = new Set<string>();
-
-    // Photo результаты приоритетнее
-    if (photoResult?.allCards) {
-      for (const card of photoResult.allCards) {
-        if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
-      }
-    }
-    for (const result of textResults) {
-      if (!result?.allCards) continue;
-      for (const card of result.allCards) {
+    for (const cards of textResults) {
+      if (!cards) continue;
+      for (const card of cards) {
         if (!seenUrls.has(card.url)) { seenUrls.add(card.url); allCards.push(card); }
       }
     }
 
-    console.log(`[step3] Collected: ${allCards.length} unique cards (photo: ${photoResult?.allCards?.length ?? 0}, text: ${textResults.filter(Boolean).reduce((s, r) => s + (r?.allCards?.length ?? 0), 0)})`);
+    console.log(`[step3] Collected: ${allCards.length} unique cards from ${textResults.filter(Boolean).length} queries`);
 
     // Скоринг похожести
     const similarity = scoreSimilarity(allCards, raw, seoContent?.titleRu, searchQueries);
@@ -165,7 +101,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       totalCards: allCards.length,
       topExamples: similarity.highCards.slice(0, 3),
       allCards: relevantCards,
-      photoSearchConfirmed: photoResult?.photoSearchConfirmed ?? false,
+      photoSearchConfirmed: false,
     } : null;
 
     const filterKeywords = seoContent?.filterKeywords ?? DEFAULT_FILTER_KEYWORDS;
