@@ -13,6 +13,7 @@ import { handleTariffsMenu, handleEditTariff, handleResetTariffs, handleTariffIn
 import { handleRewrite } from './handlers/rewrite';
 import { handleQuickTariff } from './handlers/quickTariff';
 import { handleSearch1688 } from './handlers/search1688';
+import { handleWbLeaders } from './handlers/wbLeaders';
 import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 
@@ -105,6 +106,11 @@ bot.action('supplier_confirm', async (ctx) => {
 // ─── Выбор SKU ──────────────────────────────────────────────────────────────
 bot.action(/^sku_(all|\d+)_(.+)$/, async (ctx) => {
   return handleSkuSelect(ctx);
+});
+
+// ─── Лидеры WB ──────────────────────────────────────────────────────────────
+bot.action(/^leaders_(.+)$/, async (ctx) => {
+  return handleWbLeaders(ctx);
 });
 
 // ─── Найти на 1688 ──────────────────────────────────────────────────────────

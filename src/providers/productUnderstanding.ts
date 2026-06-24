@@ -1,3 +1,5 @@
+export type KitType = 'body_only' | 'basic_kit' | 'full_kit' | 'unknown';
+
 export interface ProductStructure {
   category: string;
   productType: string;
@@ -8,6 +10,8 @@ export interface ProductStructure {
   optionalFeatures: string[];
   technicalSpecs: Record<string, string>;
   negativeMatches: string[];
+  kitType: KitType;
+  kitContents: string[];
   confidence: number;
 }
 
@@ -57,6 +61,8 @@ ${info}
   "optionalFeatures": ["второстепенные (цвет, чехол, ...)"],
   "technicalSpecs": {"ключ": "значение"},
   "negativeMatches": ["что НЕ является этим товаром, но может попасть в выдачу"],
+  "kitType": "body_only|basic_kit|full_kit|unknown",
+  "kitContents": ["что входит в комплект: батарея, чехол, насадки, зарядка и т.д."],
   "confidence": 0.0-1.0
 }`;
 }
@@ -149,6 +155,8 @@ export async function understandProduct(raw: {
       optionalFeatures: result.optionalFeatures ?? [],
       technicalSpecs: result.technicalSpecs ?? {},
       negativeMatches: result.negativeMatches ?? [],
+      kitType: result.kitType ?? 'unknown',
+      kitContents: result.kitContents ?? [],
       confidence: result.confidence ?? 0.5,
     };
   } catch (e) {

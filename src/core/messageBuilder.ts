@@ -81,42 +81,37 @@ export function buildMessage1(product: ProductWithContent): string {
   }
   L.push('');
 
-  // WB ориентир с данными похожести
-  const sim = (product as any).similarityData;
-  L.push('🔍 <b>Рынок WB — текстовая выборка</b>');
+  // WB рынок
+  const sim = product.similarityData;
+  L.push('🔍 <b>Рынок WB</b>');
 
-  if (sim) {
-    // Показываем только русские запросы
-    const ruQueries = (sim.queries ?? []).filter((q: string) => /[а-яё]/i.test(q));
-    if (ruQueries.length) {
-      L.push('  Запросы:');
-      ruQueries.slice(0, 3).forEach((q: string) => L.push(`  • ${esc(q)}`));
-    }
-    L.push(`  Проанализировано: ${sim.totalAnalyzed} карточек`);
-    if (sim.highCount > 0) L.push(`  Высокая похожесть: ${sim.highCount}`);
-    if (sim.mediumCount > 0) L.push(`  Средняя похожесть: ${sim.mediumCount}`);
+  if (sim && sim.totalAnalyzed > 0) {
+    // Confidence
+    const confIcon = sim.marketStatus === 'confirmed' ? '🟢' : sim.marketStatus === 'limited' ? '🟡' : '🔴';
+    const confLabel = sim.marketStatus === 'confirmed' ? 'Высокая' : sim.marketStatus === 'limited' ? 'Средняя' : 'Низкая';
+    L.push(`  ${confIcon} Уверенность: <b>${confLabel}</b>`);
+    L.push(`  Близкие аналоги: ${sim.highCount} | Категория: ${sim.mediumCount}`);
   }
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {
+    // Цены
     L.push('');
-    L.push(`  <b>Ценовой ориентир аналогов:</b>`);
-    L.push(`  Медиана: <b>${fP(wbFiltered.medianPrice)}</b>`);
-    L.push(`  P25–P75: ${fP(wbFiltered.p25Price)}–${fP(wbFiltered.p75Price)}`);
+    L.push('  <b>Цена аналогов:</b>');
+    L.push(`  P25: ${fP(wbFiltered.p25Price)} | Медиана: <b>${fP(wbFiltered.medianPrice)}</b> | P75: ${fP(wbFiltered.p75Price)}`);
+
+    // Лидеры ниши (top по отзывам)
     if (wbFiltered.topExamples.length) {
-      wbFiltered.topExamples.slice(0, 3).forEach((ex) => {
-        const t = ex.title.length > 35 ? ex.title.slice(0, 32) + '...' : ex.title;
-        L.push(`  • <a href="${ex.url}">${fP(ex.price)}</a> — ${esc(t)}`);
+      const leaders = [...wbFiltered.topExamples]
+        .sort((a, b) => b.feedbacks - a.feedbacks)
+        .slice(0, 3);
+      L.push('');
+      L.push('  🏆 <b>Лидеры ниши:</b>');
+      leaders.forEach((ex, i) => {
+        const t = ex.title.length > 30 ? ex.title.slice(0, 27) + '...' : ex.title;
+        L.push(`  ${i + 1}. <a href="${ex.url}">${fP(ex.price)}</a> ⭐${ex.rating} 💬${fN(ex.feedbacks)} — ${esc(t)}`);
       });
     }
-
-    if (sim?.marketStatus === 'confirmed') {
-      L.push('  <i>Ниша подтверждена. Есть ориентир по аналогам.</i>');
-    } else if (sim?.marketStatus === 'limited') {
-      L.push('  <i>⚠️ Ниша есть, но сопоставимость модели не подтверждена.</i>');
-    } else {
-      L.push('  <i>⚠️ Недостаточно данных для оценки рынка.</i>');
-    }
-  } else {
+  } else if (!sim || sim.totalAnalyzed === 0) {
     L.push('  ⚠️ Похожие товары не найдены');
   }
   L.push('');
@@ -188,18 +183,36 @@ export function buildMessage1(product: ProductWithContent): string {
   // Макс. закупочная цена — ТОЛЬКО если вес известен и цена не синтетическая
   if (maxPurchasePrice && !wm && !economics.isSyntheticPrice && economics.platformMode === 'full') {
     L.push('🎯 <b>Целевая закупочная цена</b>');
-    L.push(`  Макс. цена (при марже ${maxPurchasePrice.targetMarginPercent}%): <b>${maxPurchasePrice.maxYuan.toFixed(1)} ¥</b>`);
-    L.push(`  Текущая: ${maxPurchasePrice.currentYuan} ¥`);
-    if (maxPurchasePrice.allowed) {
-      L.push('  ✅ Текущая цена проходит');
+    if (maxPurchasePrice.maxYuan > 0) {
+      L.push(`  Макс. цена (при марже ${maxPurchasePrice.targetMarginPercent}%): <b>${maxPurchasePrice.maxYuan.toFixed(1)} ¥</b>`);
+      L.push(`  Текущая: ${maxPurchasePrice.currentYuan} ¥`);
+      if (maxPurchasePrice.allowed) {
+        L.push('  ✅ Текущая цена проходит');
+      } else {
+        L.push(`  ❌ Нужна цена ниже ${maxPurchasePrice.maxYuan.toFixed(0)} ¥. Запросите оптовую.`);
+      }
     } else {
-      const diff = (maxPurchasePrice.currentYuan - maxPurchasePrice.maxYuan).toFixed(1);
-      L.push(`  ❌ Превышение: +${diff} ¥. Запросите оптовую цену.`);
+      L.push(`  ❌ При текущих расходах целевая маржа ${maxPurchasePrice.targetMarginPercent}% недостижима.`);
+      L.push('  Проверьте оптовые цены или пересмотрите тарифы.');
     }
     L.push('');
   }
 
-  // Вывод
+  // Вердикт
+  L.push('🎯 <b>Вердикт</b>');
+  if (sim && wbFiltered && wbFiltered.relevantCount > 0) {
+    const demandIcon = wbFiltered.totalFeedbacks > 1000 ? '🟢' : wbFiltered.totalFeedbacks > 100 ? '🟡' : '🔴';
+    const compIcon = wbFiltered.relevantCount > 50 ? '🔴' : wbFiltered.relevantCount > 20 ? '🟡' : '🟢';
+    L.push(`  Спрос: ${demandIcon} ${wbFiltered.totalFeedbacks > 1000 ? 'Есть' : wbFiltered.totalFeedbacks > 100 ? 'Средний' : 'Слабый'}`);
+    L.push(`  Конкуренция: ${compIcon} ${wbFiltered.relevantCount > 50 ? 'Высокая' : wbFiltered.relevantCount > 20 ? 'Средняя' : 'Низкая'}`);
+    if (!wm && !economics.isSyntheticPrice) {
+      const econIcon = economics.grossProfitRub > 0 ? '🟢' : '🔴';
+      L.push(`  Экономика: ${econIcon} ${economics.grossProfitRub > 0 ? 'Положительная' : 'Слабая'}`);
+    }
+    const confIcon = sim.marketStatus === 'confirmed' ? '🟢' : sim.marketStatus === 'limited' ? '🟡' : '🔴';
+    L.push(`  Уверенность: ${confIcon}`);
+  }
+  L.push('');
   L.push(`${conclusion.icon} <b>${esc(conclusion.headline)}</b>`);
   conclusion.disclaimers.forEach((d) => L.push(`<i>⚠️ ${esc(d)}</i>`));
   L.push('');
@@ -262,7 +275,10 @@ export function buildMessage2(product: ProductWithContent, jobId: string): {
 
   // Кнопки
   const buttons: any[][] = [
-    [Markup.button.callback('📩 Вопросы поставщику', 'supplier_questions')],
+    [
+      Markup.button.callback('📩 Вопросы поставщику', 'supplier_questions'),
+      Markup.button.callback('🏆 Лидеры WB', `leaders_${jobId}`),
+    ],
   ];
   if (product.platform !== '1688') {
     buttons.push([Markup.button.callback('🔎 Найти аналог на 1688', `search_1688_${jobId}`)]);
