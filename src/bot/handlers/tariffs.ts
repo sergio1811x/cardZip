@@ -24,8 +24,10 @@ export async function handleTariffsMenu(ctx: Context) {
   }
 
   const tariffs = await getUserTariffs(userId);
-  const val = (key: keyof typeof tariffs, def: string, unit: string) =>
-    tariffs?.[key] ? `<b>${tariffs[key]} ${unit}</b> (ваш)` : `<b>${def} ${unit}</b> (авто)`;
+  const val = (key: string, def: string, unit: string) => {
+    const v = tariffs ? (tariffs as any)[key] : undefined;
+    return v ? `<b>${v} ${unit}</b> (ваш)` : `<b>${def} ${unit}</b> (авто)`;
+  };
 
   const lines = [
     '⚙️ <b>Параметры расчёта экономики</b>',
@@ -50,9 +52,10 @@ export async function handleTariffsMenu(ctx: Context) {
     'Нажмите на параметр, чтобы изменить.',
   ];
 
-  const btn = (key: keyof typeof tariffs, emoji: string, label: string, def: string, unit: string) => {
-    const v = tariffs?.[key] ? `${tariffs[key]} ${unit}` : `авто · ${def} ${unit}`;
-    return Markup.button.callback(`${emoji} ${label}: ${v}`, `edit_tariff_${key}`);
+  const btn = (key: string, emoji: string, label: string, def: string, unit: string) => {
+    const v = tariffs ? (tariffs as any)[key] : undefined;
+    const display = v ? `${v} ${unit}` : `авто · ${def} ${unit}`;
+    return Markup.button.callback(`${emoji} ${label}: ${display}`, `edit_tariff_${key}`);
   };
 
   const buttons = [
