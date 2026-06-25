@@ -5,7 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { markSent } from '../src/db/queries/jobs';
 import { getStatus, consumeCredit } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
-import { buildMainMessage, buildCreditsMessage } from '../src/core/messageBuilder';
+import { buildMainMessage } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
 import { createStepProgress } from '../src/core/progress';
@@ -65,17 +65,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
-    // ─── СООБЩЕНИЕ 1: Выжимка + кнопки ─────────────────────────────────────────
-    const { text: mainText, keyboard: mainKb } = buildMainMessage(product, job.id);
+    // ─── Одно сообщение: выжимка + остаток + кнопки ───────────────────────────
+    const { text: mainText, keyboard: mainKb } = buildMainMessage(product, job.id, freshStatus);
     await bot.telegram.sendMessage(chatId, mainText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       ...mainKb,
     });
-
-    // ─── СООБЩЕНИЕ 2: Кредиты ──────────────────────────────────────────────────
-    const { text: creditsText, keyboard: creditsKb } = buildCreditsMessage(freshStatus);
-    await bot.telegram.sendMessage(chatId, creditsText, { parse_mode: 'HTML', ...creditsKb });
 
     await markSent(job.id);
     if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});

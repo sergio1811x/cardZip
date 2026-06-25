@@ -75,7 +75,13 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     }
 
     const text = lang === 'ru' ? formatQuestionsRu(questions) : formatQuestionsCn(questions);
-    await ctx.reply(text, { parse_mode: 'HTML' });
+    const afterText = text + '\n\nПосле ответа поставщика нажмите 📥';
+    await ctx.reply(afterText, {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('📥 Внести ответ поставщика', 'supplier_confirm')],
+      ]),
+    });
   } catch (e) {
     console.error('[supplier_questions]', e);
     await ctx.reply('❌ Не удалось сформировать вопросы. Попробуйте позже.');

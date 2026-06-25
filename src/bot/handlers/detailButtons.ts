@@ -32,8 +32,9 @@ export async function handleEconDetail(ctx: Context): Promise<void> {
     return;
   }
 
+  const jobId = match[1];
   await ctx.answerCbQuery();
-  const { text, keyboard } = buildEconomicsDetail(product);
+  const { text, keyboard } = buildEconomicsDetail(product, jobId);
   await ctx.reply(text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
@@ -45,6 +46,27 @@ export async function handleWbDetail(ctx: Context): Promise<void> {
   const match = (ctx.callbackQuery as any)?.data?.match(/^wb_detail_(.+)$/);
   if (!match) return;
 
+  const jobId = match[1];
+  const job = await getJobData(ctx, jobId);
+  const product = (job?.result_json as any)?.product as ProductWithContent | undefined;
+  if (!product) {
+    await ctx.answerCbQuery('Данные недоступны');
+    return;
+  }
+
+  await ctx.answerCbQuery();
+  const { text, keyboard } = buildWbDetail(product, jobId);
+  await ctx.reply(text, {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+    ...keyboard,
+  });
+}
+
+export async function handleBackToMain(ctx: Context): Promise<void> {
+  const match = (ctx.callbackQuery as any)?.data?.match(/^back_main_(.+)$/);
+  if (!match) return;
+
   const job = await getJobData(ctx, match[1]);
   const product = (job?.result_json as any)?.product as ProductWithContent | undefined;
   if (!product) {
@@ -53,9 +75,12 @@ export async function handleWbDetail(ctx: Context): Promise<void> {
   }
 
   await ctx.answerCbQuery();
-  await ctx.reply(buildWbDetail(product), {
+  const { buildMainMessage } = require('../../core/messageBuilder');
+  const { text, keyboard } = buildMainMessage(product, match[1]);
+  await ctx.reply(text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
+    ...keyboard,
   });
 }
 

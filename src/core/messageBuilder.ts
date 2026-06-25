@@ -21,21 +21,46 @@ function fN(n: number): string {
   return n.toLocaleString('ru-RU');
 }
 
+function pluralize(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return many;
+  if (last > 1 && last < 5) return few;
+  if (last === 1) return one;
+  return many;
+}
+
+function formatCreditsLine(status: SubscriptionStatus): string {
+  if (status.plan === 'week') {
+    const word = pluralize(status.creditsRemaining, 'анализ', 'анализа', 'анализов');
+    let line = `⚡ Pro-неделя`;
+    if (status.activeUntil) line += ` до ${status.activeUntil.toLocaleDateString('ru-RU')}`;
+    return line + ` · осталось ${status.creditsRemaining} ${word}`;
+  }
+  if (status.creditsRemaining <= 0) return '📦 Анализы использованы.';
+  const word = pluralize(status.creditsRemaining, 'анализ', 'анализа', 'анализов');
+  return `📦 Осталось: ${status.creditsRemaining} ${word}`;
+}
+
 const PLATFORM_LABELS: Record<string, string> = {
   '1688': '1688',
   taobao: 'Taobao',
   tmall: 'Tmall',
 };
 
-// ─── Главное сообщение ──────────────────────────────────────────────────────
+// ─── Главное сообщение (единственное после анализа) ─────────────────────────
 
-export function buildMainMessage(product: ProductWithContent, jobId: string): {
+export function buildMainMessage(
+  product: ProductWithContent,
+  jobId: string,
+  status?: SubscriptionStatus,
+): {
   text: string;
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
 } {
   const { wbFiltered, economics, conclusion, similarityData: sim } = product;
   if (!economics) {
-    return { text: '❌ Данные анализа неполные.', keyboard: Markup.inlineKeyboard([[Markup.button.callback('🔄 Проверить новый товар', 'new_search')]]) };
+    return { text: '❌ Данные анализа неполные.', keyboard: Markup.inlineKeyboard([[Markup.button.callback('🔄 Новый товар', 'new_search')]]) };
   }
   const safeConclusion = conclusion ?? { platform: product.platform, icon: '🟡', headline: 'Нужны данные для оценки', disclaimers: [] };
   const wm = economics.weightMissing;
@@ -51,22 +76,15 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
   if (product.priceRange?.length) {
     const valid = product.priceRange.filter((r) => r.minQty > 0);
     if (valid.length) {
-      const cheapest = valid[valid.length - 1];
-      L.push(`Цена: от ${cheapest.price} ¥`);
+      L.push(`Цена: от ${valid[valid.length - 1].price} ¥`);
     } else {
       const prices = product.priceRange.map((r) => r.price).filter(Boolean);
-      if (prices.length) {
-        L.push(`Цена: от ${Math.min(...prices)} ¥`);
-      } else {
-        L.push(`Цена: ${product.priceYuan} ¥`);
-      }
+      L.push(prices.length ? `Цена: от ${Math.min(...prices)} ¥` : `Цена: ${product.priceYuan} ¥`);
     }
   } else {
     L.push(`Цена: ${product.priceYuan} ¥`);
   }
-  if (product.supplierName) {
-    L.push(`Поставщик: ${esc(product.supplierName)}`);
-  }
+  if (product.supplierName) L.push(`Поставщик: ${esc(product.supplierName)}`);
 
   // ─── Статус ─────────────────────────────────────────────────────────────────
   L.push('');
@@ -82,11 +100,8 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
   L.push('');
   L.push('🔎 <b>Рынок WB</b>');
   if (hasConfirmedAnalogs) {
-    const dc = sim!.directCount ?? sim!.highCount ?? 0;
-    L.push(`Прямые аналоги найдены: ${dc}`);
-    if (hasMarket) {
-      L.push(`Медиана цены: ${fP(wbFiltered!.medianPrice)}`);
-    }
+    L.push(`Прямые аналоги найдены: ${sim!.directCount ?? sim!.highCount ?? 0}`);
+    if (hasMarket) L.push(`Медиана цены: ${fP(wbFiltered!.medianPrice)}`);
   } else if (sim?.categoryCount && sim.categoryCount > 0) {
     L.push('Прямые аналоги пока не подтверждены.');
     L.push('Категория на WB найдена.');
@@ -109,11 +124,11 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
     } else {
       L.push(`Себестоимость: ${fP(economics.costRub)}`);
       if (wbFiltered) {
-        const calcProfit = (salePrice: number) => {
-          const b = economics.breakdown;
-          return salePrice - economics.costRub - Math.round(salePrice * 0.20) - 100 - Math.round(salePrice * b.drrPercent / 100) - Math.round(salePrice * 0.07);
-        };
-        const profitMed = calcProfit(wbFiltered.medianPrice);
+        const b = economics.breakdown;
+        const profitMed = wbFiltered.medianPrice - economics.costRub
+          - Math.round(wbFiltered.medianPrice * 0.20) - 100
+          - Math.round(wbFiltered.medianPrice * b.drrPercent / 100)
+          - Math.round(wbFiltered.medianPrice * 0.07);
         const sign = profitMed >= 0 ? '+' : '';
         L.push(`Прибыль (медиана): ${sign}${fP(profitMed)}`);
         if (economics.roiPercent) L.push(`ROI: ${economics.roiPercent}%`);
@@ -147,18 +162,30 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
   L.push(esc(safeConclusion.headline));
   L.push(buildVerdictAdvice(wm, hasConfirmedAnalogs, economics.grossProfitRub, economics.platformMode));
 
+  // ─── Остаток анализов ───────────────────────────────────────────────────────
+  if (status) {
+    L.push('');
+    L.push(formatCreditsLine(status));
+  }
+
   // ─── Кнопки ─────────────────────────────────────────────────────────────────
   const buttons: any[][] = [
     [
-      Markup.button.callback('📩 Вопросы поставщику', 'supplier_questions'),
-      Markup.button.callback('💰 Подробная экономика', `econ_detail_${jobId}`),
+      Markup.button.callback('📩 Поставщику', 'supplier_questions'),
+      Markup.button.callback('💰 Экономика', `econ_detail_${jobId}`),
     ],
     [
-      Markup.button.callback('🔎 Что найдено на WB', `wb_detail_${jobId}`),
+      Markup.button.callback('🔎 WB-рынок', `wb_detail_${jobId}`),
       Markup.button.callback('📎 Файлы', `materials_${jobId}`),
     ],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ];
+
+  if (status && status.creditsRemaining <= 1) {
+    buttons.push([
+      Markup.button.callback('💳 Купить анализы', 'buy_analyses'),
+    ]);
+  }
 
   return { text: sanitize(L.join('\n')), keyboard: Markup.inlineKeyboard(buttons) };
 }
@@ -173,9 +200,9 @@ function buildVerdictAdvice(wm: boolean, hasAnalogs: boolean, profit: number, mo
   return 'Экономика слабая. Попробуйте договориться о лучшей цене или выбрать другой товар.';
 }
 
-// ─── Подробная экономика (по кнопке) ────────────────────────────────────────
+// ─── Экономика (по кнопке) ──────────────────────────────────────────────────
 
-export function buildEconomicsDetail(product: ProductWithContent): {
+export function buildEconomicsDetail(product: ProductWithContent, jobId: string): {
   text: string;
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
 } {
@@ -186,18 +213,54 @@ export function buildEconomicsDetail(product: ProductWithContent): {
   const hasConfirmedAnalogs = !!(product.similarityData && (product.similarityData.directCount ?? product.similarityData.highCount ?? 0) > 0);
   const L: string[] = [];
 
-  L.push('💰 <b>Подробная экономика</b>');
+  L.push('💰 <b>Экономика</b>');
   L.push('');
 
   if (economics.platformMode === 'full') {
-    L.push(`Закупка: ${b.purchaseYuan} ¥ × ${economics.yuanToRub.toFixed(2)} = ${fP(b.purchaseRub)}`);
-    L.push(`Банк 3%: +${fP(b.bankMarkupRub)}`);
+    if (wm) {
+      L.push('Расчёт предварительный: нет веса товара.');
+      L.push('');
+    }
+
+    // Объясняем разницу цен, если priceRange
+    if (product.priceRange?.length) {
+      const valid = product.priceRange.filter((r) => r.minQty > 0);
+      if (valid.length) {
+        const minPrice = valid[valid.length - 1].price;
+        if (minPrice !== b.purchaseYuan) {
+          L.push(`Цена товара: от ${minPrice} ¥`);
+          L.push(`Расчётный SKU: ${b.purchaseYuan} ¥ ≈ ${fP(b.purchaseRub)}`);
+        } else {
+          L.push(`Закупка: ${b.purchaseYuan} ¥ × ${economics.yuanToRub.toFixed(2)} = ${fP(b.purchaseRub)}`);
+        }
+      } else {
+        L.push(`Закупка: ${b.purchaseYuan} ¥ × ${economics.yuanToRub.toFixed(2)} = ${fP(b.purchaseRub)}`);
+      }
+    } else {
+      L.push(`Закупка: ${b.purchaseYuan} ¥ × ${economics.yuanToRub.toFixed(2)} = ${fP(b.purchaseRub)}`);
+    }
+
+    L.push(`Банк / обмен: +${fP(b.bankMarkupRub)}`);
     if (!wm) {
       L.push(`Карго (${product.weightKg} кг): +${fP(b.cargoRub)}`);
     }
     L.push(`Фулфилмент: +${fP(b.internalLogisticsRub)}`);
-    L.push(`<b>Себестоимость: ${fP(economics.costRub)}</b>`);
+    L.push('');
+    L.push(`<b>Себестоимость${wm ? ' без карго' : ''}: ${fP(economics.costRub)}</b>`);
 
+    // Что не рассчитано
+    if (wm || !hasConfirmedAnalogs || economics.isSyntheticPrice) {
+      const missing: string[] = [];
+      if (wm) missing.push('карго — нет веса');
+      if (!hasConfirmedAnalogs || economics.isSyntheticPrice) missing.push('маржа — нет подтверждённой цены WB');
+      if (wm || !hasConfirmedAnalogs) missing.push('ROI — нет ' + [wm ? 'веса' : '', !hasConfirmedAnalogs ? 'рынка WB' : ''].filter(Boolean).join(' и '));
+
+      L.push('');
+      L.push('<b>Не рассчитано:</b>');
+      missing.forEach((m) => L.push(`• ${m}`));
+    }
+
+    // Полные сценарии
     if (!wm && !economics.isSyntheticPrice && hasConfirmedAnalogs && wbFiltered) {
       const calcProfit = (salePrice: number) => {
         const comm = Math.round(salePrice * 0.20);
@@ -251,29 +314,30 @@ export function buildEconomicsDetail(product: ProductWithContent): {
     L.push('<i>Брендовый референс. Найдите OEM-аналог на 1688.</i>');
   }
 
-  // Подсказка, если расчёт неполный
   if (wm || !hasConfirmedAnalogs) {
     L.push('');
     L.push('📌 Для полного расчёта нужен вес с упаковкой.');
   }
 
   const buttons = [
-    [
-      Markup.button.callback('📥 Внести ответ поставщика', 'supplier_confirm'),
-      Markup.button.callback('⚙️ Изменить параметры', 'edit_params'),
-    ],
+    [Markup.button.callback('📥 Внести ответ поставщика', 'supplier_confirm')],
+    [Markup.button.callback('⚙️ Изменить параметры', 'edit_params')],
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
   ];
 
   return { text: sanitize(L.join('\n')), keyboard: Markup.inlineKeyboard(buttons) };
 }
 
-// ─── Что найдено на WB (по кнопке) ─────────────────────────────────────────
+// ─── WB-рынок (по кнопке) ──────────────────────────────────────────────────
 
-export function buildWbDetail(product: ProductWithContent): string {
+export function buildWbDetail(product: ProductWithContent, jobId: string): {
+  text: string;
+  keyboard: ReturnType<typeof Markup.inlineKeyboard>;
+} {
   const { wbFiltered, similarityData: sim } = product;
   const L: string[] = [];
 
-  L.push('🔎 <b>Что найдено на WB</b>');
+  L.push('🔎 <b>WB-рынок</b>');
   L.push('');
 
   if (sim && sim.totalAnalyzed > 0) {
@@ -292,12 +356,12 @@ export function buildWbDetail(product: ProductWithContent): string {
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {
     L.push('');
-    L.push('<b>Цена аналогов:</b>');
+    L.push('<b>Цены аналогов:</b>');
     L.push(`P25: ${fP(wbFiltered.p25Price)} | Медиана: <b>${fP(wbFiltered.medianPrice)}</b> | P75: ${fP(wbFiltered.p75Price)}`);
 
     if (wbFiltered.topExamples.length) {
       L.push('');
-      L.push('🎯 <b>Ближайшие найденные товары:</b>');
+      L.push('🎯 <b>Ближайшие товары:</b>');
       wbFiltered.topExamples.slice(0, 5).forEach((ex, i) => {
         const t = ex.title.length > 35 ? ex.title.slice(0, 32) + '...' : ex.title;
         L.push(`${i + 1}. <a href="${ex.url}">${fP(ex.price)}</a> ⭐${ex.rating} 💬${fN(ex.feedbacks)} — ${esc(t)}`);
@@ -323,50 +387,25 @@ export function buildWbDetail(product: ProductWithContent): string {
     L.push(`Спрос: ${demandIcon} ${wbFiltered.totalFeedbacks > 1000 ? 'Есть' : wbFiltered.totalFeedbacks > 100 ? 'Средний' : 'Слабый'}`);
     L.push(`Конкуренция: ${compIcon} ${wbFiltered.relevantCount > 50 ? 'Высокая' : wbFiltered.relevantCount > 20 ? 'Средняя' : 'Низкая'}`);
   } else {
-    L.push('Пока удалось подтвердить только категорию.');
-    L.push('Для точной экономики лучше уточнить характеристики или выбрать другой товар.');
+    L.push('Прямые аналоги пока не подтверждены.');
+    L.push('Рыночную цену и ROI не считаю.');
   }
 
-  return sanitize(L.join('\n'));
+  const buttons = [
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
+  ];
+
+  return { text: sanitize(L.join('\n')), keyboard: Markup.inlineKeyboard(buttons) };
 }
 
-// ─── Сообщение с кредитами ──────────────────────────────────────────────────
+// ─── Кредиты (используется только в legacy/link.ts) ─────────────────────────
 
 export function buildCreditsMessage(status: SubscriptionStatus): {
   text: string;
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
 } {
-  let text: string;
-
-  if (status.plan === 'free') {
-    if (status.creditsRemaining > 0) {
-      const word = pluralize(status.creditsRemaining, 'анализ', 'анализа', 'анализов');
-      text = status.isTrial
-        ? `📦 Осталось: <b>${status.creditsRemaining}</b> бесплатных ${word}.`
-        : `📦 Осталось: <b>${status.creditsRemaining}</b> ${word}.`;
-    } else {
-      text = '📦 Анализы использованы.';
-    }
-  } else if (status.plan === 'week') {
-    text = `⚡ <b>Pro-неделя</b>`;
-    if (status.activeUntil) text += ` до ${status.activeUntil.toLocaleDateString('ru-RU')}`;
-    const word = pluralize(status.creditsRemaining, 'анализ', 'анализа', 'анализов');
-    text += ` · осталось ${status.creditsRemaining} ${word}`;
-  } else {
-    const word = pluralize(status.creditsRemaining, 'анализ', 'анализа', 'анализов');
-    text = `📦 Осталось: <b>${status.creditsRemaining}</b> ${word}`;
-  }
-
-  const buttons = [
-    [
-      Markup.button.callback('📥 Ответ поставщика', 'supplier_confirm'),
-      Markup.button.callback('⚙️ Параметры', 'edit_params'),
-    ],
-    [
-      Markup.button.callback('📊 Мои анализы', 'my_analyses'),
-      Markup.button.callback('💳 Купить анализы', 'buy_analyses'),
-    ],
-  ];
+  const text = formatCreditsLine(status);
+  const buttons: any[][] = [];
 
   if (status.creditsRemaining <= 0) {
     buttons.push([
@@ -377,15 +416,6 @@ export function buildCreditsMessage(status: SubscriptionStatus): {
   }
 
   return { text, keyboard: Markup.inlineKeyboard(buttons) };
-}
-
-function pluralize(n: number, one: string, few: string, many: string): string {
-  const abs = Math.abs(n) % 100;
-  const last = abs % 10;
-  if (abs > 10 && abs < 20) return many;
-  if (last > 1 && last < 5) return few;
-  if (last === 1) return one;
-  return many;
 }
 
 // ─── Legacy exports ─────────────────────────────────────────────────────────
