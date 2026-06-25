@@ -12,6 +12,7 @@ import { getUserTariffs } from '../src/db/queries/userSettings';
 import { expandQueries, judgeCandidateBatch, validateQueries, repairSearch } from '../src/providers/productUnderstanding';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
+import { fetchWbTrends, filterRelevantTrends, type WbTrend } from '../src/providers/wbconTrends';
 
 export const config = { maxDuration: 60 };
 
@@ -97,6 +98,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const lexicon = resultJson.productLexicon ?? null;
     const queryPlan = resultJson.queryPlan ?? null;
     const validatedQueries: string[] = resultJson.validatedQueries ?? [];
+    const wbCoreQuery: string = resultJson.wbCoreQuery ?? structure?.coreObject ?? '';
+
+    // WBCON trends — запускаем параллельно, не блокируем
+    const trendsPromise = wbCoreQuery
+      ? fetchWbTrends(wbCoreQuery).catch(() => ({ query: wbCoreQuery, trends: [] as WbTrend[], latencyMs: 0 }))
+      : Promise.resolve(null);
 
     const progress = job.tg_message_id
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
@@ -288,6 +295,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : '',
     };
 
+    // WBCON trends — фильтруем
+    const trendsResult = await trendsPromise;
+    const materials = structure?.material ?? [];
+    const productType = structure?.productType ?? '';
+    const wbTrends = trendsResult?.trends?.length
+      ? filterRelevantTrends(trendsResult.trends, wbCoreQuery, productType, materials)
+      : [];
+
+    console.log(`[step3] wbcon: query="${wbCoreQuery}" raw=${trendsResult?.trends?.length ?? 0} filtered=${wbTrends.length} ${trendsResult?.latencyMs ?? 0}ms`);
+
     await supabase.from('jobs').update({
       status: 'done',
       result_json: {
@@ -298,6 +315,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           seoContent, wbData, wbFiltered, riskFlags,
           economics, budgets, maxPurchasePrice, conclusion,
           similarityData,
+          wbTrends,
+          wbCoreQuery,
         },
         debugTrace,
       },

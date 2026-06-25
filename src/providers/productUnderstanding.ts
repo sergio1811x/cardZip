@@ -67,6 +67,7 @@ export interface FullProductAnalysis {
   lexicon: ProductLexicon;
   queryPlan: QueryPlan;
   validatedQueries: string[];
+  wbCoreQuery: string;
 }
 
 // ─── LLM Call with Fallback ──────────────────────────────────────────────────
@@ -200,6 +201,7 @@ export async function analyzeProduct(raw: {
     "softNegativeTerms": ["маркеры похожих но не аналогичных"],
     "broadCategoryTerms": ["широкие категорийные термины"]
   },
+  "wbCoreQuery": "короткий основной запрос WB для поиска трендов, 1-3 слова, без брендов/моделей/характеристик. Примеры: сабо, мини проектор, кошелек мужской, брюки женские, фен дорожный",
   "queryLadder": {
     "L1_exact": ["точные запросы: productType + ключевые атрибуты, 2-4 слова"],
     "L2_commercial": ["запросы языком покупателя WB, как ищет обычный человек"],
@@ -297,7 +299,9 @@ ${info}`;
     ];
     const validatedQueries = validateQueries(allQueries);
 
-    return { structure, lexicon, queryPlan, validatedQueries };
+    const wbCoreQuery = (result.wbCoreQuery ?? structure.coreObject ?? '').trim();
+
+    return { structure, lexicon, queryPlan, validatedQueries, wbCoreQuery };
   } catch (e) {
     console.error('[analyzeProduct]', e instanceof Error ? e.message : e);
     return null;

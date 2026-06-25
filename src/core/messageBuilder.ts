@@ -221,6 +221,18 @@ export function buildMainMessage(
     if (wbCategory.availability && wbCategory.availability !== 'Не рассчитано') L.push(`Наличие: ${wbCategory.availability}`);
   }
 
+  // ─── Запросы WB (тренды) ────────────────────────────────────────────────────
+  const wbTrends = (product as any).wbTrends as Array<{ search_words: string; weeks_request_per_day: number }> | undefined;
+  if (wbTrends?.length) {
+    L.push('');
+    L.push('🔑 <b>Запросы WB</b>');
+    wbTrends.slice(0, 5).forEach((t) => {
+      const rpd = t.weeks_request_per_day;
+      const label = rpd >= 1000 ? `~${(rpd / 1000).toFixed(1)}к/день` : `~${rpd}/день`;
+      L.push(`• ${esc(t.search_words)} — ${label}`);
+    });
+  }
+
   // ─── Экономика ──────────────────────────────────────────────────────────────
   L.push('');
   L.push('💰 <b>Экономика</b>');

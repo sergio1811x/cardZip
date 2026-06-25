@@ -63,10 +63,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const productLexicon = analysis?.lexicon ?? null;
     const queryPlan = analysis?.queryPlan ?? null;
     const validatedQueries = analysis?.validatedQueries ?? [];
+    const wbCoreQuery = analysis?.wbCoreQuery ?? productStructure?.coreObject ?? '';
 
     progress?.stop();
 
-    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | structure: ${productStructure?.productType ?? 'null'} | queries: ${validatedQueries.length}`);
+    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | structure: ${productStructure?.productType ?? 'null'} | queries: ${validatedQueries.length} | wbCoreQuery: ${wbCoreQuery}`);
 
     await supabase.from('jobs').update({
       status: 'ai_done',
@@ -77,6 +78,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         productLexicon,
         queryPlan,
         validatedQueries,
+        wbCoreQuery,
       },
     }).eq('id', jobId);
 
