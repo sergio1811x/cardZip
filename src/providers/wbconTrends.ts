@@ -56,6 +56,8 @@ export function filterRelevantTrends(
 ): WbTrend[] {
   const excludePatterns = [
     /медицинск/i, /ортопедическ/i, /профессиональн/i,
+    /набор\s/i, /комплект\s/i,
+    /\bswiss\b/i, /\bzwilling\b/i, /\bvictorinox\b/i, /\bsamura\b/i,
   ];
 
   const coreLower = coreQuery.toLowerCase();
@@ -70,8 +72,11 @@ export function filterRelevantTrends(
 
       if (excludePatterns.some((p) => p.test(w))) return false;
 
-      const conflictMaterials = ['кожаные', 'кожа', 'замшевые', 'замша', 'текстильные', 'деревянные', 'металлические'];
-      for (const cm of conflictMaterials) {
+      const conflictTerms = [
+        'кожаные', 'кожа', 'замшевые', 'замша', 'текстильные', 'деревянные', 'металлические',
+        'маленький', 'с зубчиками', 'универсальный', 'овощной', 'хлебный', 'филейный',
+      ];
+      for (const cm of conflictTerms) {
         if (w.includes(cm) && !materialSet.has(cm) && !typeLower.includes(cm)) return false;
       }
 

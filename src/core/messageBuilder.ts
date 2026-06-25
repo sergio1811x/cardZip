@@ -60,12 +60,25 @@ const CN_ATTR_NAMES: Record<string, string> = {
   '订货号': 'Артикул', '货号': 'Артикул',
   '重量': 'Вес', '包装': 'Упаковка', '尺寸': 'Размер',
   '适用人群': 'Целевая аудитория', '类型': 'Тип',
+  '产品类别': 'Тип товара', '产品名称': 'Название',
+  '原产国/地区': 'Регион производства',
+  '是否有专利': 'Патент', '是否跨境出口': 'Экспорт',
+  '长度': 'Длина', '宽度': 'Ширина', '高度': 'Высота',
+  '容量': 'Объём', '适用年龄': 'Возраст',
+  '刀刃材质': 'Материал лезвия', '手柄材质': 'Материал рукоятки',
+  '刀刃长度': 'Длина лезвия',
 };
 
 const SKIP_ATTR_MAIN: Set<string> = new Set([
   '订货号', '货号', '型号', '是否进口', '加工定制', '是否外贸',
-  '品牌', '产地',
+  '品牌', '产地', '是否有专利', '是否跨境出口', '原产国/地区',
 ]);
+
+function isJunkAttrValue(value: string): boolean {
+  if (!value || value === '/' || value === '-' || value === '无' || value === 'null') return true;
+  if (value.length > 40) return true;
+  return false;
+}
 
 const CN_ATTR_VALUES: Record<string, string> = {
   '中性/男女均可': 'унисекс', '中性': 'унисекс', '男女均可': 'унисекс',
@@ -76,6 +89,10 @@ const CN_ATTR_VALUES: Record<string, string> = {
   '春夏': 'весна-лето', '秋冬': 'осень-зима', '四季': 'все сезоны',
   '圆形': 'круглая', '方形': 'квадратная', '长方形': 'прямоугольная',
   '中国': 'Китай', '国产': 'Китай',
+  '不锈钢': 'нержавеющая сталь', '碳钢': 'углеродистая сталь',
+  '塑料': 'пластик', '木': 'дерево', '竹': 'бамбук',
+  '斩切刀': 'нож-секач', '切片刀': 'нож для нарезки',
+  '无': 'нет',
 };
 
 function translateAttrName(cn: string): string | null {
@@ -87,7 +104,14 @@ function translateAttrName(cn: string): string | null {
 }
 
 function translateAttrValue(cn: string): string {
-  return CN_ATTR_VALUES[cn] ?? cn;
+  if (CN_ATTR_VALUES[cn]) return CN_ATTR_VALUES[cn];
+  let result = cn;
+  for (const [key, val] of Object.entries(CN_ATTR_VALUES)) {
+    if (key.length >= 2 && result.includes(key)) {
+      result = result.replace(key, val);
+    }
+  }
+  return result;
 }
 
 function formatTiersShort(pr: PriceRange[]): string {
@@ -163,7 +187,9 @@ export function buildMainMessage(
   }
   const safeConclusion = conclusion ?? { platform: product.platform, icon: '🟡', headline: 'Нужны данные для оценки', disclaimers: [] };
   const wm = economics.weightMissing;
-  const hasConfirmedAnalogs = !!(sim && (sim.directCount ?? sim.highCount ?? 0) > 0);
+  const directLocalCount = sim?.directCount ?? 0;
+  const crossBorderCount = sim?.crossBorderCount ?? 0;
+  const hasConfirmedAnalogs = directLocalCount > 0;
   const hasMarket = !!(wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0);
   const L: string[] = [];
 
@@ -190,6 +216,7 @@ export function buildMainMessage(
     const name = (a as any).label ?? (a as any).name ?? '';
     const val = (a as any).value ?? '';
     if (SKIP_ATTR_MAIN.has(name)) continue;
+    if (isJunkAttrValue(val)) continue;
     const ruName = translateAttrName(name);
     if (ruName) translatedAttrs.push({ label: ruName, value: translateAttrValue(val) });
   }
@@ -217,13 +244,15 @@ export function buildMainMessage(
   L.push('');
   L.push('🔎 <b>Рынок WB</b>');
   if (hasConfirmedAnalogs) {
-    L.push(`Прямые аналоги найдены: ${sim!.directCount ?? sim!.highCount ?? 0}`);
+    L.push(`Прямые локальные аналоги: ${directLocalCount}`);
     if (hasMarket) L.push(`Медиана цены: ${fP(wbFiltered!.medianPrice)}`);
-  } else if (sim?.categoryCount && sim.categoryCount > 0) {
-    L.push('Прямые аналоги пока не подтверждены.');
-    L.push('Категория на WB найдена.');
   } else {
-    L.push('Прямые аналоги на WB пока не найдены.');
+    L.push('Прямые локальные аналоги не подтверждены.');
+    if (crossBorderCount > 0) {
+      L.push(`Найден${crossBorderCount > 1 ? 'о' : ''} ${crossBorderCount} cross-border ${crossBorderCount === 1 ? 'товар' : 'товаров'} — не используем для экономики.`);
+    }
+    if (sim?.similarCount && sim.similarCount > 0) L.push(`Похожие товары: ${sim.similarCount}`);
+    if (sim?.categoryCount && sim.categoryCount > 0) L.push(`Широкая категория: ${sim.categoryCount}`);
   }
 
   if (wbCategory && !hasConfirmedAnalogs) {
@@ -362,7 +391,7 @@ export function buildEconomicsDetail(product: ProductWithContent, jobId: string)
   if (!economics) return { text: '💰 Данные экономики недоступны.', keyboard: Markup.inlineKeyboard([]) };
   const b = economics.breakdown;
   const wm = economics.weightMissing;
-  const hasConfirmedAnalogs = !!(product.similarityData && (product.similarityData.directCount ?? product.similarityData.highCount ?? 0) > 0);
+  const hasConfirmedAnalogs = !!(product.similarityData && (product.similarityData.directCount ?? 0) > 0);
   const L: string[] = [];
 
   L.push('💰 <b>Экономика</b>');
@@ -500,10 +529,10 @@ export function buildWbDetail(product: ProductWithContent, jobId: string): {
     };
     const [confIcon, confLabel] = confMap[sim.confidence ?? ''] ?? ['🔴', 'Не подтверждён'];
     L.push(`${confIcon} Уверенность: <b>${confLabel}</b>`);
-    L.push(`Прямые аналоги: ${sim.directCount ?? sim.highCount ?? 0}`);
-    L.push(`Похожие: ${sim.similarCount ?? sim.mediumCount ?? 0}`);
-    if (sim.crossBorderCount) L.push(`Cross-border: ${sim.crossBorderCount}`);
-    if (sim.categoryCount) L.push(`Категория: ${sim.categoryCount}`);
+    L.push(`Прямые локальные: ${sim.directCount ?? 0}`);
+    L.push(`Похожие локальные: ${sim.similarCount ?? 0}`);
+    if (sim.crossBorderCount) L.push(`Cross-border: ${sim.crossBorderCount} (не используем для экономики)`);
+    if (sim.categoryCount) L.push(`Широкая категория: ${sim.categoryCount}`);
   }
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {
@@ -649,13 +678,14 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   if (product.sold) L.push(`• заказов: ${fN(product.sold)}+`);
   L.push(`• MOQ: ${product.moq > 1 ? `${product.moq} шт` : 'не указан'}`);
 
-  // Характеристики — переводим что можем
+  // Характеристики — переводим, фильтруем мусор
   if (product.attributes?.length) {
     L.push('');
     L.push('<b>Характеристики:</b>');
     let shownCount = 0;
     for (const a of product.attributes) {
-      if (shownCount >= 8) break;
+      if (shownCount >= 10) break;
+      if (isJunkAttrValue(a.value)) continue;
       const ruName = translateAttrName(a.name);
       L.push(`• ${esc(ruName ?? a.name)}: ${esc(translateAttrValue(a.value))}`);
       shownCount++;
