@@ -20,10 +20,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    if (!await acquireStepLock('step1', jobId)) return res.status(200).json({ ok: true, skip: true });
+    if (!await acquireStepLock('step1', jobId)) {
+      console.log(`[step1] Duplicate blocked for job ${jobId}`);
+      return res.status(200).json({ ok: true, skip: true });
+    }
 
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (!job || job.status !== 'pending') return res.status(200).json({ ok: true, skip: true });
+    if (!job || job.status !== 'pending') {
+      console.log(`[step1] Skip: job ${jobId} status=${job?.status ?? 'NOT_FOUND'}`);
+      return res.status(200).json({ ok: true, skip: true });
+    }
+
+    console.log(`[step1] Start: ${jobId} url=${job.input_url.slice(0, 60)}`);
 
     // Обновляем статус
     await supabase.from('jobs').update({ status: 'elim', started_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', jobId);
