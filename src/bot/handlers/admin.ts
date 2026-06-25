@@ -62,13 +62,13 @@ export async function handleAdminWbDateInput(ctx: Context, text: string): Promis
   const pending = await getAdminWbDatePending(chatId);
   if (!pending) return false;
 
-  if (redis) await redis.del(`admin_wb_date:${chatId}`);
-
   const dateMatch = text.trim().match(/^\d{4}-\d{2}-\d{2}$/);
   if (!dateMatch) {
     await ctx.reply('❌ Неверный формат. Нужен YYYY-MM-DD, например <code>2026-06-18</code>', { parse_mode: 'HTML' });
     return true;
   }
+
+  if (redis) await redis.del(`admin_wb_date:${chatId}`);
 
   await ctx.reply(`⏳ Загружаю WB-категории за ${dateMatch[0]}...`);
 
