@@ -51,9 +51,21 @@ const CN_ATTR_NAMES: Record<string, string> = {
   '材质': 'Материал', '面料': 'Материал', '材料': 'Материал',
   '功能': 'Функция', '风格': 'Стиль', '适用季节': 'Сезон', '季节': 'Сезон',
   '是否外贸': 'Для экспорта', '颜色': 'Цвет', '尺码': 'Размер',
-  '适用场景': 'Назначение', '图案': 'Рисунок', '厚薄': 'Толщина',
+  '适用场景': 'Назначение', '适用范围': 'Область применения',
+  '图案': 'Рисунок', '厚薄': 'Толщина',
   '弹力': 'Эластичность', '产地': 'Происхождение', '品牌': 'Бренд',
+  '是否进口': 'Импорт', '加工定制': 'Кастомизация',
+  '额定电压': 'Напряжение', '外形尺寸': 'Форма / размер',
+  '型号': 'Модель', '电源方式': 'Тип питания', '功率': 'Мощность',
+  '订货号': 'Артикул', '货号': 'Артикул',
+  '重量': 'Вес', '包装': 'Упаковка', '尺寸': 'Размер',
+  '适用人群': 'Целевая аудитория', '类型': 'Тип',
 };
+
+const SKIP_ATTR_MAIN: Set<string> = new Set([
+  '订货号', '货号', '型号', '是否进口', '加工定制', '是否外贸',
+  '品牌', '产地',
+]);
 
 const CN_ATTR_VALUES: Record<string, string> = {
   '中性/男女均可': 'унисекс', '中性': 'унисекс', '男女均可': 'унисекс',
@@ -62,6 +74,8 @@ const CN_ATTR_VALUES: Record<string, string> = {
   '透气': 'дышащие', '防滑': 'нескользящие', '保暖': 'утеплённые',
   '春': 'весна', '夏': 'лето', '秋': 'осень', '冬': 'зима',
   '春夏': 'весна-лето', '秋冬': 'осень-зима', '四季': 'все сезоны',
+  '圆形': 'круглая', '方形': 'квадратная', '长方形': 'прямоугольная',
+  '中国': 'Китай', '国产': 'Китай',
 };
 
 function translateAttrName(cn: string): string | null {
@@ -169,12 +183,13 @@ export function buildMainMessage(
   L.push('📌 <b>Данные 1688</b>');
   const normalized = product.normalized1688;
 
-  // Переведённые атрибуты (только те, что можем перевести)
+  // Переведённые атрибуты (только полезные, без технических)
   const translatedAttrs: { label: string; value: string }[] = [];
   const rawAttrs = normalized?.keyAttributes ?? product.attributes ?? [];
   for (const a of rawAttrs) {
     const name = (a as any).label ?? (a as any).name ?? '';
     const val = (a as any).value ?? '';
+    if (SKIP_ATTR_MAIN.has(name)) continue;
     const ruName = translateAttrName(name);
     if (ruName) translatedAttrs.push({ label: ruName, value: translateAttrValue(val) });
   }
@@ -236,7 +251,9 @@ export function buildMainMessage(
   // ─── Экономика ──────────────────────────────────────────────────────────────
   L.push('');
   L.push('💰 <b>Экономика</b>');
-  if (economics.platformMode === 'full') {
+  if (priceIsZero) {
+    L.push('Не рассчитана — цена SKU не распознана.');
+  } else if (economics.platformMode === 'full') {
     if (wm) {
       L.push('Расчёт предварительный.');
       L.push(`Себестоимость без карго: ${fP(economics.costRub)}`);
@@ -577,11 +594,16 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   // Цена
   L.push('');
   L.push('<b>Цена:</b>');
-  L.push(`• цена для расчёта: ${product.priceYuan} ¥`);
-  if (normalized?.pricing?.quoteType) L.push(`• quote_type: ${normalized.pricing.quoteType}`);
-  if (normalized?.pricing?.rawPriceFields?.length) L.push(`• rawPriceFields: ${normalized.pricing.rawPriceFields.join(', ')}`);
-  if (normalized?.pricing?.directPriceYuan) L.push(`• direct: ${normalized.pricing.directPriceYuan} ¥`);
-  if (normalized?.pricing?.promotionPriceYuan) L.push(`• promotion: ${normalized.pricing.promotionPriceYuan} ¥`);
+  if (product.priceYuan > 0) {
+    L.push(`• базовая: ${product.priceYuan} ¥`);
+  } else {
+    L.push('• базовая: не распознана');
+  }
+  if (normalized?.pricing?.skuMinPriceYuan && normalized?.pricing?.skuMaxPriceYuan) {
+    const min = normalized.pricing.skuMinPriceYuan;
+    const max = normalized.pricing.skuMaxPriceYuan;
+    L.push(min === max ? `• цена SKU: ${min} ¥` : `• диапазон SKU: ${min}–${max} ¥`);
+  }
   if (product.priceRange?.length) {
     const valid = product.priceRange.filter((r) => r.minQty > 0);
     if (valid.length) {
@@ -596,25 +618,25 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   }
 
   // SKU
+  L.push('');
+  const quoteType = normalized?.pricing?.quoteType;
   if (product.skus?.length) {
-    L.push('');
     L.push(`<b>SKU:</b> ${product.skus.length} вариантов`);
     const withPrice = product.skus.filter((s) => s.price && s.price > 0);
     if (withPrice.length) {
       const prices = withPrice.map((s) => s.price!);
       const minP = Math.min(...prices);
       const maxP = Math.max(...prices);
-      L.push(minP === maxP ? `• цена SKU: ${minP} ¥` : `• цена SKU: ${minP}–${maxP} ¥`);
+      L.push(minP === maxP ? `• цена: ${minP} ¥` : `• цена: ${minP}–${maxP} ¥`);
     }
     const names = product.skus.slice(0, 6).map((s) => s.name).filter(Boolean);
     if (names.length) {
       L.push(`• варианты: ${names.join(', ')}${product.skus.length > 6 ? '…' : ''}`);
     }
-    if (normalized?.pricing?.selectedSkuName) {
-      L.push(`• selectedSku: ${esc(normalized.pricing.selectedSkuName)}`);
-    }
+  } else if (quoteType === 'by_sku') {
+    L.push('<b>SKU:</b> не удалось распознать');
+    L.push('<i>Товар продаётся по SKU, но варианты не загрузились. Уточните у поставщика.</i>');
   } else {
-    L.push('');
     L.push('<b>SKU:</b> не найдены');
   }
 
@@ -647,19 +669,6 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   L.push(`• вес: ${fWeight(product.weightKg)}`);
   L.push(`• фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
   if (product.stock) L.push(`• остаток: ${fN(product.stock)} шт`);
-
-  if (normalized?.debug) {
-    L.push('');
-    L.push('<b>Debug:</b>');
-    L.push(`• quote_type: ${normalized.debug.quoteType}`);
-    L.push(`• rawPriceFields: ${normalized.debug.rawPriceFields.join(', ') || 'нет'}`);
-    L.push(`• skuCount: ${normalized.debug.skuCount}`);
-    L.push(`• attributesCount: ${normalized.debug.attributesCount}`);
-    L.push(`• imageCount: ${normalized.debug.imageCount}`);
-    L.push(`• seller_type: ${normalized.debug.sellerType ?? 'не указано'}`);
-    L.push(`• extra_info keys: ${normalized.debug.extraInfoKeys.join(', ') || 'нет'}`);
-    L.push(`• missingCriticalFields: ${normalized.debug.missingCriticalFields.join(', ') || 'нет'}`);
-  }
 
   const buttons = [
     [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
