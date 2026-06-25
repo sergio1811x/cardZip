@@ -56,6 +56,36 @@ function formatTiersShort(pr: PriceRange[]): string {
   return valid.map((r) => `${r.minQty}+ → ${r.price}¥`).join(', ');
 }
 
+function formatSupplierType(value: string | undefined): string {
+  const map: Record<string, string> = {
+    factory: 'Фабрика',
+    merchant: 'Торговая компания',
+    seller: 'Продавец',
+  };
+  return map[value ?? ''] ?? 'не указано';
+}
+
+function format1688Price(product: ProductWithContent): string {
+  const pricing = product.normalized1688?.pricing;
+  if (!pricing) return `${product.priceYuan} ¥`;
+
+  if (pricing.quoteType === 'by_sku') {
+    if (pricing.skuMinPriceYuan && pricing.skuMaxPriceYuan && pricing.skuMinPriceYuan !== pricing.skuMaxPriceYuan) {
+      return `${pricing.skuMinPriceYuan}–${pricing.skuMaxPriceYuan} ¥`;
+    }
+    return `${pricing.displayPriceYuan} ¥`;
+  }
+
+  if (pricing.quoteType === 'by_volume') {
+    if (pricing.volumeMinPriceYuan && pricing.volumeMaxPriceYuan && pricing.volumeMinPriceYuan !== pricing.volumeMaxPriceYuan) {
+      return `${pricing.volumeMinPriceYuan}–${pricing.volumeMaxPriceYuan} ¥`;
+    }
+    return `${pricing.displayPriceYuan} ¥`;
+  }
+
+  return `${pricing.displayPriceYuan} ¥`;
+}
+
 const PLATFORM_LABELS: Record<string, string> = {
   '1688': '1688',
   taobao: 'Taobao',
@@ -87,30 +117,27 @@ export function buildMainMessage(
   L.push('');
   L.push(`Источник: ${PLATFORM_LABELS[product.platform] ?? product.platform}`);
 
-  if (product.priceRange?.length) {
-    const valid = product.priceRange.filter((r) => r.minQty > 0);
-    if (valid.length) {
-      L.push(`Цена: от ${valid[valid.length - 1].price} ¥`);
-    } else {
-      const prices = product.priceRange.map((r) => r.price).filter(Boolean);
-      L.push(prices.length ? `Цена: от ${Math.min(...prices)} ¥` : `Цена: ${product.priceYuan} ¥`);
-    }
-  } else {
-    L.push(`Цена: ${product.priceYuan} ¥`);
-  }
+  L.push(`Цена: ${format1688Price(product)}`);
   if (product.supplierName) L.push(`Поставщик: ${esc(product.supplierName)}`);
 
   // ─── Данные 1688 (выжимка) ─────────────────────────────────────────────────
   L.push('');
   L.push('📌 <b>Данные 1688</b>');
-  const material = extractAttr(product.attributes, ['材质', '面料', '材料', 'material', 'fabric']);
-  L.push(`• Материал: ${material || 'не указан'}`);
-  L.push(`• SKU: ${product.skus?.length ? `${product.skus.length} вариантов` : 'не найдены'}`);
-  L.push(`• MOQ: ${product.moq > 1 ? `${product.moq} шт` : 'не указан'}`);
+  const normalized = product.normalized1688;
+  L.push(`• Цена: ${format1688Price(product)}`);
+  L.push(`• MOQ: ${normalized?.moq ? `${normalized.moq} шт` : 'не указано'}`);
+  L.push(`• SKU: ${normalized?.skuCount ? `${normalized.skuCount} вариантов` : 'не указано'}`);
+  L.push(`• Supplier type: ${formatSupplierType(normalized?.supplierType ?? product.supplierType)}`);
+  if (normalized?.salesCount != null || normalized?.repurchaseRate) {
+    L.push(`• Продажи / повторные: ${normalized?.salesCount != null ? fN(normalized.salesCount) : 'не указано'} / ${normalized?.repurchaseRate ?? 'не указано'}`);
+  }
+  L.push(`• Фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
+  L.push(`• Вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : 'не указано'}`);
+  (normalized?.keyAttributes ?? []).slice(0, 5).forEach((attr) => {
+    L.push(`• ${esc(attr.label)}: ${esc(attr.value)}`);
+  });
   const hasTiers = product.priceRange?.some((r) => r.minQty > 0);
-  L.push(`• Скидки: ${hasTiers ? formatTiersShort(product.priceRange!) : 'не распознаны'}`);
-  L.push(`• Фото: ${product.images?.length ?? 0} шт`);
-  L.push(`• Вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : 'не указан'}`);
+  if (hasTiers) L.push(`• Скидки: ${formatTiersShort(product.priceRange!)}`);
 
   // ─── Статус ─────────────────────────────────────────────────────────────────
   L.push('');
@@ -454,7 +481,7 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
 } {
   const L: string[] = [];
-  const SUPPLIER_TYPES: Record<string, string> = { factory: 'Фабрика', merchant: 'Торговая компания', seller: 'Продавец' };
+  const normalized = product.normalized1688;
 
   L.push('📦 <b>Данные товара с 1688</b>');
   L.push('');
@@ -471,7 +498,11 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   // Цена
   L.push('');
   L.push('<b>Цена:</b>');
-  L.push(`• базовая: ${product.priceYuan} ¥`);
+  L.push(`• цена для расчёта: ${product.priceYuan} ¥`);
+  if (normalized?.pricing?.quoteType) L.push(`• quote_type: ${normalized.pricing.quoteType}`);
+  if (normalized?.pricing?.rawPriceFields?.length) L.push(`• rawPriceFields: ${normalized.pricing.rawPriceFields.join(', ')}`);
+  if (normalized?.pricing?.directPriceYuan) L.push(`• direct: ${normalized.pricing.directPriceYuan} ¥`);
+  if (normalized?.pricing?.promotionPriceYuan) L.push(`• promotion: ${normalized.pricing.promotionPriceYuan} ¥`);
   if (product.priceRange?.length) {
     const valid = product.priceRange.filter((r) => r.minQty > 0);
     if (valid.length) {
@@ -494,11 +525,14 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
       const prices = withPrice.map((s) => s.price!);
       const minP = Math.min(...prices);
       const maxP = Math.max(...prices);
-      L.push(minP === maxP ? `• цена: ${minP} ¥` : `• цена: ${minP}–${maxP} ¥`);
+      L.push(minP === maxP ? `• цена SKU: ${minP} ¥` : `• цена SKU: ${minP}–${maxP} ¥`);
     }
     const names = product.skus.slice(0, 6).map((s) => s.name).filter(Boolean);
     if (names.length) {
       L.push(`• варианты: ${names.join(', ')}${product.skus.length > 6 ? '…' : ''}`);
+    }
+    if (normalized?.pricing?.selectedSkuName) {
+      L.push(`• selectedSku: ${esc(normalized.pricing.selectedSkuName)}`);
     }
   } else {
     L.push('');
@@ -509,37 +543,42 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   L.push('');
   L.push('<b>Поставщик:</b>');
   L.push(`• название: ${esc(product.supplierName)}`);
-  L.push(`• тип: ${SUPPLIER_TYPES[product.supplierType ?? ''] ?? 'не указан'}`);
+  L.push(`• тип: ${formatSupplierType(normalized?.supplierType ?? product.supplierType)}`);
   if (product.supplierRating) L.push(`• рейтинг: ${product.supplierRating}/5`);
   if (product.sold) L.push(`• заказов: ${fN(product.sold)}+`);
-  L.push(`• MOQ: ${product.moq > 1 ? `${product.moq} шт` : 'не указан'}`);
+  if (normalized?.repurchaseRate) L.push(`• repurchase: ${esc(normalized.repurchaseRate)}`);
+  L.push(`• MOQ: ${product.moq > 1 ? `${product.moq} шт` : 'не указано'}`);
 
   // Характеристики
   if (product.attributes?.length) {
     L.push('');
     L.push('<b>Характеристики:</b>');
-    const important = ['材质', '面料', '材料', '季节', '风格', '性别', '适用', '图案', '厚薄', '弹力',
-      'material', 'fabric', 'season', 'style', 'gender'];
-    const shown = new Set<string>();
-    for (const a of product.attributes) {
-      if (shown.size >= 8) break;
-      const isImportant = important.some((k) => a.name.toLowerCase().includes(k.toLowerCase()));
-      if (isImportant || shown.size < 5) {
-        L.push(`• ${esc(a.name)}: ${esc(a.value)}`);
-        shown.add(a.name);
-      }
-    }
-    if (product.attributes.length > shown.size) {
-      L.push(`<i>и ещё ${product.attributes.length - shown.size} атрибутов</i>`);
-    }
+    const shown = normalized?.keyAttributes?.length
+      ? normalized.keyAttributes
+      : product.attributes.slice(0, 5).map((a) => ({ label: a.name, value: a.value }));
+    shown.forEach((a) => L.push(`• ${esc(a.label)}: ${esc(a.value)}`));
+    if (product.attributes.length > shown.length) L.push(`<i>и ещё ${product.attributes.length - shown.length} атрибутов</i>`);
   }
 
   // Логистика
   L.push('');
   L.push('<b>Логистика:</b>');
-  L.push(`• вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : 'не указан'}`);
-  L.push(`• фото: ${product.images?.length ?? 0} шт`);
+  L.push(`• вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : 'не указано'}`);
+  L.push(`• фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
   if (product.stock) L.push(`• остаток: ${fN(product.stock)} шт`);
+
+  if (normalized?.debug) {
+    L.push('');
+    L.push('<b>Debug:</b>');
+    L.push(`• quote_type: ${normalized.debug.quoteType}`);
+    L.push(`• rawPriceFields: ${normalized.debug.rawPriceFields.join(', ') || 'нет'}`);
+    L.push(`• skuCount: ${normalized.debug.skuCount}`);
+    L.push(`• attributesCount: ${normalized.debug.attributesCount}`);
+    L.push(`• imageCount: ${normalized.debug.imageCount}`);
+    L.push(`• seller_type: ${normalized.debug.sellerType ?? 'не указано'}`);
+    L.push(`• extra_info keys: ${normalized.debug.extraInfoKeys.join(', ') || 'нет'}`);
+    L.push(`• missingCriticalFields: ${normalized.debug.missingCriticalFields.join(', ') || 'нет'}`);
+  }
 
   const buttons = [
     [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],

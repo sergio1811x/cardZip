@@ -2,39 +2,40 @@ import type { RawProduct1688, AiContentResult, FieldEvidence } from '../types';
 
 export function buildEvidence(product: RawProduct1688, content: AiContentResult): FieldEvidence[] {
   const evidence: FieldEvidence[] = [];
+  const normalized = product.normalized1688;
 
   evidence.push({
     field: 'Цена',
-    value: `${product.priceYuan} ¥`,
+    value: `${normalized?.pricing?.displayPriceYuan ?? product.priceYuan} ¥`,
     confidence: 'confirmed',
     source: 'product_attributes',
   });
 
   evidence.push({
     field: 'MOQ',
-    value: product.moq,
+    value: normalized?.moq ?? product.moq,
     confidence: 'confirmed',
     source: 'product_attributes',
   });
 
   evidence.push({
     field: 'Вес',
-    value: product.weightKg > 0 ? `${product.weightKg} кг` : 'не указан',
-    confidence: product.weightKg > 0 ? 'confirmed' : 'unknown',
+    value: (normalized?.weightKg ?? product.weightKg) > 0 ? `${normalized?.weightKg ?? product.weightKg} кг` : 'не указано',
+    confidence: (normalized?.weightKg ?? product.weightKg) > 0 ? 'confirmed' : 'unknown',
     source: 'product_attributes',
   });
 
-  if (product.supplierType) {
+  if (normalized?.supplierType ?? product.supplierType) {
     evidence.push({
       field: 'Тип поставщика',
-      value: product.supplierType,
+      value: normalized?.supplierType ?? product.supplierType!,
       confidence: 'confirmed',
       source: 'seller',
     });
   }
 
   // Характеристики от поставщика — confirmed
-  (product.attributes ?? []).slice(0, 10).forEach((a) => {
+  (normalized?.attributes ?? product.attributes ?? []).slice(0, 10).forEach((a) => {
     evidence.push({
       field: a.name,
       value: a.value,

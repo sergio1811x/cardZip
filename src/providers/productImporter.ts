@@ -1,5 +1,15 @@
 import { AppError } from '../lib/errors';
-import type { ProductImporter, RawProduct1688, ParsedUrl, Platform } from '../types';
+import type {
+  Normalized1688Data,
+  ParsedUrl,
+  Platform,
+  PriceRange,
+  ProductAttribute,
+  ProductImporter,
+  ProductSku,
+  QuoteType,
+  RawProduct1688,
+} from '../types';
 
 // ─── URL patterns ────────────────────────────────────────────────────────────
 
@@ -94,8 +104,250 @@ interface ElimResponse {
   skus?: Array<{ name?: string; price?: number; quantity?: number; pic_url?: string }>;
   shipping_info?: Array<{ weight?: number }>;
   extra_info?: Array<Record<string, unknown>>;
+  quote_type?: string;
+  repurchase_rate?: string | number;
   code?: number;
   message?: string;
+}
+
+function normalizeNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const cleaned = value.replace(',', '.').replace(/[^\d.]+/g, '');
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function mapQuoteType(value: unknown, hasSkus: boolean, hasRanges: boolean): QuoteType {
+  if (value === 'direct' || value === 'by_sku' || value === 'by_volume') return value;
+  if (hasSkus) return 'by_sku';
+  if (hasRanges) return 'by_volume';
+  return 'direct';
+}
+
+function parseWeightKg(attributes: Array<{ name?: string; value?: string }>, shippingInfo?: Array<{ weight?: number }>): number {
+  const weightAttrs = attributes.filter((a) => a.name && /重量|净重|毛重|weight|вес/i.test(a.name));
+  let weightKg = 0;
+
+  if (weightAttrs.length) {
+    const raw = weightAttrs[0].value ?? '';
+    const kgMatch = raw.match(/([\d.]+)\s*(kg|千克|公斤)/i);
+    const gMatch = raw.match(/([\d.]+)\s*(g|克)/i);
+    const numOnly = raw.match(/^([\d.]+)$/);
+    if (kgMatch) weightKg = parseFloat(kgMatch[1]);
+    else if (gMatch) weightKg = parseFloat(gMatch[1]) / 1000;
+    else if (numOnly) {
+      const val = parseFloat(numOnly[1]);
+      weightKg = val >= 100 ? val / 1000 : val;
+    }
+    console.log(`[import] Вес из атрибутов: "${raw}" → ${weightKg}кг`);
+  }
+
+  if (!weightKg) weightKg = shippingInfo?.[0]?.weight ?? 0;
+  return weightKg;
+}
+
+function buildPriceRanges(ranges: ElimResponse['price_range']): PriceRange[] {
+  return (ranges ?? [])
+    .filter((r) => r.price != null)
+    .map((r) => ({
+      minQty: r.min_quantity ?? 0,
+      maxQty: r.max_quantity ?? 0,
+      price: r.price!,
+    }));
+}
+
+function buildAttributes(attributes: ElimResponse['attributes']): ProductAttribute[] {
+  return (attributes ?? [])
+    .filter((a) => a.name && a.value)
+    .map((a) => ({ name: a.name!, value: a.value! }));
+}
+
+function buildSkus(skus: ElimResponse['skus']): ProductSku[] {
+  return (skus ?? [])
+    .filter((s) => s.name)
+    .map((s) => ({
+      name: s.name!,
+      price: s.price,
+      stock: s.quantity,
+      image: s.pic_url,
+    }));
+}
+
+function pickKeyAttributes(categoryName: string | undefined, attributes: ProductAttribute[]): Array<{ label: string; value: string }> {
+  const category = (categoryName ?? '').toLowerCase();
+  const groups = {
+    tech: ['功率', '电压', '分辨率', '亮度', '认证', '证书', '接口', '配置', '套装', '配件', 'power', 'voltage', 'resolution', 'brightness', 'certificate', 'certification', 'package', 'accessories'],
+    clothing: ['材质', '面料', '季节', '尺码', '颜色', '版型', '厚薄', '弹力', 'material', 'fabric', 'season', 'size', 'color', 'fit'],
+    accessories: ['材质', '尺寸', '颜色', '闭合', '拉链', '隔层', '肩带', 'material', 'size', 'color', 'closure', 'zipper', 'compartment'],
+  };
+
+  const type = /服|衣|裤|鞋|dress|shirt|jacket|pants|clothing|apparel/.test(category)
+    ? 'clothing'
+    : /包|箱|belt|wallet|bag|backpack|accessor/.test(category)
+      ? 'accessories'
+      : 'tech';
+
+  const keywords = groups[type];
+  const selected: Array<{ label: string; value: string }> = [];
+  const seen = new Set<string>();
+
+  for (const attr of attributes) {
+    const hay = `${attr.name} ${attr.value}`.toLowerCase();
+    if (!keywords.some((kw) => hay.includes(kw.toLowerCase()))) continue;
+    if (seen.has(attr.name)) continue;
+    selected.push({ label: attr.name, value: attr.value });
+    seen.add(attr.name);
+    if (selected.length >= 5) break;
+  }
+
+  if (selected.length < 3) {
+    for (const attr of attributes) {
+      if (seen.has(attr.name)) continue;
+      selected.push({ label: attr.name, value: attr.value });
+      seen.add(attr.name);
+      if (selected.length >= 5) break;
+    }
+  }
+
+  return selected;
+}
+
+function buildNormalizedProduct(json: ElimResponse, platform: Platform, productId: string): RawProduct1688 {
+  const images = (json.img_urls ?? []).slice(0, 15);
+  const attributes = buildAttributes(json.attributes);
+  const skus = buildSkus(json.skus);
+  const priceRange = buildPriceRanges(json.price_range);
+  const quoteType = mapQuoteType(json.quote_type, skus.length > 0, priceRange.length > 0);
+  const rawPriceFields = [
+    json.price != null ? 'price' : null,
+    json.promotion_price != null ? 'promotion_price' : null,
+    priceRange.length > 0 ? 'price_range' : null,
+    skus.some((sku) => typeof sku.price === 'number' && sku.price > 0) ? 'skus.price' : null,
+  ].filter((v): v is string => !!v);
+
+  const skuPrices = skus
+    .map((s) => s.price)
+    .filter((p): p is number => p != null && p > 0)
+    .sort((a, b) => a - b);
+
+  const directPrice = normalizeNumber(json.price);
+  const promotionPrice = normalizeNumber(json.promotion_price);
+  const volumePrices = priceRange.map((r) => r.price).filter((price) => price > 0);
+  const rawWeightKg = parseWeightKg(json.attributes ?? [], json.shipping_info);
+  const sanityPrice = promotionPrice ?? directPrice ?? skuPrices[0] ?? volumePrices[0] ?? 0;
+  let weightKg = rawWeightKg;
+  if (weightKg > 50 || (weightKg > 5 && sanityPrice < 200)) {
+    console.warn(`[import] Подозрительный вес ${weightKg}кг при цене ${sanityPrice}¥, сбрасываем`);
+    weightKg = 0;
+  }
+
+  let displayPriceYuan = 0;
+  let selectedSkuName: string | undefined;
+  let selectedSkuPriceYuan: number | undefined;
+
+  if (quoteType === 'direct') {
+    displayPriceYuan = promotionPrice ?? directPrice ?? 0;
+  } else if (quoteType === 'by_sku') {
+    if (skuPrices.length >= 3) {
+      const mid = Math.floor(skuPrices.length / 2);
+      displayPriceYuan = skuPrices.length % 2 ? skuPrices[mid] : (skuPrices[mid - 1] + skuPrices[mid]) / 2;
+    } else {
+      displayPriceYuan = skuPrices[0] ?? promotionPrice ?? directPrice ?? 0;
+    }
+    const selected = skus.find((sku) => sku.price === displayPriceYuan) ?? skus.find((sku) => sku.price != null);
+    selectedSkuName = selected?.name;
+    selectedSkuPriceYuan = selected?.price;
+  } else {
+    displayPriceYuan = volumePrices[0] ?? promotionPrice ?? directPrice ?? 0;
+  }
+
+  const extraInfoFlat = Object.assign({}, ...(json.extra_info ?? []));
+  const repurchaseRate = json.repurchase_rate != null
+    ? String(json.repurchase_rate)
+    : typeof extraInfoFlat.repurchaseRate !== 'undefined'
+      ? String(extraInfoFlat.repurchaseRate)
+      : undefined;
+
+  const normalized1688: Normalized1688Data = {
+    pricing: {
+      quoteType,
+      displayPriceYuan,
+      directPriceYuan: directPrice,
+      promotionPriceYuan: promotionPrice,
+      skuMinPriceYuan: skuPrices[0],
+      skuMaxPriceYuan: skuPrices[skuPrices.length - 1],
+      volumeMinPriceYuan: volumePrices.length ? Math.min(...volumePrices) : undefined,
+      volumeMaxPriceYuan: volumePrices.length ? Math.max(...volumePrices) : undefined,
+      selectedSkuName,
+      selectedSkuPriceYuan,
+      priceRanges: priceRange.length > 0 ? priceRange : undefined,
+      rawPriceFields,
+    },
+    moq: json.moq ?? priceRange.find((r) => r.minQty > 0)?.minQty,
+    skuCount: skus.length,
+    skuVariants: skus,
+    supplierType: json.seller_type,
+    salesCount: json.sold,
+    repurchaseRate,
+    imageCount: images.length,
+    images,
+    weightKg: weightKg > 0 ? weightKg : undefined,
+    attributes,
+    keyAttributes: pickKeyAttributes(json.category_name, attributes),
+    sellerExtraInfo: Object.keys(extraInfoFlat).length ? extraInfoFlat : undefined,
+    soldCountText: json.sold != null ? String(json.sold) : undefined,
+    debug: {
+      quoteType,
+      rawPriceFields,
+      skuCount: skus.length,
+      attributesCount: attributes.length,
+      imageCount: images.length,
+      sellerType: json.seller_type,
+      extraInfoKeys: Object.keys(extraInfoFlat),
+      missingCriticalFields: [
+        displayPriceYuan <= 0 ? 'price' : null,
+        !(json.moq ?? priceRange.find((r) => r.minQty > 0)?.minQty) ? 'moq' : null,
+        images.length === 0 ? 'images' : null,
+        attributes.length === 0 ? 'attributes' : null,
+      ].filter((v): v is string => !!v),
+    },
+  };
+
+  console.log(`[import] Elim success: ${platform}/${productId} | quote:${quoteType} attrs:${attributes.length} skus:${skus.length} sold:${json.sold ?? '?'} images:${images.length}`);
+
+  return {
+    productId: String(json.id ?? json.mp_id ?? productId),
+    platform,
+    titleCn: json.title ?? '',
+    titleEn: json.titleEn,
+    description: json.description,
+    priceYuan: normalized1688.pricing.displayPriceYuan,
+    priceRange: priceRange.length > 0 ? priceRange : undefined,
+    priceIsRange: quoteType !== 'direct' || priceRange.length > 1,
+    moq: normalized1688.moq ?? 1,
+    weightKg: normalized1688.weightKg ?? 0,
+    images,
+    mainImageUrl: images[0] ?? skus.find((sku) => sku.image)?.image ?? '',
+    supplierName: json.shop_name ?? '',
+    supplierRating: json.level,
+    supplierType: json.seller_type,
+    sold: json.sold,
+    stock: json.quantity,
+    categoryName: json.category_name,
+    attributes: attributes.length > 0 ? attributes : undefined,
+    skus: skus.length > 0 ? skus : undefined,
+    supplierExtra: json.extra_info ? {
+      dropshipping: (json.extra_info as any[]).some((e: any) => e.isOnePsale),
+      mixOrder: (json.extra_info as any[]).some((e: any) => e.isSupportMix),
+      freeReturn7d: (json.extra_info as any[]).some((e: any) => e.noReason7DReturn),
+      selectedSource: (json.extra_info as any[]).some((e: any) => e['1688_yx']),
+    } : undefined,
+    selectedSkuName,
+    normalized1688,
+  };
 }
 
 async function fetchProduct(url: string): Promise<RawProduct1688> {
@@ -175,114 +427,7 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     );
   }
 
-  const images = (json.img_urls ?? []).slice(0, 15);
-
-  // Вес: приоритет — из атрибутов товара (вес штуки), потом shipping_info (часто вес партии)
-  const weightAttrs = (json.attributes ?? []).filter((a) =>
-    a.name && /重量|净重|毛重|weight|вес/i.test(a.name)
-  );
-  let weightKg = 0;
-
-  if (weightAttrs.length) {
-    // Парсим вес из атрибутов: "0.35kg", "350g", "0.5千克" и т.д.
-    const raw = weightAttrs[0].value ?? '';
-    const kgMatch = raw.match(/([\d.]+)\s*(kg|千克|公斤)/i);
-    const gMatch = raw.match(/([\d.]+)\s*(g|克)/i);
-    const numOnly = raw.match(/^([\d.]+)$/);
-    if (kgMatch) weightKg = parseFloat(kgMatch[1]);
-    else if (gMatch) weightKg = parseFloat(gMatch[1]) / 1000;
-    else if (numOnly) {
-      const val = parseFloat(numOnly[1]);
-      // Если число < 100, считаем кг; если >= 100, считаем граммы
-      weightKg = val >= 100 ? val / 1000 : val;
-    }
-    console.log(`[import] Вес из атрибутов: "${raw}" → ${weightKg}кг`);
-  }
-
-  if (!weightKg) {
-    weightKg = json.shipping_info?.[0]?.weight ?? 0;
-  }
-
-  // Санитарная проверка
-  const priceRaw = json.promotion_price ?? json.price ?? json.price_range?.[0]?.price ?? 0;
-  if (weightKg > 50 || (weightKg > 5 && priceRaw < 200)) {
-    console.warn(`[import] Подозрительный вес ${weightKg}кг при цене ${priceRaw}¥, сбрасываем`);
-    weightKg = 0;
-  }
-
-  // Цена: если есть несколько SKU с разной ценой — берём медианную (основной товар),
-  // а не минимальную (аксессуар/запчасть)
-  const skuPrices = (json.skus ?? [])
-    .map((s) => s.price)
-    .filter((p): p is number => p != null && p > 0)
-    .sort((a, b) => a - b);
-
-  let price: number;
-  if (skuPrices.length >= 3) {
-    // Медиана SKU — основной товар, не аксессуар
-    const mid = Math.floor(skuPrices.length / 2);
-    price = skuPrices.length % 2 ? skuPrices[mid] : (skuPrices[mid - 1] + skuPrices[mid]) / 2;
-    if (skuPrices[0] < price * 0.5) {
-      console.log(`[import] SKU разброс: min ${skuPrices[0]}¥ → median ${price}¥ → max ${skuPrices[skuPrices.length - 1]}¥ (дешёвый SKU = аксессуар?)`);
-    }
-  } else {
-    price = json.promotion_price ?? json.price ?? json.price_range?.[0]?.price ?? 0;
-  }
-
-  // Оптовые цены
-  const priceRange = (json.price_range ?? [])
-    .filter((r) => r.price != null)
-    .map((r) => ({
-      minQty: r.min_quantity ?? 0,
-      maxQty: r.max_quantity ?? 0,
-      price: r.price!,
-    }));
-
-  // Характеристики
-  const attributes = (json.attributes ?? [])
-    .filter((a) => a.name && a.value)
-    .map((a) => ({ name: a.name!, value: a.value! }));
-
-  // SKU варианты
-  const skus = (json.skus ?? [])
-    .filter((s) => s.name)
-    .map((s) => ({
-      name: s.name!,
-      price: s.price,
-      stock: s.quantity,
-      image: s.pic_url,
-    }));
-
-  console.log(`[import] Elim success: ${platform}/${productId} | attrs:${attributes.length} skus:${skus.length} sold:${json.sold ?? '?'}`);
-
-  return {
-    productId: String(json.id ?? json.mp_id ?? productId),
-    platform,
-    titleCn: json.title,
-    titleEn: json.titleEn,
-    description: json.description,
-    priceYuan: price,
-    priceRange: priceRange.length > 0 ? priceRange : undefined,
-    priceIsRange: skuPrices.length >= 3 || (priceRange.length > 1),
-    moq: json.moq ?? 1,
-    weightKg,
-    images,
-    mainImageUrl: images[0] ?? '',
-    supplierName: json.shop_name ?? '',
-    supplierRating: json.level,
-    supplierType: json.seller_type,
-    sold: json.sold,
-    stock: json.quantity,
-    categoryName: json.category_name,
-    attributes: attributes.length > 0 ? attributes : undefined,
-    skus: skus.length > 0 ? skus : undefined,
-    supplierExtra: json.extra_info ? {
-      dropshipping: (json.extra_info as any[]).some((e: any) => e.isOnePsale),
-      mixOrder: (json.extra_info as any[]).some((e: any) => e.isSupportMix),
-      freeReturn7d: (json.extra_info as any[]).some((e: any) => e.noReason7DReturn),
-      selectedSource: (json.extra_info as any[]).some((e: any) => e['1688_yx']),
-    } : undefined,
-  };
+  return buildNormalizedProduct(json, platform, productId);
 }
 
 export const productImporter: ProductImporter = { fetchProduct, parseUrl };

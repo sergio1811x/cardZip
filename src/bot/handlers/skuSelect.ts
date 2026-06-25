@@ -26,6 +26,13 @@ export async function handleSkuSelect(ctx: Context) {
         if (selectedSku.price) raw.priceYuan = selectedSku.price;
         if (selectedSku.image) raw.mainImageUrl = selectedSku.image;
         raw.selectedSkuName = selectedSku.name;
+        if (raw.normalized1688?.pricing) {
+          raw.normalized1688.pricing.selectedSkuName = selectedSku.name;
+          raw.normalized1688.pricing.selectedSkuPriceYuan = selectedSku.price;
+          if (selectedSku.price && selectedSku.price > 0) {
+            raw.normalized1688.pricing.displayPriceYuan = selectedSku.price;
+          }
+        }
       }
     }
     // 'all' — считаем по медианной цене (уже так работает в productImporter)

@@ -101,6 +101,14 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     if (extracted.weightKg && extracted.weightKg > 0) raw.weightKg = extracted.weightKg;
     if (extracted.priceCny && extracted.priceCny > 0) raw.priceYuan = extracted.priceCny;
     if (extracted.moq && extracted.moq > 0) raw.moq = extracted.moq;
+    if (raw.normalized1688) {
+      if (extracted.weightKg && extracted.weightKg > 0) raw.normalized1688.weightKg = extracted.weightKg;
+      if (extracted.priceCny && extracted.priceCny > 0) {
+        raw.normalized1688.pricing.displayPriceYuan = extracted.priceCny;
+        raw.normalized1688.pricing.selectedSkuPriceYuan = extracted.priceCny;
+      }
+      if (extracted.moq && extracted.moq > 0) raw.normalized1688.moq = extracted.moq;
+    }
 
     // Пересчитываем экономику
     const tariffs = await getUserTariffs(pending.userId).catch(() => null);

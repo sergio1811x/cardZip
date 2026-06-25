@@ -17,6 +17,8 @@ export function formatOrderBrief(
   conclusion?: PlatformConclusion | null
 ): string {
   const L: string[] = [];
+  const normalized = product.normalized1688;
+  const pricing = normalized?.pricing;
 
   L.push('# ТЗ для байера / карго');
   L.push('');
@@ -43,24 +45,26 @@ export function formatOrderBrief(
   L.push('## 🏭 Поставщик');
   L.push('');
   L.push(`**Магазин:** ${product.supplierName}`);
-  if (product.supplierType) {
+  if (normalized?.supplierType ?? product.supplierType) {
     const types = { factory: 'Фабрика', merchant: 'Торговая компания', seller: 'Продавец' };
-    L.push(`**Тип:** ${types[product.supplierType]}`);
+    L.push(`**Тип:** ${types[(normalized?.supplierType ?? product.supplierType)!]}`);
   } else {
     L.push('**Тип:** неизвестен');
   }
   if (product.supplierRating) L.push(`**Рейтинг:** ${product.supplierRating}/5`);
-  if (product.sold) L.push(`**Заказов:** ${product.sold}+`);
+  if (normalized?.salesCount ?? product.sold) L.push(`**Заказов:** ${normalized?.salesCount ?? product.sold}+`);
+  if (normalized?.repurchaseRate) L.push(`**Повторные покупки:** ${normalized.repurchaseRate}`);
   L.push('');
 
   // Закупка
   L.push('## 💰 Параметры закупки');
   L.push('');
-  L.push(`**Цена:** ${product.priceYuan} ¥ (~${economics.breakdown.purchaseRub} ₽)`);
+  L.push(`**Цена:** ${pricing?.displayPriceYuan ?? product.priceYuan} ¥ (~${economics.breakdown.purchaseRub} ₽)`);
+  if (pricing?.quoteType) L.push(`**Тип котировки:** ${pricing.quoteType}`);
   L.push(`**Статус цены:** ${PLATFORM_STATUS[product.platform]}`);
-  L.push(`**MOQ:** ${product.moq} шт.`);
-  if (product.weightKg > 0) {
-    L.push(`**Вес единицы:** ${product.weightKg} кг`);
+  L.push(`**MOQ:** ${normalized?.moq ?? product.moq} шт.`);
+  if ((normalized?.weightKg ?? product.weightKg) > 0) {
+    L.push(`**Вес единицы:** ${normalized?.weightKg ?? product.weightKg} кг`);
   } else {
     L.push('**Вес:** ⚠️ Не указан — уточнить у поставщика!');
   }
@@ -68,8 +72,8 @@ export function formatOrderBrief(
   L.push('');
 
   // Оптовые цены
-  if (product.priceRange?.length) {
-    const validTiers = product.priceRange.filter((r) =>
+  if ((pricing?.priceRanges ?? product.priceRange)?.length) {
+    const validTiers = (pricing?.priceRanges ?? product.priceRange ?? []).filter((r) =>
       Number.isFinite(r.minQty) && r.minQty > 0 && Number.isFinite(r.price) && r.price > 0
     );
     if (validTiers.length) {
@@ -82,7 +86,7 @@ export function formatOrderBrief(
       });
       L.push('');
     } else {
-      const prices = product.priceRange.map((r) => r.price).filter(Boolean);
+      const prices = (pricing?.priceRanges ?? product.priceRange ?? []).map((r) => r.price).filter(Boolean);
       if (prices.length) {
         L.push(`Оптовая цена: от ${Math.min(...prices)} ¥`);
         L.push('Пороги количества не распознаны. Уточните цену на 20, 50 и 100 шт.');
@@ -92,24 +96,24 @@ export function formatOrderBrief(
   }
 
   // SKU
-  if (product.skus?.length) {
+  if ((normalized?.skuVariants ?? product.skus)?.length) {
     L.push('## 🎨 Варианты (SKU)');
     L.push('');
     L.push('| Вариант | Цена | Остаток |');
     L.push('|---------|------|---------|');
-    product.skus.slice(0, 10).forEach((sku) => {
+    (normalized?.skuVariants ?? product.skus ?? []).slice(0, 10).forEach((sku) => {
       L.push(`| ${sku.name} | ${sku.price ? sku.price + ' ¥' : '—'} | ${sku.stock ?? '—'} |`);
     });
     L.push('');
   }
 
   // Характеристики с маркерами достоверности
-  if (product.attributes?.length) {
+  if ((normalized?.attributes ?? product.attributes)?.length) {
     L.push('## 📋 Характеристики (оригинал поставщика)');
     L.push('');
     L.push('| Параметр | Значение | Статус |');
     L.push('|----------|----------|--------|');
-    product.attributes.slice(0, 15).forEach((a) => {
+    (normalized?.attributes ?? product.attributes ?? []).slice(0, 15).forEach((a) => {
       L.push(`| ${a.name} | ${a.value} | ✓ от поставщика |`);
     });
     L.push('');

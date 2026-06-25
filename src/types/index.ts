@@ -20,6 +20,64 @@ export interface ProductSku {
   image?: string;
 }
 
+export type QuoteType = 'direct' | 'by_sku' | 'by_volume' | 'unknown';
+
+export interface NormalizedSkuVariant {
+  name: string;
+  price?: number;
+  stock?: number;
+  image?: string;
+}
+
+export interface NormalizedPriceInfo {
+  quoteType: QuoteType;
+  displayPriceYuan: number;
+  directPriceYuan?: number;
+  promotionPriceYuan?: number;
+  skuMinPriceYuan?: number;
+  skuMaxPriceYuan?: number;
+  volumeMinPriceYuan?: number;
+  volumeMaxPriceYuan?: number;
+  selectedSkuName?: string;
+  selectedSkuPriceYuan?: number;
+  priceRanges?: PriceRange[];
+  rawPriceFields: string[];
+}
+
+export interface NormalizedAttributeSummaryItem {
+  label: string;
+  value: string;
+}
+
+export interface Normalized1688Debug {
+  quoteType: QuoteType;
+  rawPriceFields: string[];
+  skuCount: number;
+  attributesCount: number;
+  imageCount: number;
+  sellerType?: string;
+  extraInfoKeys: string[];
+  missingCriticalFields: string[];
+}
+
+export interface Normalized1688Data {
+  pricing: NormalizedPriceInfo;
+  moq?: number;
+  skuCount: number;
+  skuVariants: NormalizedSkuVariant[];
+  supplierType?: 'factory' | 'merchant' | 'seller';
+  salesCount?: number;
+  repurchaseRate?: string;
+  imageCount: number;
+  images: string[];
+  weightKg?: number;
+  attributes: ProductAttribute[];
+  keyAttributes: NormalizedAttributeSummaryItem[];
+  sellerExtraInfo?: Record<string, unknown>;
+  soldCountText?: string;
+  debug: Normalized1688Debug;
+}
+
 export interface SupplierExtra {
   dropshipping?: boolean;
   mixOrder?: boolean;
@@ -49,6 +107,8 @@ export interface RawProduct1688 {
   skus?: ProductSku[];
   supplierExtra?: SupplierExtra;
   priceIsRange?: boolean;
+  selectedSkuName?: string;
+  normalized1688: Normalized1688Data;
 }
 
 // ─── Platform Conclusion (replaces Score/Verdict) ────────────────────────────

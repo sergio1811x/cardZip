@@ -102,6 +102,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       categoryName: rawProduct.categoryName,
       attributes: rawProduct.attributes?.slice(0, 15),
       skus: rawProduct.skus?.slice(0, 15),
+      selectedSkuName: rawProduct.selectedSkuName,
+      normalized1688: rawProduct.normalized1688,
     };
 
     // SKU выбор: если 2+ SKU с разными ценами, спрашиваем пользователя
