@@ -6,6 +6,7 @@ import { markSent } from '../src/db/queries/jobs';
 import { getStatus, consumeCredit } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { buildMainMessage } from '../src/core/messageBuilder';
+import { findWbCategoriesByKeywords } from '../src/db/queries/wbCategories';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
 import { createStepProgress } from '../src/core/progress';
@@ -65,8 +66,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
+    // ─── WB-категория (fallback если аналоги не найдены) ────────────────────────
+    const keywords = (product.seoContent?.keywords ?? []).slice(0, 3);
+    if (!keywords.length && product.titleRu) keywords.push(product.titleRu.split(' ').slice(0, 2).join(' '));
+    const wbCats = keywords.length ? await findWbCategoriesByKeywords(keywords).catch(() => []) : [];
+    const wbCategory = wbCats[0] ?? null;
+
     // ─── Одно сообщение: выжимка + остаток + кнопки ───────────────────────────
-    const { text: mainText, keyboard: mainKb } = buildMainMessage(product, job.id, freshStatus);
+    const { text: mainText, keyboard: mainKb } = buildMainMessage(product, job.id, freshStatus, wbCategory);
     await bot.telegram.sendMessage(chatId, mainText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },

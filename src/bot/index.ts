@@ -5,7 +5,7 @@ import { handleStart } from './handlers/start';
 import { handleLink } from './handlers/link';
 import { handleUpgrade, handlePayTest, handlePayPack10, handlePayPack30, handlePayWeek, handleSuccessPayment } from './handlers/upgrade';
 import { handleLast } from './handlers/last';
-import { handleAdmin } from './handlers/admin';
+import { handleAdmin, handleUpdateWbCategories } from './handlers/admin';
 import { isAppError } from '../lib/errors';
 import { checkCallbackLimit, checkGlobalLimit } from './middleware/rateLimit';
 import { handleSupplierQuestions, handleSupplierQuestionsLang } from './handlers/supplierQuestions';
@@ -100,6 +100,7 @@ bot.action(/^analysis_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleAnalysisDetail(ctx);
 });
+bot.action('admin_update_wb_cats', handleUpdateWbCategories);
 bot.action('supplier_questions', async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierQuestions(ctx);

@@ -1,5 +1,6 @@
 import { Markup } from 'telegraf';
 import type { ProductWithContent, SubscriptionStatus, ProductAttribute, PriceRange } from '../types';
+import type { WbCategory } from '../db/queries/wbCategories';
 
 function esc(s: unknown): string {
   const str = String(s ?? '');
@@ -98,6 +99,7 @@ export function buildMainMessage(
   product: ProductWithContent,
   jobId: string,
   status?: SubscriptionStatus,
+  wbCategory?: WbCategory | null,
 ): {
   text: string;
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
@@ -160,6 +162,15 @@ export function buildMainMessage(
     L.push('Категория на WB найдена.');
   } else {
     L.push('Прямые аналоги на WB пока не найдены.');
+  }
+
+  if (wbCategory && !hasConfirmedAnalogs) {
+    L.push('');
+    L.push(`📊 <b>Категория: ${esc(wbCategory.item)}</b>`);
+    if (wbCategory.average_check_rub > 0) L.push(`Средний чек: ${fP(wbCategory.average_check_rub)}`);
+    L.push(`Продавцов: ${fN(wbCategory.sellers)} (с заказами: ${fN(wbCategory.sellers_with_orders)})`);
+    if (wbCategory.revenue_rub > 0) L.push(`Выручка: ${fP(wbCategory.revenue_rub)}/нед`);
+    if (wbCategory.availability && wbCategory.availability !== 'Не рассчитано') L.push(`Наличие: ${wbCategory.availability}`);
   }
 
   // ─── Экономика ──────────────────────────────────────────────────────────────
