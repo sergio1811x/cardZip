@@ -90,6 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const queryPlan = resultJson.queryPlan ?? null;
     const validatedQueries: string[] = resultJson.validatedQueries ?? [];
     const wbCoreQuery: string = resultJson.wbCoreQuery ?? structure?.coreObject ?? '';
+    const categoryType: string = resultJson.categoryType ?? 'other';
 
     // WBCON trends — параллельно
     const trendsPromise = wbCoreQuery
@@ -295,6 +296,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           similarityData,
           wbTrends,
           wbCoreQuery,
+          categoryType,
         },
         debugTrace,
       },

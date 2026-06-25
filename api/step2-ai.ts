@@ -64,10 +64,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const queryPlan = analysis?.queryPlan ?? null;
     const validatedQueries = analysis?.validatedQueries ?? [];
     const wbCoreQuery = analysis?.wbCoreQuery ?? productStructure?.coreObject ?? '';
+    const categoryType = analysis?.categoryType ?? 'other';
 
     progress?.stop();
 
-    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | structure: ${productStructure?.productType ?? 'null'} | queries: ${validatedQueries.length} | wbCoreQuery: ${wbCoreQuery}`);
+    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | category: ${categoryType} | structure: ${productStructure?.productType ?? 'null'} | queries: ${validatedQueries.length} | wbCoreQuery: ${wbCoreQuery}`);
 
     await supabase.from('jobs').update({
       status: 'ai_done',
@@ -79,6 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         queryPlan,
         validatedQueries,
         wbCoreQuery,
+        categoryType,
       },
     }).eq('id', jobId);
 

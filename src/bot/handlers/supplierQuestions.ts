@@ -1,9 +1,7 @@
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import { supabase } from '../../db/supabase';
-import { buildRiskFlags } from '../../core/riskFlags';
-import { buildFallbackQuestions, formatQuestionsRu, formatQuestionsCn } from '../../core/supplierQuestions';
-import type { RawProduct1688, SupplierQuestions, WbFilteredResult } from '../../types';
+import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryType } from '../../core/categoryRules';
 
 async function findLastJob(userId: string) {
   const { data } = await supabase
@@ -58,23 +56,45 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     const data = lastJob.result_json as any;
     const product = data.product;
 
-    // Приоритет: AI-сгенерированные вопросы
-    const aiQuestions: SupplierQuestions | undefined =
-      product?.seoContent?.supplierQuestions ??
-      data.seoContent?.supplierQuestions;
+    // Определяем категорию
+    const catType: ProductCategoryType = product?.categoryType ??
+      detectCategoryFromAttributes(
+        product?.categoryName ?? data.rawProduct?.categoryName,
+        product?.attributes ?? data.rawProduct?.attributes ?? [],
+        product?.titleCn ?? data.rawProduct?.titleCn ?? '',
+      );
 
-    let questions: SupplierQuestions;
+    const rules = getCategoryRules(catType);
+    const price = product?.priceYuan ?? data.rawProduct?.priceYuan;
+    const priceStr = price && price > 0 ? `${price} ¥` : null;
 
-    if (aiQuestions?.ru?.length && aiQuestions?.cn?.length) {
-      questions = aiQuestions;
+    let text: string;
+    if (lang === 'ru') {
+      const lines = ['📩 <b>Что уточнить у поставщика</b>', ''];
+      lines.push('Здравствуйте. Хотим уточнить товар перед заказом:', '');
+      if (priceStr) {
+        lines.push(`1. Подтвердите цену ${priceStr} для выбранного цвета и размера.`);
+      } else {
+        lines.push('1. Укажите цену выбранного цвета и размера.');
+      }
+      rules.supplierQuestions.ru.forEach((q, i) => {
+        lines.push(`${i + 2}. ${q[0].toUpperCase() + q.slice(1)}.`);
+      });
+      text = lines.join('\n');
     } else {
-      const raw: Partial<RawProduct1688> = product ?? data.rawProduct ?? {};
-      const wbFiltered: WbFilteredResult | null = product?.wbFiltered ?? null;
-      const flags = buildRiskFlags(raw as RawProduct1688, wbFiltered);
-      questions = buildFallbackQuestions(flags);
+      const lines = ['📩 <b>发给供应商的问题</b>', ''];
+      lines.push('您好，我们想下单前确认一下这个产品：', '');
+      if (priceStr) {
+        lines.push(`1. 请确认所选颜色和尺码的价格是否为 ${priceStr.replace('¥', '元')}？`);
+      } else {
+        lines.push('1. 请告诉我所选颜色和尺码的价格。');
+      }
+      rules.supplierQuestions.cn.forEach((q, i) => {
+        lines.push(`${i + 2}. ${q}`);
+      });
+      text = lines.join('\n');
     }
 
-    const text = lang === 'ru' ? formatQuestionsRu(questions) : formatQuestionsCn(questions);
     const afterText = text + '\n\nПосле ответа поставщика нажмите 📥';
     await ctx.reply(afterText, {
       parse_mode: 'HTML',

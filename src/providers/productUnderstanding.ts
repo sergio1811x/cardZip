@@ -68,6 +68,7 @@ export interface FullProductAnalysis {
   queryPlan: QueryPlan;
   validatedQueries: string[];
   wbCoreQuery: string;
+  categoryType: string;
 }
 
 // ─── LLM Call with Fallback ──────────────────────────────────────────────────
@@ -201,6 +202,7 @@ export async function analyzeProduct(raw: {
     "softNegativeTerms": ["маркеры похожих но не аналогичных"],
     "broadCategoryTerms": ["широкие категорийные термины"]
   },
+  "categoryType": "shoes|clothes|electronics|home|beauty|accessory|kitchen|other — категория товара, одна из списка",
   "wbCoreQuery": "рыночный запрос WB для поиска трендов. НЕ широкий базовый объект, а конкретный подтип товара как его ищут покупатели. 1-3 слова, без брендов/моделей. Примеры: сабо (не обувь), нож топорик (не нож кухонный), мини проектор (не проектор), кошелек мужской (не кошелек), секач кухонный (не нож). Выбирай самый точный рыночный запрос.",
   "queryLadder": {
     "L1_exact": ["точные запросы: productType + ключевые атрибуты, 2-4 слова"],
@@ -300,8 +302,9 @@ ${info}`;
     const validatedQueries = validateQueries(allQueries);
 
     const wbCoreQuery = (result.wbCoreQuery ?? structure.coreObject ?? '').trim();
+    const categoryType = result.categoryType ?? 'other';
 
-    return { structure, lexicon, queryPlan, validatedQueries, wbCoreQuery };
+    return { structure, lexicon, queryPlan, validatedQueries, wbCoreQuery, categoryType };
   } catch (e) {
     console.error('[analyzeProduct]', e instanceof Error ? e.message : e);
     return null;

@@ -1,6 +1,7 @@
 import { Markup } from 'telegraf';
 import type { ProductWithContent, SubscriptionStatus, ProductAttribute, PriceRange } from '../types';
 import type { WbCategory } from '../db/queries/wbCategories';
+import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryType } from './categoryRules';
 
 function esc(s: unknown): string {
   const str = String(s ?? '');
@@ -218,6 +219,8 @@ export function buildMainMessage(
     return { text: '❌ Данные анализа неполные.', keyboard: Markup.inlineKeyboard([[Markup.button.callback('🔄 Новый товар', 'new_search')]]) };
   }
   const safeConclusion = conclusion ?? { platform: product.platform, icon: '🟡', headline: 'Нужны данные для оценки', disclaimers: [] };
+  const catType: ProductCategoryType = ((product as any).categoryType as ProductCategoryType) ??
+    detectCategoryFromAttributes(product.categoryName, product.attributes ?? [], product.titleCn);
   const wm = economics.weightMissing;
   const directLocalCount = sim?.directCount ?? 0;
   const crossBorderCount = sim?.crossBorderCount ?? 0;
@@ -261,7 +264,11 @@ export function buildMainMessage(
   L.push(`• SKU: ${(normalized?.skuCount ?? product.skus?.length) ? `${normalized?.skuCount ?? product.skus?.length} вариантов` : 'не указаны'}`);
   L.push(`• Фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
   L.push(`• Вес: ${fWeight(product.weightKg)}`);
-  translatedAttrs.slice(0, 4).forEach((a) => L.push(`• ${a.label}: ${esc(a.value)}`));
+  const catForbidden = getCategoryRules(catType).forbiddenFields;
+  translatedAttrs
+    .filter((a) => !catForbidden.some((f) => a.label.toLowerCase().includes(f.toLowerCase())))
+    .slice(0, 4)
+    .forEach((a) => L.push(`• ${a.label}: ${esc(a.value)}`));
   const hasTiers = product.priceRange?.some((r) => r.minQty > 0);
   if (hasTiers) L.push(`• Скидки: ${formatTiersShort(product.priceRange!)}`);
 
@@ -347,15 +354,18 @@ export function buildMainMessage(
     L.push('Брендовый референс — найдите OEM на 1688.');
   }
 
-  // ─── Что уточнить ───────────────────────────────────────────────────────────
+  // ─── Что уточнить (по категории товара) ──────────────────────────────────
+  const catRules = getCategoryRules(catType);
   const clarify: string[] = [];
-  if (priceIsZero) clarify.push('цену выбранного SKU');
-  if (wm) clarify.push('вес с упаковкой');
-  if (wm) clarify.push('размеры упаковки');
-  if (!priceIsZero && product.priceIsRange) clarify.push('цену выбранного SKU');
-  if (product.moq <= 1) clarify.push('MOQ / минимальную партию');
-  if (product.riskFlags?.sizeGridRelevant) clarify.push('размерную сетку');
-  if (!product.skus?.length) clarify.push('доступные варианты (цвет/размер)');
+  if (priceIsZero) clarify.push('цену выбранного цвета/размера');
+  else if (product.priceIsRange) clarify.push('подтвердите цену выбранного варианта');
+  // Берём первые 5-7 вопросов из категорийных правил
+  for (const q of catRules.supplierQuestions.ru.slice(0, 7)) {
+    if (clarify.length >= 7) break;
+    if (wm || !q.includes('вес')) clarify.push(q);
+    else if (!wm && q.includes('вес')) continue;
+    else clarify.push(q);
+  }
 
   if (clarify.length) {
     L.push('');
