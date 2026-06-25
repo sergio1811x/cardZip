@@ -35,6 +35,7 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
 } {
   const { wbFiltered, economics, conclusion, similarityData: sim } = product;
   if (!economics || !conclusion) {
+    console.error('[buildMainMessage] missing:', { economics: !!economics, conclusion: !!conclusion, keys: Object.keys(product ?? {}).join(',') });
     return { text: '❌ Данные анализа неполные.', keyboard: Markup.inlineKeyboard([[Markup.button.callback('🔄 Новый товар', 'new_search')]]) };
   }
   const wm = economics.weightMissing;
