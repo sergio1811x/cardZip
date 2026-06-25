@@ -107,13 +107,7 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
   }
 
   const buttons = [];
-
-  if (job.telegram_file_ids) {
-    const fids = job.telegram_file_ids;
-    if (fids.wb_card || fids.buyer_brief || fids.photos_zip) {
-      buttons.push([Markup.button.callback('📄 Получить файлы', `resend_files_${job.id}`)]);
-    }
-  }
+  buttons.push([Markup.button.callback('📎 Файлы', `materials_${job.id}`)]);
   buttons.push([Markup.button.callback('⬅️ К списку', 'my_analyses')]);
 
   const keyboard = Markup.inlineKeyboard(buttons);
@@ -125,37 +119,6 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
   }).catch(() => ctx.reply(text, { parse_mode: 'HTML', ...keyboard }));
 }
 
-export async function handleResendFiles(ctx: Context): Promise<void> {
-  const userId = (ctx as any).dbUserId as string | undefined;
-  if (!userId) return;
-
-  const match = (ctx.callbackQuery as any)?.data?.match(/^resend_files_(.+)$/);
-  if (!match) return;
-
-  const jobId = match[1];
-
-  const { supabase } = require('../../db/supabase');
-  const { data: job } = await supabase
-    .from('jobs')
-    .select('telegram_file_ids')
-    .eq('id', jobId)
-    .eq('user_id', userId)
-    .single();
-
-  if (!job?.telegram_file_ids) {
-    await ctx.answerCbQuery('Файлы недоступны');
-    return;
-  }
-
-  await ctx.answerCbQuery('Отправляю файлы...');
-
-  const chatId = ctx.chat!.id;
-  const fids = job.telegram_file_ids;
-
-  if (fids.wb_card) await ctx.telegram.sendDocument(chatId, fids.wb_card).catch(() => {});
-  if (fids.buyer_brief) await ctx.telegram.sendDocument(chatId, fids.buyer_brief).catch(() => {});
-  if (fids.photos_zip) await ctx.telegram.sendDocument(chatId, fids.photos_zip).catch(() => {});
-}
 
 function escHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

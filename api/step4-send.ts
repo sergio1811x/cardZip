@@ -1,14 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
-import { Telegraf, Input } from 'telegraf';
+import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { markSent, type TelegramFileIds } from '../src/db/queries/jobs';
+import { markSent } from '../src/db/queries/jobs';
 import { getStatus, consumeCredit } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { buildMainMessage, buildCreditsMessage } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
-import { zipBuilder } from '../src/core/zipBuilder';
 import { createStepProgress } from '../src/core/progress';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
@@ -44,14 +43,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const safeRiskFlags = product.riskFlags ?? { hasBrand: false, isElectrical: false, isChildren: false, isCosmetic: false, isFood: false, isMedical: false, supplierOrdersLow: false, supplierTypeUnknown: false, weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: false };
 
-    const [seoText, briefText, zipBuffer, freshStatus] = await Promise.all([
+    const [seoText, briefText, freshStatus] = await Promise.all([
       Promise.resolve(formatSeoText(product, product.seoContent, safeRiskFlags)),
       Promise.resolve(formatOrderBrief(product, product.seoContent, product.economics, safeRiskFlags, job.input_url, product.budgets, product.conclusion)),
-      result.imageUrls?.length
-        ? zipBuilder.buildFromUrls(result.imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null as Buffer | null)
-        : Promise.resolve(null as Buffer | null),
       getStatus(job.user_id),
     ]);
+
+    // Сохраняем тексты файлов в result_json для отложенной отправки по кнопке
+    await supabase.from('jobs').update({
+      result_json: {
+        ...result,
+        generatedFiles: { seoText, briefText },
+      },
+    }).eq('id', jobId);
 
     await track(job.user_id, 'generation_done', { url: job.input_url });
     await consumeCredit(job.user_id);
@@ -61,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
-    // ─── СООБЩЕНИЕ 1: Короткая выжимка + кнопки ───────────────────────────────
+    // ─── СООБЩЕНИЕ 1: Выжимка + кнопки ─────────────────────────────────────────
     const { text: mainText, keyboard: mainKb } = buildMainMessage(product, job.id);
     await bot.telegram.sendMessage(chatId, mainText, {
       parse_mode: 'HTML',
@@ -69,31 +73,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...mainKb,
     });
 
-    // ─── СООБЩЕНИЕ 2: Материалы ────────────────────────────────────────────────
-    const fileIds: TelegramFileIds = {};
-    const prefix = product.productId?.slice(-8) ?? Date.now().toString().slice(-8);
-
-    await bot.telegram.sendMessage(chatId,
-      '📎 <b>Материалы готовы</b>\n• SEO-карточка для WB\n• ТЗ байеру / карго\n• Фото товара',
-      { parse_mode: 'HTML' }
-    );
-
-    const seoMsg = await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), `wb_card_${prefix}.md`));
-    fileIds.wb_card = seoMsg.document?.file_id;
-
-    const briefMsg = await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), `buyer_brief_${prefix}.md`));
-    fileIds.buyer_brief = briefMsg.document?.file_id;
-
-    if (zipBuffer) {
-      const zipMsg = await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, `photos_${prefix}.zip`));
-      fileIds.photos_zip = zipMsg.document?.file_id;
-    }
-
-    // ─── СООБЩЕНИЕ 3: Кредиты ──────────────────────────────────────────────────
+    // ─── СООБЩЕНИЕ 2: Кредиты ──────────────────────────────────────────────────
     const { text: creditsText, keyboard: creditsKb } = buildCreditsMessage(freshStatus);
     await bot.telegram.sendMessage(chatId, creditsText, { parse_mode: 'HTML', ...creditsKb });
 
-    await markSent(job.id, fileIds);
+    await markSent(job.id);
     if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
 
     const cacheKey = buildCacheKey(product.productId, product.titleCn, product.mainImageUrl);

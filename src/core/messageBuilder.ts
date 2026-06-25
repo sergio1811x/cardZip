@@ -22,12 +22,12 @@ function fN(n: number): string {
 }
 
 const PLATFORM_LABELS: Record<string, string> = {
-  '1688': '1688 · закупочная гипотеза',
-  taobao: 'Taobao · розничная витрина',
-  tmall: 'Tmall · брендовая витрина',
+  '1688': '1688',
+  taobao: 'Taobao',
+  tmall: 'Tmall',
 };
 
-// ─── Главное сообщение (короткая выжимка) ───────────────────────────────────
+// ─── Главное сообщение ──────────────────────────────────────────────────────
 
 export function buildMainMessage(product: ProductWithContent, jobId: string): {
   text: string;
@@ -35,7 +35,7 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
 } {
   const { wbFiltered, economics, conclusion, similarityData: sim } = product;
   if (!economics) {
-    return { text: '❌ Данные анализа неполные.', keyboard: Markup.inlineKeyboard([[Markup.button.callback('🔄 Новый товар', 'new_search')]]) };
+    return { text: '❌ Данные анализа неполные.', keyboard: Markup.inlineKeyboard([[Markup.button.callback('🔄 Проверить новый товар', 'new_search')]]) };
   }
   const safeConclusion = conclusion ?? { platform: product.platform, icon: '🟡', headline: 'Нужны данные для оценки', disclaimers: [] };
   const wm = economics.weightMissing;
@@ -57,13 +57,15 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
       const prices = product.priceRange.map((r) => r.price).filter(Boolean);
       if (prices.length) {
         L.push(`Цена: от ${Math.min(...prices)} ¥`);
-        L.push('<i>Скидки по количеству не распознаны.</i>');
       } else {
         L.push(`Цена: ${product.priceYuan} ¥`);
       }
     }
   } else {
     L.push(`Цена: ${product.priceYuan} ¥`);
+  }
+  if (product.supplierName) {
+    L.push(`Поставщик: ${esc(product.supplierName)}`);
   }
 
   // ─── Статус ─────────────────────────────────────────────────────────────────
@@ -76,19 +78,20 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
     L.push('🔴 <b>Статус: экономика слабая</b>');
   }
 
-  // ─── WB-рынок ───────────────────────────────────────────────────────────────
+  // ─── Рынок WB ──────────────────────────────────────────────────────────────
   L.push('');
-  L.push('🔎 <b>WB-рынок</b>');
+  L.push('🔎 <b>Рынок WB</b>');
   if (hasConfirmedAnalogs) {
     const dc = sim!.directCount ?? sim!.highCount ?? 0;
-    L.push(`Прямые аналоги: ${dc}`);
+    L.push(`Прямые аналоги найдены: ${dc}`);
     if (hasMarket) {
-      L.push(`Медиана: ${fP(wbFiltered!.medianPrice)}`);
+      L.push(`Медиана цены: ${fP(wbFiltered!.medianPrice)}`);
     }
   } else if (sim?.categoryCount && sim.categoryCount > 0) {
-    L.push('Прямые аналоги не подтверждены, категория найдена.');
+    L.push('Прямые аналоги пока не подтверждены.');
+    L.push('Категория на WB найдена.');
   } else {
-    L.push('Аналоги на WB не подтверждены.');
+    L.push('Прямые аналоги на WB пока не найдены.');
   }
 
   // ─── Экономика ──────────────────────────────────────────────────────────────
@@ -96,12 +99,13 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
   L.push('💰 <b>Экономика</b>');
   if (economics.platformMode === 'full') {
     if (wm) {
-      L.push('Расчёт неполный.');
+      L.push('Расчёт предварительный.');
       L.push(`Себестоимость без карго: ${fP(economics.costRub)}`);
-      L.push('<i>Вес не указан — карго и ROI не рассчитаны.</i>');
+      L.push('Вес не указан — карго, маржа и ROI не рассчитаны.');
     } else if (!hasConfirmedAnalogs || economics.isSyntheticPrice) {
+      L.push('Расчёт предварительный.');
       L.push(`Себестоимость: ${fP(economics.costRub)}`);
-      L.push('<i>Рынок не подтверждён — ROI не рассчитан.</i>');
+      L.push('Рынок не подтверждён — ROI не рассчитан.');
     } else {
       L.push(`Себестоимость: ${fP(economics.costRub)}`);
       if (wbFiltered) {
@@ -117,10 +121,10 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
     }
   } else if (economics.platformMode === 'sample_only') {
     L.push(`Образец: ~${fP(economics.costRub)}`);
-    L.push('<i>Это розничная цена, не цена партии.</i>');
+    L.push('Это розничная цена, не цена партии.');
   } else {
     L.push(`Витрина: ${economics.breakdown.purchaseYuan} ¥`);
-    L.push('<i>Брендовый референс — найдите OEM на 1688.</i>');
+    L.push('Брендовый референс — найдите OEM на 1688.');
   }
 
   // ─── Что уточнить ───────────────────────────────────────────────────────────
@@ -133,24 +137,25 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
 
   if (clarify.length) {
     L.push('');
-    L.push('🚚 <b>Что уточнить</b>');
+    L.push('📌 <b>Что уточнить у поставщика</b>');
     clarify.forEach((c) => L.push(`• ${c}`));
   }
 
   // ─── Вердикт ────────────────────────────────────────────────────────────────
   L.push('');
-  L.push(`🎯 <b>Вердикт</b>`);
-  L.push(`${safeConclusion.icon} ${esc(safeConclusion.headline)}`);
+  L.push('🎯 <b>Вердикт</b>');
+  L.push(esc(safeConclusion.headline));
+  L.push(buildVerdictAdvice(wm, hasConfirmedAnalogs, economics.grossProfitRub, economics.platformMode));
 
   // ─── Кнопки ─────────────────────────────────────────────────────────────────
   const buttons: any[][] = [
     [
       Markup.button.callback('📩 Вопросы поставщику', 'supplier_questions'),
-      Markup.button.callback('💰 Экономика', `econ_detail_${jobId}`),
+      Markup.button.callback('💰 Подробная экономика', `econ_detail_${jobId}`),
     ],
     [
-      Markup.button.callback('🔎 Поиск WB', `wb_detail_${jobId}`),
-      Markup.button.callback('📎 Материалы', `materials_${jobId}`),
+      Markup.button.callback('🔎 Что найдено на WB', `wb_detail_${jobId}`),
+      Markup.button.callback('📎 Файлы', `materials_${jobId}`),
     ],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ];
@@ -158,7 +163,17 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
   return { text: sanitize(L.join('\n')), keyboard: Markup.inlineKeyboard(buttons) };
 }
 
-// ─── Детальная экономика (по кнопке) ────────────────────────────────────────
+function buildVerdictAdvice(wm: boolean, hasAnalogs: boolean, profit: number, mode: string): string {
+  if (mode === 'reference_only') return 'Этот товар — брендовый референс. Найдите OEM-аналог на 1688.';
+  if (mode === 'sample_only') return 'Закажите образец и запросите оптовую цену для расчёта партии.';
+  if (wm && !hasAnalogs) return 'Сначала уточните данные у поставщика и повторите расчёт.';
+  if (wm) return 'Уточните вес и размеры у поставщика — после этого бот рассчитает полную экономику.';
+  if (!hasAnalogs) return 'Проверьте рынок WB вручную или попробуйте другой товар.';
+  if (profit > 0) return 'Экономика положительная. Можно заказывать тестовую партию.';
+  return 'Экономика слабая. Попробуйте договориться о лучшей цене или выбрать другой товар.';
+}
+
+// ─── Подробная экономика (по кнопке) ────────────────────────────────────────
 
 export function buildEconomicsDetail(product: ProductWithContent): string {
   const { economics, wbFiltered, maxPurchasePrice, budgets } = product;
@@ -236,13 +251,13 @@ export function buildEconomicsDetail(product: ProductWithContent): string {
   return sanitize(L.join('\n'));
 }
 
-// ─── Детальный WB-поиск (по кнопке) ────────────────────────────────────────
+// ─── Что найдено на WB (по кнопке) ─────────────────────────────────────────
 
 export function buildWbDetail(product: ProductWithContent): string {
   const { wbFiltered, similarityData: sim } = product;
   const L: string[] = [];
 
-  L.push('🔎 <b>Подробный поиск WB</b>');
+  L.push('🔎 <b>Что найдено на WB</b>');
   L.push('');
 
   if (sim && sim.totalAnalyzed > 0) {
@@ -266,7 +281,7 @@ export function buildWbDetail(product: ProductWithContent): string {
 
     if (wbFiltered.topExamples.length) {
       L.push('');
-      L.push('🎯 <b>Близкие аналоги:</b>');
+      L.push('🎯 <b>Ближайшие найденные товары:</b>');
       wbFiltered.topExamples.slice(0, 5).forEach((ex, i) => {
         const t = ex.title.length > 35 ? ex.title.slice(0, 32) + '...' : ex.title;
         L.push(`${i + 1}. <a href="${ex.url}">${fP(ex.price)}</a> ⭐${ex.rating} 💬${fN(ex.feedbacks)} — ${esc(t)}`);
@@ -292,8 +307,8 @@ export function buildWbDetail(product: ProductWithContent): string {
     L.push(`Спрос: ${demandIcon} ${wbFiltered.totalFeedbacks > 1000 ? 'Есть' : wbFiltered.totalFeedbacks > 100 ? 'Средний' : 'Слабый'}`);
     L.push(`Конкуренция: ${compIcon} ${wbFiltered.relevantCount > 50 ? 'Высокая' : wbFiltered.relevantCount > 20 ? 'Средняя' : 'Низкая'}`);
   } else {
-    L.push('');
-    L.push('Аналоги не подтверждены. Проверьте рынок вручную.');
+    L.push('Пока удалось подтвердить только категорию.');
+    L.push('Для точной экономики лучше уточнить характеристики или выбрать другой товар.');
   }
 
   return sanitize(L.join('\n'));
@@ -354,7 +369,7 @@ function pluralize(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-// ─── Legacy exports (backward compat for handlers that use old names) ───────
+// ─── Legacy exports ─────────────────────────────────────────────────────────
 
 export const buildMessage1 = (product: ProductWithContent) => buildMainMessage(product, '').text;
 export const buildMessage2 = (product: ProductWithContent, jobId: string) => buildMainMessage(product, jobId);

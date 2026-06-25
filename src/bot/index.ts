@@ -16,7 +16,7 @@ import { handleSearch1688 } from './handlers/search1688';
 import { handleWbLeaders } from './handlers/wbLeaders';
 import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
-import { handleMyAnalyses, handleAnalysisDetail, handleResendFiles } from './handlers/myAnalyses';
+import { handleMyAnalyses, handleAnalysisDetail } from './handlers/myAnalyses';
 import { handleEconDetail, handleWbDetail, handleMaterialsResend } from './handlers/detailButtons';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -99,9 +99,6 @@ bot.action(/^analyses_page_(\d+)$/, async (ctx) => {
 bot.action(/^analysis_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleAnalysisDetail(ctx);
-});
-bot.action(/^resend_files_(.+)$/, async (ctx) => {
-  return handleResendFiles(ctx);
 });
 bot.action('supplier_questions', async (ctx) => {
   await ctx.answerCbQuery();
