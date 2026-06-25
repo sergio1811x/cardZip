@@ -5,13 +5,14 @@ import { supabase } from '../src/db/supabase';
 import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../src/core/economicsCalc';
 import { buildConclusion } from '../src/core/verdict';
 import { buildRiskFlags } from '../src/core/riskFlags';
-import { rankCandidates, mineResults } from '../src/core/wbSimilarity';
+import { rankCandidates } from '../src/core/wbSimilarity';
 import { filterWbData } from '../src/core/wbFilter';
 import { createStepProgress } from '../src/core/progress';
 import { getUserTariffs } from '../src/db/queries/userSettings';
-import { expandQueries, judgeCandidateBatch, validateQueries, repairSearch } from '../src/providers/productUnderstanding';
+import { judgeCandidateBatch, repairSearch } from '../src/providers/productUnderstanding';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
-import type { WbFilterKeywords, WbCard, WbSearchResult } from '../src/types';
+import { buildCandidatePool, selectTopQueries } from '../src/core/querySelector';
+import type { WbCard, WbSearchResult } from '../src/types';
 import { fetchWbTrends, filterRelevantTrends, type WbTrend } from '../src/providers/wbconTrends';
 
 export const config = { maxDuration: 60 };
@@ -19,6 +20,7 @@ export const config = { maxDuration: 60 };
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 const WB_PARSER_URL = process.env.WB_PARSER_URL || 'http://50fc4ca33bd1.vps.myjino.ru';
 const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || 'cardzip-wb-2024';
+const MAX_WB_QUERIES = 3;
 
 function parseCards(products: any[]): WbCard[] {
   return products.map((p: any) => {
@@ -39,8 +41,7 @@ function parseCards(products: any[]): WbCard[] {
   }).filter((c: WbCard) => c.price > 0);
 }
 
-// Batch search через VPS — последовательный с throttling на стороне VPS
-async function batchSearch(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string> }> {
+async function searchWb(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string> }> {
   const seenUrls = new Set<string>();
   const cards: WbCard[] = [];
 
@@ -52,18 +53,17 @@ async function batchSearch(queries: string[]): Promise<{ cards: WbCard[]; seenUr
       signal: AbortSignal.timeout(25_000),
     });
     if (!res.ok) {
-      console.warn(`[step3] Batch search HTTP ${res.status}`);
+      console.warn(`[step3] WB search HTTP ${res.status}`);
       return { cards, seenUrls };
     }
     const data = await res.json() as any;
-
     for (const result of data.results ?? []) {
       for (const card of parseCards(result.products ?? [])) {
         if (!seenUrls.has(card.url)) { seenUrls.add(card.url); cards.push(card); }
       }
     }
   } catch (e: any) {
-    console.warn('[step3] Batch search failed:', e.message);
+    console.warn('[step3] WB search failed:', e.message);
   }
 
   return { cards, seenUrls };
@@ -91,7 +91,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const validatedQueries: string[] = resultJson.validatedQueries ?? [];
     const wbCoreQuery: string = resultJson.wbCoreQuery ?? structure?.coreObject ?? '';
 
-    // WBCON trends — запускаем параллельно, не блокируем
+    // WBCON trends — параллельно
     const trendsPromise = wbCoreQuery
       ? fetchWbTrends(wbCoreQuery).catch(() => ({ query: wbCoreQuery, trends: [] as WbTrend[], latencyMs: 0 }))
       : Promise.resolve(null);
@@ -100,138 +100,121 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── WB Search (все pass'ы с safety timeout) ──────────────────────
+    // ─── WB Search Pipeline v2 ──────────────────────────────────────────
     let allCards: WbCard[] = [];
     let allQueries: string[] = [];
-    let similarity: any = { buckets: { directLocalAnalogs: [], similarLocalProducts: [], crossBorderAnalogs: [], categoryOnly: [], wrong: [] }, confidence: 'no_market' };
+    let similarity: any = { buckets: { directLocalAnalogs: [], similarLocalProducts: [], crossBorderAnalogs: [], categoryOnly: [], wrong: [] }, confidence: 'no_market', leaders: [] };
+    let wbSearchCount = 0;
 
     const wbSearchStart = Date.now();
     try {
 
-    const ladder = queryPlan ?? {} as any;
-    const pass1Queries = validatedQueries.length >= 3
-      ? validatedQueries.slice(0, 10)
-      : [
-          ...(ladder.L1_exact ?? []),
-          ...(ladder.L2_commercial ?? []),
-          ...(ladder.L3_subtype ?? []),
-          seoContent?.titleRu,
-          ...(seoContent?.keywords?.slice(0, 2) ?? []),
-        ].filter((q): q is string => !!q && q.length > 2 && /[а-яё]/i.test(q))
-         .filter((q, i, a) => a.indexOf(q) === i).slice(0, 8);
+    // 1. Собираем WBCON trends (уже запущен параллельно)
+    const trendsResult = await trendsPromise;
+    const materials = structure?.material ?? [];
+    const productType = structure?.productType ?? '';
+    const filteredTrends = trendsResult?.trends?.length
+      ? filterRelevantTrends(trendsResult.trends, wbCoreQuery, productType, materials)
+      : [];
 
-    console.log(`[step3] PASS 1 (L1-L3): ${pass1Queries.length} queries`);
-    const { cards: pass1Cards, seenUrls } = await batchSearch(pass1Queries);
-    console.log(`[step3] PASS 1: ${pass1Cards.length} cards`);
+    // 2. Строим пул кандидатов
+    const pool = buildCandidatePool(
+      queryPlan, validatedQueries, filteredTrends,
+      structure, seoContent?.keywords ?? [],
+    );
 
-    const mining = mineResults(pass1Cards);
-    allCards = [...pass1Cards];
-    allQueries = [...pass1Queries];
-    let preRank = rankCandidates(allCards, structure, lexicon, allQueries);
+    // 3. Скоринг и выбор top queries
+    const context = {
+      coreObject: structure?.coreObject ?? '',
+      productType: structure?.productType ?? '',
+      audience: structure?.audience ?? '',
+      materials: structure?.material ?? [],
+      hardConflicts: structure?.hardConflicts ?? [],
+      softConflicts: structure?.softConflicts ?? [],
+      mustKeep: structure?.mustKeep ?? [],
+      doNotSearch: structure?.doNotSearch ?? [],
+    };
+    const selected = selectTopQueries(pool, MAX_WB_QUERIES, context);
+    const searchQueries = selected.map((c) => c.query);
 
-    // ─── PASS 2: L4-L5 + Adaptive (if direct < 10) ─────────────────────
-    if (preRank.buckets.directLocalAnalogs.length < 10) {
-      const pass2Queries = [
-        ...(ladder.L4_core ?? []),
-        ...(ladder.L5_category ?? []),
-      ].filter((q): q is string => !!q && q.length > 2 && !allQueries.includes(q));
+    console.log(`[step3] Pool: ${pool.length} candidates → Selected: ${searchQueries.length} queries: ${searchQueries.join(' | ')}`);
 
-      // Adaptive from mining
-      const adaptiveQueries = structure
-        ? await expandQueries(structure, mining.tokens, mining.bigrams).catch(() => [] as string[])
-        : [];
+    // 4. Один batch search
+    if (searchQueries.length > 0) {
+      const { cards, seenUrls } = await searchWb(searchQueries);
+      allCards = cards;
+      allQueries = searchQueries;
+      wbSearchCount = searchQueries.length;
 
-      const combined = [...pass2Queries, ...adaptiveQueries]
-        .filter((q, i, a) => a.indexOf(q) === i && !allQueries.includes(q)).slice(0, 8);
+      console.log(`[step3] Search: ${allCards.length} cards from ${wbSearchCount} queries`);
 
-      if (combined.length) {
-        console.log(`[step3] PASS 2 (L4-L5+adaptive): ${combined.length} queries`);
-        const { cards: p2Cards } = await batchSearch(combined);
-        for (const c of p2Cards) { if (!seenUrls.has(c.url)) { seenUrls.add(c.url); allCards.push(c); } }
-        allQueries.push(...combined);
-        preRank = rankCandidates(allCards, structure, lexicon, allQueries);
-        console.log(`[step3] After PASS 2: ${allCards.length} cards, direct=${preRank.buckets.directLocalAnalogs.length}`);
-      }
-    }
+      // 5. Rank
+      let ranked = rankCandidates(allCards, structure, lexicon, allQueries);
 
-    // ─── PASS 3: Search Repair Agent (if direct < 3) ────────────────────
-    if (preRank.buckets.directLocalAnalogs.length < 3 && structure) {
-      const rejected = preRank.buckets.wrong.slice(0, 5).map(c => c.title);
-      const found = [...preRank.buckets.directLocalAnalogs, ...preRank.buckets.similarLocalProducts].slice(0, 10).map(c => c.title);
-      const repair = await repairSearch(structure, allQueries, found, rejected, mining);
+      // 6. Repair (max 1 query, only if direct=0, within hard cap)
+      if (ranked.buckets.directLocalAnalogs.length === 0 && structure && wbSearchCount < 5) {
+        const rejected = ranked.buckets.wrong.slice(0, 5).map((c: any) => c.title);
+        const found = ranked.buckets.similarLocalProducts.slice(0, 5).map((c: any) => c.title);
+        const repair = await repairSearch(structure, allQueries, found, rejected, { tokens: [], bigrams: [] }).catch(() => ({ newQueries: [] as string[], reason: '' }));
 
-      if (repair.newQueries.length) {
-        console.log(`[step3] PASS 3 (repair): ${repair.newQueries.length} queries. Reason: ${repair.reason}`);
-        const { cards: p3Cards } = await batchSearch(repair.newQueries);
-        for (const c of p3Cards) { if (!seenUrls.has(c.url)) { seenUrls.add(c.url); allCards.push(c); } }
-        allQueries.push(...repair.newQueries);
-        preRank = rankCandidates(allCards, structure, lexicon, allQueries);
-        console.log(`[step3] After PASS 3: ${allCards.length} cards, direct=${preRank.buckets.directLocalAnalogs.length}`);
-      }
-    }
-
-    // ─── PASS 4: Fallback by coreObject (if still < 3) ──────────────────
-    if (preRank.buckets.directLocalAnalogs.length < 3 && structure?.coreObject) {
-      const fbQueries = [
-        structure.coreObject,
-        structure.productType !== structure.coreObject ? structure.productType : null,
-        ...(structure.marketSynonyms ?? []).slice(0, 2),
-      ].filter((q): q is string => !!q && q.length > 2 && !allQueries.includes(q)).slice(0, 4);
-
-      if (fbQueries.length) {
-        console.log(`[step3] PASS 4 (fallback): ${fbQueries.join(' | ')}`);
-        const { cards: fbCards } = await batchSearch(fbQueries);
-        for (const c of fbCards) { if (!seenUrls.has(c.url)) { seenUrls.add(c.url); allCards.push(c); } }
-        allQueries.push(...fbQueries);
-      }
-    }
-
-    // ─── Final ranking ───────────────────────────────────────────────────
-    similarity = rankCandidates(allCards, structure, lexicon, pass1Queries);
-
-    // ─── LLM Judge batch (1 вызов на все borderline кандидаты) ──────────
-    if (structure && similarity.buckets.directLocalAnalogs.length + similarity.buckets.similarLocalProducts.length > 0) {
-      const topCandidates = [
-        ...similarity.buckets.directLocalAnalogs.slice(0, 15),
-        ...similarity.buckets.similarLocalProducts.slice(0, 10),
-      ];
-      const borderline = topCandidates.filter(c => c.similarity >= 35 && c.similarity <= 70).slice(0, 10);
-
-      if (borderline.length > 0) {
-        console.log(`[step3] LLM Judge batch: ${borderline.length} candidates`);
-        const judgments = await judgeCandidateBatch(structure, borderline.map(c => ({
-          title: c.title, price: c.price,
-          detectedConflicts: [...c.hardConflictsFound, ...c.softConflictsFound],
-        }))).catch(() => [] as any[]);
-
-        if (judgments.length === borderline.length) {
-          borderline.forEach((card, i) => {
-            if (judgments[i]?.matchLevel) {
-              card.matchLevel = judgments[i].matchLevel;
-              card.matchedTerms = judgments[i].matchedAttributes ?? card.matchedTerms;
-              card.missingTerms = judgments[i].missingAttributes ?? card.missingTerms;
-            }
-          });
-          const all = [...similarity.buckets.directLocalAnalogs, ...similarity.buckets.similarLocalProducts, ...similarity.buckets.categoryOnly];
-          similarity.buckets.directLocalAnalogs = all.filter(c => c.matchLevel === 'direct_analog' && c.marketType !== 'crossborder_market').sort((a, b) => b.similarity - a.similarity);
-          similarity.buckets.similarLocalProducts = all.filter(c => c.matchLevel === 'similar' && c.marketType !== 'crossborder_market').sort((a, b) => b.similarity - a.similarity);
-          similarity.buckets.categoryOnly = all.filter(c => c.matchLevel === 'category_only');
+        if (repair.newQueries.length) {
+          const repairQ = repair.newQueries.slice(0, 1); // max 1
+          console.log(`[step3] Repair: "${repairQ[0]}" (${repair.reason})`);
+          const { cards: repairCards } = await searchWb(repairQ);
+          for (const c of repairCards) {
+            if (!seenUrls.has(c.url)) { seenUrls.add(c.url); allCards.push(c); }
+          }
+          allQueries.push(...repairQ);
+          wbSearchCount += repairQ.length;
         }
       }
-    }
 
-    console.log(`[step3] Final: directLocal=${similarity.buckets.directLocalAnalogs.length} similarLocal=${similarity.buckets.similarLocalProducts.length} crossBorder=${similarity.buckets.crossBorderAnalogs.length} category=${similarity.buckets.categoryOnly.length} confidence=${similarity.confidence}`);
+      // 7. Final ranking
+      similarity = rankCandidates(allCards, structure, lexicon, allQueries);
+
+      // 8. LLM Judge batch (borderline candidates)
+      if (structure && similarity.buckets.directLocalAnalogs.length + similarity.buckets.similarLocalProducts.length > 0) {
+        const borderline = [
+          ...similarity.buckets.directLocalAnalogs.slice(0, 15),
+          ...similarity.buckets.similarLocalProducts.slice(0, 10),
+        ].filter((c: any) => c.similarity >= 35 && c.similarity <= 70).slice(0, 10);
+
+        if (borderline.length > 0) {
+          console.log(`[step3] LLM Judge: ${borderline.length} candidates`);
+          const judgments = await judgeCandidateBatch(structure, borderline.map((c: any) => ({
+            title: c.title, price: c.price,
+            detectedConflicts: [...(c.hardConflictsFound ?? []), ...(c.softConflictsFound ?? [])],
+          }))).catch(() => [] as any[]);
+
+          if (judgments.length === borderline.length) {
+            borderline.forEach((card: any, i: number) => {
+              if (judgments[i]?.matchLevel) {
+                card.matchLevel = judgments[i].matchLevel;
+                card.matchedTerms = judgments[i].matchedAttributes ?? card.matchedTerms;
+                card.missingTerms = judgments[i].missingAttributes ?? card.missingTerms;
+              }
+            });
+            const all = [...similarity.buckets.directLocalAnalogs, ...similarity.buckets.similarLocalProducts, ...similarity.buckets.categoryOnly];
+            similarity.buckets.directLocalAnalogs = all.filter((c: any) => c.matchLevel === 'direct_analog' && c.marketType !== 'crossborder_market').sort((a: any, b: any) => b.similarity - a.similarity);
+            similarity.buckets.similarLocalProducts = all.filter((c: any) => c.matchLevel === 'similar' && c.marketType !== 'crossborder_market').sort((a: any, b: any) => b.similarity - a.similarity);
+            similarity.buckets.categoryOnly = all.filter((c: any) => c.matchLevel === 'category_only');
+          }
+        }
+      }
+
+      console.log(`[step3] Final: direct=${similarity.buckets.directLocalAnalogs.length} similar=${similarity.buckets.similarLocalProducts.length} crossBorder=${similarity.buckets.crossBorderAnalogs.length} category=${similarity.buckets.categoryOnly.length} | ${wbSearchCount} WB queries | ${Date.now() - wbSearchStart}ms`);
+    }
 
     } catch (wbErr: any) {
       console.error(`[step3] WB search failed after ${Date.now() - wbSearchStart}ms:`, wbErr.message);
     }
 
-    // ─── Build WbData for economics (only from LOCAL direct analogs) ────
+    // ─── Build WbData for economics (only LOCAL direct analogs) ─────────
     const directCards = similarity.buckets.directLocalAnalogs;
     const wbData: WbSearchResult | null = directCards.length > 0 ? {
-      avgPrice: Math.round(directCards.reduce((s, c) => s + c.price, 0) / directCards.length),
-      minPrice: Math.min(...directCards.map(c => c.price)),
-      maxPrice: Math.max(...directCards.map(c => c.price)),
+      avgPrice: Math.round(directCards.reduce((s: number, c: any) => s + c.price, 0) / directCards.length),
+      minPrice: Math.min(...directCards.map((c: any) => c.price)),
+      maxPrice: Math.max(...directCards.map((c: any) => c.price)),
       totalCards: allCards.length,
       topExamples: directCards.slice(0, 3),
       allCards: directCards,
@@ -239,7 +222,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } : null;
 
     const filterKeywords = seoContent?.filterKeywords ?? { required: [], optional: [], exclude: [] };
-    const wbFiltered = filterWbData(wbData, filterKeywords, pass1Queries);
+    const wbFiltered = filterWbData(wbData, filterKeywords, allQueries);
 
     // ─── Economics ───────────────────────────────────────────────────────
     const userTariffs = await getUserTariffs(job.user_id).catch(() => null);
@@ -261,28 +244,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     progress?.stop();
 
-    // ─── Similarity data for display ─────────────────────────────────────
+    // ─── WBCON trends for display ───────────────────────────────────────
+    const trendsResult2 = await trendsPromise;
+    const wbTrends = trendsResult2?.trends?.length
+      ? filterRelevantTrends(trendsResult2.trends, wbCoreQuery, structure?.productType ?? '', structure?.material ?? [])
+      : [];
+
+    // ─── Similarity data for display ────────────────────────────────────
     const similarityData = {
-      queries: pass1Queries.filter(q => /[а-яё]/i.test(q)).slice(0, 5),
+      queries: allQueries.filter((q: string) => /[а-яё]/i.test(q)).slice(0, 5),
       totalAnalyzed: allCards.length,
       directCount: similarity.buckets.directLocalAnalogs.length,
       similarCount: similarity.buckets.similarLocalProducts.length,
       crossBorderCount: similarity.buckets.crossBorderAnalogs.length,
       categoryCount: similarity.buckets.categoryOnly.length,
       confidence: similarity.confidence,
-      leaders: similarity.leaders.slice(0, 10).map(c => ({
+      leaders: (similarity.leaders ?? []).slice(0, 10).map((c: any) => ({
         title: c.title, price: c.price, url: c.url,
         rating: c.rating, feedbacks: c.feedbacks,
         similarity: c.similarity, matchLevel: c.matchLevel,
       })),
     };
 
-    // ─── Debug trace ─────────────────────────────────────────────────────
     const debugTrace = {
-      queryLadder: queryPlan,
-      allQueriesTried: allQueries,
-      pass1Cards: pass1Cards.length,
-      mining: { tokens: mining.tokens.slice(0, 10), bigrams: mining.bigrams.slice(0, 5) },
+      pipelineVersion: 'v2',
+      poolSize: 0,
+      selectedQueries: allQueries,
+      wbSearchCount,
       totalCards: allCards.length,
       finalBuckets: {
         directLocal: similarity.buckets.directLocalAnalogs.length,
@@ -292,20 +280,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         wrong: similarity.buckets.wrong.length,
       },
       confidence: similarity.confidence,
-      searchFailureReason: similarity.buckets.directLocalAnalogs.length === 0
-        ? (similarity.buckets.categoryOnly.length > 0 ? 'category_only_found' : 'no_relevant_cards')
-        : '',
+      wbSearchMs: Date.now() - wbSearchStart,
     };
-
-    // WBCON trends — фильтруем
-    const trendsResult = await trendsPromise;
-    const materials = structure?.material ?? [];
-    const productType = structure?.productType ?? '';
-    const wbTrends = trendsResult?.trends?.length
-      ? filterRelevantTrends(trendsResult.trends, wbCoreQuery, productType, materials)
-      : [];
-
-    console.log(`[step3] wbcon: query="${wbCoreQuery}" raw=${trendsResult?.trends?.length ?? 0} filtered=${wbTrends.length} ${trendsResult?.latencyMs ?? 0}ms`);
 
     await supabase.from('jobs').update({
       status: 'done',
@@ -344,7 +320,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error('[step3]', e.message);
     const { handleStepError } = require('../src/lib/stepError');
     await handleStepError(jobId, e.message, bot);
-
     res.status(200).json({ ok: false });
   }
 }
