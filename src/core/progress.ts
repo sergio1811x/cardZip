@@ -1,4 +1,5 @@
 import { Telegraf } from 'telegraf';
+import { redis } from '../lib/redis';
 
 const STEPS = [
   { text: '📡 Загружаем данные с площадки', phase: 'elim' },
@@ -12,10 +13,12 @@ const STEPS = [
   { text: '🔍 Анализируем цены конкурентов', phase: 'market' },
   { text: '🔍 Фильтруем нерелевантные товары', phase: 'market' },
   { text: '📊 Рассчитываем экономику', phase: 'market' },
-  { text: '📦 Собираем архив с фотографиями', phase: 'send' },
-  { text: '📦 Упаковываем материалы', phase: 'send' },
+  { text: '📦 Собираем материалы', phase: 'send' },
+  { text: '📦 Упаковываем результат', phase: 'send' },
   { text: '✅ Почти готово', phase: 'send' },
 ];
+
+const PHASE_INDEX: Record<string, number> = { elim: 0, ai: 3, market: 7, send: 11 };
 
 function buildBar(current: number, total: number): string {
   const pct = Math.round((current / total) * 100);
@@ -24,20 +27,28 @@ function buildBar(current: number, total: number): string {
   return `⏳ ${bar} ${pct}%`;
 }
 
+function progressKey(messageId: number): string {
+  return `progress:${messageId}`;
+}
+
 export function createStepProgress(
   bot: Telegraf,
   chatId: number,
   messageId: number,
   startPhase: string
 ) {
-  const phaseIndex: Record<string, number> = { elim: 0, ai: 3, market: 7, send: 11 };
-  let tick = phaseIndex[startPhase] ?? 0;
+  let tick = PHASE_INDEX[startPhase] ?? 0;
 
-  let maxTick = tick;
+  const edit = async (idx: number) => {
+    // Проверяем глобальный максимум в Redis
+    if (redis) {
+      const key = progressKey(messageId);
+      const stored = await redis.get(key).catch(() => null);
+      const storedMax = stored ? parseInt(String(stored), 10) : 0;
+      if (idx < storedMax) return;
+      await redis.set(key, String(idx), { ex: 120 }).catch(() => {});
+    }
 
-  const edit = (idx: number) => {
-    if (idx < maxTick) return; // никогда не откатываемся
-    maxTick = idx;
     const step = STEPS[idx] ?? STEPS[STEPS.length - 1];
     const bar = buildBar(idx + 1, STEPS.length);
     const text = `${bar}\n\n${step.text}...`;
@@ -55,7 +66,7 @@ export function createStepProgress(
 
   return {
     step(phase: string) {
-      const newIdx = phaseIndex[phase];
+      const newIdx = PHASE_INDEX[phase];
       if (newIdx !== undefined) {
         tick = Math.max(tick, newIdx);
         edit(tick);
@@ -63,6 +74,7 @@ export function createStepProgress(
     },
     stop() {
       clearInterval(timer);
+      if (redis) redis.del(progressKey(messageId)).catch(() => {});
     },
   };
 }
