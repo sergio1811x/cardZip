@@ -383,7 +383,7 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
       platform: toElimPlatform(platform),
       lang: 'en',
     }),
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(15_000),
   });
 
   const MAX_RETRIES = 2;

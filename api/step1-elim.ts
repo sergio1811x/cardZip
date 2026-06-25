@@ -33,10 +33,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'elim')
       : null;
 
-    // Elim API
+    // Elim API с safety timeout (Vercel лимит 60с, нужен запас на error handling)
     let rawProduct;
     try {
-      rawProduct = await productImporter.fetchProduct(job.input_url);
+      const safetyTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Elim не ответил за 40 секунд')), 40_000)
+      );
+      rawProduct = await Promise.race([
+        productImporter.fetchProduct(job.input_url),
+        safetyTimeout,
+      ]);
     } finally {
       progress?.stop();
     }
