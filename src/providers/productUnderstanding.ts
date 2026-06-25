@@ -69,6 +69,7 @@ export interface FullProductAnalysis {
   validatedQueries: string[];
   wbCoreQuery: string;
   categoryType: string;
+  intelligence: import('../types').ProductIntelligence | null;
 }
 
 // ─── LLM Call with Fallback ──────────────────────────────────────────────────
@@ -330,9 +331,197 @@ ${info}`;
     const wbCoreQuery = (result.wbCoreQuery ?? structure.coreObject ?? '').trim();
     const categoryType = result.categoryType ?? 'other';
 
-    return { structure, lexicon, queryPlan, validatedQueries, wbCoreQuery, categoryType };
+    return { structure, lexicon, queryPlan, validatedQueries, wbCoreQuery, categoryType, intelligence: null };
   } catch (e) {
     console.error('[analyzeProduct]', e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+// ─── Product Intelligence ───────────────────────────────────────────────────
+
+const INTELLIGENCE_PROMPT = `Ты — товарный аналитик для маркетплейса Wildberries.
+
+Тебе дан товар с 1688. Твоя задача:
+1. Понять, что это за товар.
+2. Очистить смысл от китайского мусора и машинного перевода.
+3. Определить, как этот товар называют на Wildberries.
+4. Определить, какие характеристики важны именно для этого товара.
+5. Определить, какие вопросы поставщику нужно задать.
+6. Определить, какие темы нельзя спрашивать, потому что они не относятся к товару.
+7. Определить, что можно и нельзя писать в SEO.
+8. Сформировать короткие поисковые запросы WB.
+
+Верни строго JSON без markdown:
+
+{
+  "productIdentity": {
+    "marketNameRu": "рыночное название на русском, как на WB",
+    "shortNameRu": "короткое название 2-4 слова",
+    "productKind": "конкретный тип (домашние тапочки, настольный вентилятор, нож-секач)",
+    "categoryPath": ["Обувь", "Домашняя обувь", "Тапочки"],
+    "audience": "мужской/женский/детский/унисекс",
+    "useCases": ["дом", "дача", "пляж"],
+    "coreObject": "базовый объект (тапочки, вентилятор, нож)",
+    "formFactor": "форм-фактор (закрытые, складной, настольный)",
+    "material": ["EVA", "PVC"],
+    "powerType": ["USB", "аккумулятор", "сеть 220V", "без питания"],
+    "season": "лето/зима/всесезон/не применимо",
+    "gender": "мужской/женский/унисекс",
+    "ageGroup": "взрослый/детский/все",
+    "importantFeatures": ["нескользящая подошва", "закрытый носок"],
+    "notConfirmedFeatures": ["ортопедическая стелька — не подтверждено"]
+  },
+
+  "wbSearch": {
+    "wbCoreQuery": "1-3 слова, рыночный запрос WB",
+    "queryCandidates": ["запрос1", "запрос2", "запрос3"],
+    "negativeSearchTerms": ["кожаные", "ортопедические"],
+    "tooBroadQueries": ["обувь", "тапки"],
+    "tooNarrowQueries": ["тапочки домашние женские зимние меховые с вышивкой"]
+  },
+
+  "matchingRules": {
+    "mustHaveForDirectAnalog": ["домашние тапочки", "закрытый носок"],
+    "allowedDifferences": ["цвет", "рисунок"],
+    "directAnalogBlockers": ["открытый носок", "уличные"],
+    "similarOnlyIf": ["другой материал подошвы"],
+    "rejectIf": ["сандалии", "кроссовки", "ботинки"]
+  },
+
+  "reportRules": {
+    "buyerMustCheck": ["вес пары с упаковкой", "размерная сетка", "длина стельки"],
+    "buyerMustNotAsk": ["мощность", "напряжение", "аккумулятор", "рукав"],
+    "seoAllowedClaims": ["домашние", "тёплые", "нескользящие", "мягкие"],
+    "seoForbiddenClaims": ["ортопедические", "медицинские", "натуральная кожа"],
+    "importantAttributesToShow": ["материал верха", "материал подошвы", "сезон"],
+    "attributesToHide": ["артикул", "складской код", "тип торговли"],
+    "riskFlags": ["вес не указан", "размерная сетка не подтверждена"]
+  },
+
+  "supplierQuestions": {
+    "ru": ["Какой вес пары с упаковкой?", "Пришлите размерную сетку"],
+    "cn": ["一双鞋带包装的重量是多少？", "请提供厘米尺寸表"]
+  },
+
+  "dataQuality": {
+    "missingCriticalFields": ["вес", "размерная сетка"],
+    "skuRisk": "mixed_sku — разные типы в одной карточке",
+    "priceRisk": "ok",
+    "weightRisk": "missing",
+    "confidence": "medium",
+    "reason": "цена есть, но вес и стелька не указаны"
+  }
+}
+
+ПРИМЕРЫ:
+
+Для обуви (тапочки/сабо/шлёпанцы):
+- buyerMustNotAsk: мощность, напряжение, аккумулятор, тип вилки, рукав, плотность ткани, усадка
+- seoForbiddenClaims: ортопедические (если не подтверждено), натуральная кожа (если EVA)
+
+Для USB-вентилятора:
+- buyerMustNotAsk: размерная сетка, длина стельки, рукав, ткань, усадка
+- buyerMustCheck: тип разъёма, ёмкость аккумулятора, время работы, мощность
+- seoForbiddenClaims: 220V (если USB 5V), бесшумный (если не подтверждено)
+
+Для одежды:
+- buyerMustNotAsk: мощность, напряжение, длина стельки, тип вилки
+- buyerMustCheck: состав ткани, плотность, размерная сетка, замеры, усадка
+
+Правила:
+- Не возвращай китайские слова в русских полях.
+- Не транслитерируй китайские термины.
+- Переводи смысл на нормальный русский язык.
+- Не придумывай неподтверждённые свойства.
+- wbCoreQuery: 1–3 слова, как реально ищут на WB.
+- queryCandidates: короткие, рыночные запросы.`;
+
+export async function generateProductIntelligence(raw: {
+  titleCn: string;
+  titleRu?: string;
+  titleEn?: string;
+  categoryName?: string;
+  attributes?: Array<{ name: string; value: string }>;
+  skus?: Array<{ name: string; price?: number }>;
+  price?: number;
+}): Promise<import('../types').ProductIntelligence | null> {
+  let info = `Товар с 1688:\nНазвание CN: ${raw.titleCn}`;
+  if (raw.titleRu) info += `\nНазвание RU: ${raw.titleRu}`;
+  if (raw.titleEn) info += `\nНазвание EN: ${raw.titleEn}`;
+  if (raw.categoryName) info += `\nКатегория 1688: ${raw.categoryName}`;
+  if (raw.price) info += `\nЦена: ${raw.price} ¥`;
+  if (raw.attributes?.length) {
+    info += '\nАтрибуты поставщика:';
+    raw.attributes.slice(0, 20).forEach(a => { info += `\n  ${a.name}: ${a.value}`; });
+  }
+  if (raw.skus?.length) {
+    info += `\nSKU/варианты (${raw.skus.length}):`;
+    raw.skus.slice(0, 8).forEach(s => { info += `\n  ${s.name} — ${s.price ?? '?'} ¥`; });
+  }
+
+  const prompt = `${INTELLIGENCE_PROMPT}\n\nДанные товара:\n${info}`;
+
+  try {
+    const result = await callLlm(prompt, 'Ты — товарный аналитик для Wildberries. Анализируешь товары с 1688. Верни СТРОГО JSON.');
+    if (!result?.productIdentity?.marketNameRu) return null;
+
+    return {
+      productIdentity: {
+        marketNameRu: result.productIdentity.marketNameRu ?? '',
+        shortNameRu: result.productIdentity.shortNameRu ?? '',
+        productKind: result.productIdentity.productKind ?? '',
+        categoryPath: result.productIdentity.categoryPath ?? [],
+        audience: result.productIdentity.audience ?? '',
+        useCases: result.productIdentity.useCases ?? [],
+        coreObject: result.productIdentity.coreObject ?? '',
+        formFactor: result.productIdentity.formFactor ?? '',
+        material: result.productIdentity.material ?? [],
+        powerType: result.productIdentity.powerType ?? [],
+        season: result.productIdentity.season ?? '',
+        gender: result.productIdentity.gender ?? '',
+        ageGroup: result.productIdentity.ageGroup ?? '',
+        importantFeatures: result.productIdentity.importantFeatures ?? [],
+        notConfirmedFeatures: result.productIdentity.notConfirmedFeatures ?? [],
+      },
+      wbSearch: {
+        wbCoreQuery: result.wbSearch?.wbCoreQuery ?? '',
+        queryCandidates: result.wbSearch?.queryCandidates ?? [],
+        negativeSearchTerms: result.wbSearch?.negativeSearchTerms ?? [],
+        tooBroadQueries: result.wbSearch?.tooBroadQueries ?? [],
+        tooNarrowQueries: result.wbSearch?.tooNarrowQueries ?? [],
+      },
+      matchingRules: {
+        mustHaveForDirectAnalog: result.matchingRules?.mustHaveForDirectAnalog ?? [],
+        allowedDifferences: result.matchingRules?.allowedDifferences ?? [],
+        directAnalogBlockers: result.matchingRules?.directAnalogBlockers ?? [],
+        similarOnlyIf: result.matchingRules?.similarOnlyIf ?? [],
+        rejectIf: result.matchingRules?.rejectIf ?? [],
+      },
+      reportRules: {
+        buyerMustCheck: result.reportRules?.buyerMustCheck ?? [],
+        buyerMustNotAsk: result.reportRules?.buyerMustNotAsk ?? [],
+        seoAllowedClaims: result.reportRules?.seoAllowedClaims ?? [],
+        seoForbiddenClaims: result.reportRules?.seoForbiddenClaims ?? [],
+        importantAttributesToShow: result.reportRules?.importantAttributesToShow ?? [],
+        attributesToHide: result.reportRules?.attributesToHide ?? [],
+        riskFlags: result.reportRules?.riskFlags ?? [],
+      },
+      supplierQuestions: {
+        ru: result.supplierQuestions?.ru ?? [],
+        cn: result.supplierQuestions?.cn ?? [],
+      },
+      dataQuality: {
+        missingCriticalFields: result.dataQuality?.missingCriticalFields ?? [],
+        skuRisk: result.dataQuality?.skuRisk ?? '',
+        priceRisk: result.dataQuality?.priceRisk ?? '',
+        weightRisk: result.dataQuality?.weightRisk ?? '',
+        confidence: result.dataQuality?.confidence ?? 'low',
+        reason: result.dataQuality?.reason ?? '',
+      },
+    };
+  } catch (e) {
+    console.error('[intelligence]', e instanceof Error ? e.message : e);
     return null;
   }
 }

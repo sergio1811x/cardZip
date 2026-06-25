@@ -221,6 +221,7 @@ export function buildMainMessage(
   const safeConclusion = conclusion ?? { platform: product.platform, icon: '🟡', headline: 'Нужны данные для оценки', disclaimers: [] };
   const catType: ProductCategoryType = ((product as any).categoryType as ProductCategoryType) ??
     detectCategoryFromAttributes(product.categoryName, product.attributes ?? [], product.titleCn);
+  const intel = (product as any).intelligence;
   const wm = economics.weightMissing;
   const directLocalCount = sim?.directCount ?? 0;
   const crossBorderCount = sim?.crossBorderCount ?? 0;
@@ -229,7 +230,8 @@ export function buildMainMessage(
   const L: string[] = [];
 
   // ─── Товар ──────────────────────────────────────────────────────────────────
-  L.push(`📦 <b>${esc(product.titleRu)}</b>`);
+  const displayTitle = intel?.productIdentity?.shortNameRu || intel?.productIdentity?.marketNameRu || product.titleRu;
+  L.push(`📦 <b>${esc(displayTitle)}</b>`);
   L.push('');
   L.push(`Источник: ${PLATFORM_LABELS[product.platform] ?? product.platform}`);
 
@@ -280,8 +282,10 @@ export function buildMainMessage(
   L.push(`• Фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
   L.push(`• Вес: ${fWeight(product.weightKg)}`);
   const catForbidden = getCategoryRules(catType).forbiddenFields;
+  const intelHide = new Set((intel?.reportRules?.attributesToHide ?? []).map((s: string) => s.toLowerCase()));
   translatedAttrs
     .filter((a) => !catForbidden.some((f) => a.label.toLowerCase().includes(f.toLowerCase())))
+    .filter((a) => !intelHide.has(a.label.toLowerCase()) && !intelHide.has(a.value.toLowerCase()))
     .slice(0, 4)
     .forEach((a) => L.push(`• ${a.label}: ${esc(a.value)}`));
   const hasTiers = product.priceRange?.some((r) => r.minQty > 0);
@@ -385,27 +389,30 @@ export function buildMainMessage(
     L.push('Брендовый референс — найдите OEM на 1688.');
   }
 
-  // ─── Что уточнить (по категории товара) ──────────────────────────────────
-  const catRules = getCategoryRules(catType);
+  // ─── Что уточнить (по Product Intelligence или CategoryRules) ──────
   const clarify: string[] = [];
-  if (priceIsZero) clarify.push('цену выбранного цвета/размера');
+
+  if (priceIsZero) clarify.push('цену выбранного варианта');
   else if (product.priceIsRange) clarify.push('подтвердите цену выбранного варианта');
-  if (wm) clarify.push('вес единицы с упаковкой');
-  // Category questions, filtered by what's actually missing
-  for (const q of catRules.supplierQuestions.ru) {
-    if (clarify.length >= 7) break;
-    const ql = q.toLowerCase();
-    // Skip weight questions if weight exists
-    if (!wm && (ql.includes('вес') || ql.includes('weight'))) continue;
-    // Skip price questions if price exists and not range
-    if (!priceIsZero && !product.priceIsRange && (ql.includes('цен') || ql.includes('price'))) continue;
-    // Skip MOQ questions if MOQ is known
-    if ((product.moq ?? 0) > 1 && (ql.includes('moq') || ql.includes('минимальн') || ql.includes('парти'))) continue;
-    // Skip SKU questions if SKUs exist
-    if ((product.skus?.length ?? 0) > 0 && (ql.includes('sku') || ql.includes('вариант') || ql.includes('размер'))) continue;
-    // Skip duplicates
-    if (clarify.some((c) => c.toLowerCase() === ql)) continue;
-    clarify.push(q);
+
+  if (intel?.reportRules?.buyerMustCheck?.length) {
+    // Use intelligence-driven questions
+    for (const q of intel.reportRules.buyerMustCheck) {
+      if (clarify.length >= 7) break;
+      const qLower = q.toLowerCase();
+      // Skip if already covered or data exists
+      if (qLower.includes('вес') && product.weightKg > 0) continue;
+      if (qLower.includes('цен') && !priceIsZero && !product.priceIsRange) continue;
+      if (clarify.some(c => c.toLowerCase().includes(qLower.slice(0, 10)))) continue;
+      clarify.push(q);
+    }
+  } else {
+    // Fallback to CategoryRules
+    const catRules = getCategoryRules(catType);
+    for (const q of catRules.supplierQuestions.ru.slice(0, 7)) {
+      if (clarify.length >= 7) break;
+      clarify.push(q);
+    }
   }
 
   if (clarify.length) {

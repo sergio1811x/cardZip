@@ -111,6 +111,68 @@ export interface RawProduct1688 {
   normalized1688: Normalized1688Data;
 }
 
+// ─── Product Intelligence ───────────────────────────────────────────────────
+
+export interface ProductIntelligence {
+  productIdentity: {
+    marketNameRu: string;
+    shortNameRu: string;
+    productKind: string;
+    categoryPath: string[];
+    audience: string;
+    useCases: string[];
+    coreObject: string;
+    formFactor: string;
+    material: string[];
+    powerType: string[];
+    season: string;
+    gender: string;
+    ageGroup: string;
+    importantFeatures: string[];
+    notConfirmedFeatures: string[];
+  };
+
+  wbSearch: {
+    wbCoreQuery: string;
+    queryCandidates: string[];
+    negativeSearchTerms: string[];
+    tooBroadQueries: string[];
+    tooNarrowQueries: string[];
+  };
+
+  matchingRules: {
+    mustHaveForDirectAnalog: string[];
+    allowedDifferences: string[];
+    directAnalogBlockers: string[];
+    similarOnlyIf: string[];
+    rejectIf: string[];
+  };
+
+  reportRules: {
+    buyerMustCheck: string[];
+    buyerMustNotAsk: string[];
+    seoAllowedClaims: string[];
+    seoForbiddenClaims: string[];
+    importantAttributesToShow: string[];
+    attributesToHide: string[];
+    riskFlags: string[];
+  };
+
+  supplierQuestions: {
+    ru: string[];
+    cn: string[];
+  };
+
+  dataQuality: {
+    missingCriticalFields: string[];
+    skuRisk: string;
+    priceRisk: string;
+    weightRisk: string;
+    confidence: string;
+    reason: string;
+  };
+}
+
 // ─── Platform Conclusion (replaces Score/Verdict) ────────────────────────────
 
 export interface PlatformConclusion {
@@ -145,6 +207,7 @@ export interface ProductWithContent extends RawProduct1688 {
     leaders?: any[];
   };
   evidence?: FieldEvidence[];
+  intelligence?: ProductIntelligence;
   cachedAt?: Date;
 }
 
@@ -237,6 +300,7 @@ export interface AiContentRequest {
   wbTopKeywords?: string[];
   platform?: Platform;
   categoryType?: string;
+  intelligence?: ProductIntelligence;
 }
 
 export interface AiContentResult {

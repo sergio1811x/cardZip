@@ -82,6 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       hasWeight: product.weightKg > 0,
       hasDirectAnalogs: !!(product.similarityData?.directCount && product.similarityData.directCount > 0),
       wb429: !!(product as any).wb429,
+      intelligence: (product as any).intelligence ?? null,
     });
     if (!validation.ok) {
       console.warn(`[step4] Validator found ${validation.errors.length} issues:`, validation.errors.join(', '));

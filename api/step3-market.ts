@@ -92,6 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const validatedQueries: string[] = resultJson.validatedQueries ?? [];
     const wbCoreQuery: string = resultJson.wbCoreQuery ?? structure?.coreObject ?? '';
     const categoryType: string = resultJson.categoryType ?? 'other';
+    const intelligence = resultJson.intelligence ?? null;
 
     // WBCON trends — параллельно
     const trendsPromise = wbCoreQuery
@@ -117,7 +118,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const materials = structure?.material ?? [];
     const productType = structure?.productType ?? '';
     const filteredTrends = trendsResult?.trends?.length
-      ? filterRelevantTrends(trendsResult.trends, wbCoreQuery, productType, materials, lexicon?.hardNegativeTerms, structure?.directAnalogBlockers)
+      ? filterRelevantTrends(
+          trendsResult.trends, wbCoreQuery, productType, materials,
+          intelligence?.wbSearch?.negativeSearchTerms ?? lexicon?.hardNegativeTerms,
+          intelligence?.matchingRules?.directAnalogBlockers ?? structure?.directAnalogBlockers,
+        )
       : [];
 
     // 2. Строим пул кандидатов
@@ -255,7 +260,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ─── WBCON trends for display ───────────────────────────────────────
     const trendsResult2 = await trendsPromise;
     const wbTrends = trendsResult2?.trends?.length
-      ? filterRelevantTrends(trendsResult2.trends, wbCoreQuery, structure?.productType ?? '', structure?.material ?? [], lexicon?.hardNegativeTerms, structure?.directAnalogBlockers)
+      ? filterRelevantTrends(
+          trendsResult2.trends, wbCoreQuery, structure?.productType ?? '', structure?.material ?? [],
+          intelligence?.wbSearch?.negativeSearchTerms ?? lexicon?.hardNegativeTerms,
+          intelligence?.matchingRules?.directAnalogBlockers ?? structure?.directAnalogBlockers,
+        )
       : [];
 
     // ─── Similarity data for display ────────────────────────────────────
@@ -304,6 +313,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           wbTrends,
           wbCoreQuery,
           categoryType,
+          intelligence,
           ...(wb429 ? { wb429: true } : {}),
         },
         debugTrace,

@@ -129,6 +129,31 @@ ${req.wbTopKeywords.slice(0, 10).map(k => `- ${k}`).join('\n')}`
     ? 'Товар с Tmall (бренд). НЕ используй бренд в названии. Пиши нейтрально.'
     : 'Товар с 1688 (оптовая площадка). Пиши для продажи на WB.';
 
+  // Intelligence-driven rules
+  const intelligence = req.intelligence;
+  let intelligenceBlock = '';
+  if (intelligence) {
+    const parts: string[] = [];
+    if (intelligence.reportRules.seoAllowedClaims?.length) {
+      parts.push(`РАЗРЕШЁННЫЕ УТВЕРЖДЕНИЯ В SEO:\n${intelligence.reportRules.seoAllowedClaims.map(c => `- ${c}`).join('\n')}`);
+    }
+    if (intelligence.reportRules.seoForbiddenClaims?.length) {
+      parts.push(`ЗАПРЕЩЁННЫЕ УТВЕРЖДЕНИЯ В SEO:\n${intelligence.reportRules.seoForbiddenClaims.map(c => `- ${c}`).join('\n')}`);
+    }
+    if (intelligence.reportRules.importantAttributesToShow?.length) {
+      parts.push(`ВАЖНЫЕ ХАРАКТЕРИСТИКИ ДЛЯ ПОКАЗА:\n${intelligence.reportRules.importantAttributesToShow.map(c => `- ${c}`).join('\n')}`);
+    }
+    if (intelligence.reportRules.attributesToHide?.length) {
+      parts.push(`СКРЫТЬ ИЗ ОТЧЁТА:\n${intelligence.reportRules.attributesToHide.map(c => `- ${c}`).join('\n')}`);
+    }
+    if (intelligence.productIdentity.notConfirmedFeatures?.length) {
+      parts.push(`НЕ ПОДТВЕРЖДЁННЫЕ СВОЙСТВА (добавить в needsClarification):\n${intelligence.productIdentity.notConfirmedFeatures.map(c => `- ${c}`).join('\n')}`);
+    }
+    if (parts.length) {
+      intelligenceBlock = parts.join('\n\n') + '\n\n';
+    }
+  }
+
   // Build forbidden fields block
   const forbiddenFields = catRules.forbiddenFields;
   const forbiddenBlock = forbiddenFields.length
@@ -149,7 +174,7 @@ ${forbiddenFields.map((f) => `- ${f}`).join('\n')}
 `
     : '';
 
-  return `${forbiddenBlock}Ты — копирайтер для маркетплейса Wildberries. Режим: Safe Listing — пиши ТОЛЬКО подтверждённые факты.
+  return `${intelligenceBlock}${forbiddenBlock}Ты — копирайтер для маркетплейса Wildberries. Режим: Safe Listing — пиши ТОЛЬКО подтверждённые факты.
 
 КОНТЕКСТ:
 ${platformContext}
@@ -321,7 +346,7 @@ function postProcess(result: AiContentResult, req: AiContentRequest): AiContentR
 
   // Validate SEO content against category rules
   const categoryType: ProductCategoryType = (req as any).categoryType ?? detectCategoryFromAttributes(req.categoryName, req.attributes ?? [], req.titleCn);
-  const seoValidation = validateSeoContent(result, categoryType);
+  const seoValidation = validateSeoContent(result, categoryType, (req as any).intelligence ?? null);
   if (!seoValidation.ok) {
     console.warn(`[seo] Validator: ${seoValidation.errors.join(', ')}`);
     Object.assign(result, seoValidation.fixed);

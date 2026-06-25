@@ -68,8 +68,32 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     const price = product?.priceYuan ?? data.rawProduct?.priceYuan;
     const priceStr = price && price > 0 ? `${price} ¥` : null;
 
+    // Check for Product Intelligence questions
+    const intel = product?.intelligence;
+
     let text: string;
-    if (lang === 'ru') {
+    if (intel?.supplierQuestions?.ru?.length && lang === 'ru') {
+      // Intelligence-driven RU questions
+      const lines = ['📩 <b>Что уточнить у поставщика</b>', ''];
+      if (priceStr) {
+        lines.push(`1. Подтвердите цену ${priceStr} для выбранного варианта.`);
+      } else {
+        lines.push('1. Укажите цену выбранного варианта.');
+      }
+      (intel.supplierQuestions.ru as string[]).forEach((q: string, i: number) => lines.push(`${i + 2}. ${q}`));
+      text = lines.join('\n');
+    } else if (intel?.supplierQuestions?.cn?.length && lang === 'cn') {
+      // Intelligence-driven CN questions
+      const lines = ['📩 <b>发给供应商的问题</b>', ''];
+      if (priceStr) {
+        lines.push(`1. 请确认所选颜色和尺码的价格是否为 ${priceStr.replace('¥', '元')}？`);
+      } else {
+        lines.push('1. 请告诉我所选颜色和尺码的价格。');
+      }
+      (intel.supplierQuestions.cn as string[]).forEach((q: string, i: number) => lines.push(`${i + 2}. ${q}`));
+      text = lines.join('\n');
+    } else if (lang === 'ru') {
+      // Fallback to CategoryRules RU
       const lines = ['📩 <b>Что уточнить у поставщика</b>', ''];
       lines.push('Здравствуйте. Хотим уточнить товар перед заказом:', '');
       if (priceStr) {
@@ -82,6 +106,7 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
       });
       text = lines.join('\n');
     } else {
+      // Fallback to CategoryRules CN
       const lines = ['📩 <b>发给供应商的问题</b>', ''];
       lines.push('您好，我们想下单前确认一下这个产品：', '');
       if (priceStr) {

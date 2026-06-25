@@ -1,4 +1,5 @@
 import { getCategoryRules, type ProductCategoryType } from './categoryRules';
+import type { ProductIntelligence } from '../types';
 
 interface ValidationResult {
   ok: boolean;
@@ -17,6 +18,7 @@ export function validateReport(
     hasWeight: boolean;
     hasDirectAnalogs: boolean;
     wb429: boolean;
+    intelligence?: ProductIntelligence | null;
   }
 ): ValidationResult {
   const errors: string[] = [];
@@ -70,6 +72,22 @@ export function validateReport(
     errors.push('WB 429 not mentioned');
   }
 
+  // 8. Intelligence-based forbidden content
+  if (context.intelligence?.reportRules?.buyerMustNotAsk) {
+    for (const forbidden of context.intelligence.reportRules.buyerMustNotAsk) {
+      if (fixed.toLowerCase().includes(forbidden.toLowerCase())) {
+        errors.push(`intelligence forbidden: ${forbidden}`);
+      }
+    }
+  }
+  if (context.intelligence?.reportRules?.seoForbiddenClaims) {
+    for (const forbidden of context.intelligence.reportRules.seoForbiddenClaims) {
+      if (fixed.toLowerCase().includes(forbidden.toLowerCase())) {
+        errors.push(`intelligence seo forbidden claim: ${forbidden}`);
+      }
+    }
+  }
+
   // Clean up empty lines
   fixed = fixed.replace(/\n{3,}/g, '\n\n').trim();
 
@@ -83,6 +101,7 @@ export function validateReport(
 export function validateSeoContent(
   seo: { title?: string; titleRu?: string; description?: string; bullets?: string[]; characteristics?: Record<string, string> },
   categoryType: ProductCategoryType,
+  intelligence?: ProductIntelligence | null,
 ): { ok: boolean; errors: string[]; fixed: typeof seo } {
   const errors: string[] = [];
   const rules = getCategoryRules(categoryType);
@@ -101,6 +120,14 @@ export function validateSeoContent(
     for (const forbidden of rules.forbiddenFields) {
       if (text.toLowerCase().includes(forbidden.toLowerCase())) {
         errors.push(`forbidden in SEO ${field}: ${forbidden}`);
+      }
+    }
+    // Intelligence-based forbidden claims
+    if (intelligence?.reportRules?.seoForbiddenClaims) {
+      for (const forbidden of intelligence.reportRules.seoForbiddenClaims) {
+        if (text.toLowerCase().includes(forbidden.toLowerCase())) {
+          errors.push(`intelligence seo forbidden in ${field}: ${forbidden}`);
+        }
       }
     }
     return text;
@@ -124,6 +151,13 @@ export function validateSeoContent(
       const kLower = k.toLowerCase();
       if (rules.forbiddenFields.some(f => kLower.includes(f.toLowerCase()))) {
         errors.push(`forbidden characteristic: ${k}`);
+        continue;
+      }
+      // Intelligence: hide specific attributes
+      if (intelligence?.reportRules?.attributesToHide?.some(
+        (h) => kLower.includes(h.toLowerCase())
+      )) {
+        errors.push(`intelligence hidden characteristic: ${k}`);
         continue;
       }
       cleanChars[k] = v;

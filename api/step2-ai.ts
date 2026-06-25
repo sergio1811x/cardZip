@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { aiContentGenerator } from '../src/providers/aiContentGenerator';
-import { analyzeProduct } from '../src/providers/productUnderstanding';
+import { analyzeProduct, generateProductIntelligence } from '../src/providers/productUnderstanding';
 import { createStepProgress } from '../src/core/progress';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import type { AiContentResult } from '../src/types';
@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }));
 
     // Product Analysis: Understanding + Lexicon + Queries (один LLM вызов)
-    const analysis = await analyzeProduct({
+    const analysisPromise = analyzeProduct({
       titleCn: raw.titleCn,
       titleEn: raw.titleEn,
       categoryName: raw.categoryName,
@@ -59,11 +59,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       skus: raw.skus,
     }).catch(() => null);
 
+    // Product Intelligence — параллельно с analyzeProduct
+    const intelligencePromise = generateProductIntelligence({
+      titleCn: raw.titleCn,
+      titleRu: seoContent?.titleRu,
+      titleEn: raw.titleEn,
+      categoryName: raw.categoryName,
+      attributes: raw.attributes,
+      skus: raw.skus,
+      price: raw.priceYuan,
+    }).catch(() => null);
+
+    const [analysis, intelligence] = await Promise.all([analysisPromise, intelligencePromise]);
+
     const productStructure = analysis?.structure ?? null;
     const productLexicon = analysis?.lexicon ?? null;
     const queryPlan = analysis?.queryPlan ?? null;
     const validatedQueries = analysis?.validatedQueries ?? [];
-    const wbCoreQuery = analysis?.wbCoreQuery ?? productStructure?.coreObject ?? '';
+    const wbCoreQuery = intelligence?.wbSearch?.wbCoreQuery || analysis?.wbCoreQuery || productStructure?.coreObject || '';
     const categoryType = analysis?.categoryType ?? 'other';
 
     progress?.stop();
@@ -81,6 +94,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         validatedQueries,
         wbCoreQuery,
         categoryType,
+        intelligence,
       },
     }).eq('id', jobId);
 

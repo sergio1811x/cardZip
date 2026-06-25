@@ -1,4 +1,4 @@
-import type { RawProduct1688, AiContentResult, EconomicsResult, RiskFlags, BudgetScenarios, PlatformConclusion } from '../types';
+import type { RawProduct1688, AiContentResult, EconomicsResult, RiskFlags, BudgetScenarios, PlatformConclusion, ProductIntelligence } from '../types';
 import { getCategoryChecklist } from './categoryChecklist';
 import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryType } from './categoryRules';
 
@@ -163,45 +163,68 @@ export function formatOrderBrief(
   // Алерты
   L.push('## ⚠️ Что проверить перед заказом');
   L.push('');
-  const checks: string[] = [];
-  checks.push('Запросить реальные фото товара на складе');
-  if (product.weightKg <= 0) checks.push('Уточнить точный вес единицы с упаковкой');
-  if (riskFlags.isElectrical) checks.push('Проверить напряжение (220V), тип вилки, наличие аккумулятора');
-  if (riskFlags.sizeGridRelevant) checks.push('Запросить размерную таблицу в сантиметрах');
-  if (riskFlags.hasBrand) checks.push(`Уточнить возможность поставки без логотипа "${riskFlags.brand ?? ''}"`);
-  if (product.platform !== '1688') checks.push('Запросить оптовую цену на 20/50/100 шт.');
-  if (product.platform === 'tmall') checks.push('Проверить права на бренд и товарный знак');
-  checks.push('Согласовать упаковку (нейтральная, без иероглифов)');
-  checks.push('Проверить качество на образце перед партией');
 
-  // Filter checks by category forbidden fields
-  const filteredChecks = checks.filter((c) => {
-    const cl = c.toLowerCase();
-    return !catForbidden.some((f) => cl.includes(f.toLowerCase()));
-  });
+  const intel: ProductIntelligence | undefined = (product as any).intelligence;
+  const buyerMustNotAsk = new Set(
+    (intel?.reportRules?.buyerMustNotAsk ?? []).map((s: string) => s.toLowerCase())
+  );
 
-  const aiWarnings = content.warnings ?? [];
-  const categoryChecks = getCategoryChecklist(riskFlags, product.categoryName);
-  [...aiWarnings, ...filteredChecks].forEach((c) => L.push(`- ${c}`));
+  if (intel?.reportRules?.buyerMustCheck?.length) {
+    // Intelligence-driven checklist (primary)
+    const intelChecks = intel.reportRules.buyerMustCheck.filter(
+      (c) => !buyerMustNotAsk.has(c.toLowerCase())
+    );
+    intelChecks.forEach((c) => L.push(`- ${c}`));
 
-  // Category-specific checklist from categoryRules
-  const catSpecificChecks = catRules.supplierQuestions.ru
-    .filter((q) => !catForbidden.some((f) => q.toLowerCase().includes(f.toLowerCase())));
-  const allCategoryChecks = [...categoryChecks, ...catSpecificChecks.slice(0, 5)];
-  // Deduplicate
-  const seenChecks = new Set<string>();
-  const uniqueCategoryChecks = allCategoryChecks.filter((c) => {
-    const key = c.toLowerCase().trim();
-    if (seenChecks.has(key)) return false;
-    seenChecks.add(key);
-    return true;
-  });
+    // Add missing critical fields as "уточнить" items
+    if (intel.dataQuality?.missingCriticalFields?.length) {
+      L.push('');
+      L.push('### Требуется уточнить');
+      L.push('');
+      intel.dataQuality.missingCriticalFields.forEach((f) => L.push(`- [ ] ${f}`));
+    }
+  } else {
+    // Fallback to generic checks
+    const checks: string[] = [];
+    checks.push('Запросить реальные фото товара на складе');
+    if (product.weightKg <= 0) checks.push('Уточнить точный вес единицы с упаковкой');
+    if (riskFlags.isElectrical) checks.push('Проверить напряжение (220V), тип вилки, наличие аккумулятора');
+    if (riskFlags.sizeGridRelevant) checks.push('Запросить размерную таблицу в сантиметрах');
+    if (riskFlags.hasBrand) checks.push(`Уточнить возможность поставки без логотипа "${riskFlags.brand ?? ''}"`);
+    if (product.platform !== '1688') checks.push('Запросить оптовую цену на 20/50/100 шт.');
+    if (product.platform === 'tmall') checks.push('Проверить права на бренд и товарный знак');
+    checks.push('Согласовать упаковку (нейтральная, без иероглифов)');
+    checks.push('Проверить качество на образце перед партией');
 
-  if (uniqueCategoryChecks.length) {
-    L.push('');
-    L.push('### Категорийный чек-лист');
-    L.push('');
-    uniqueCategoryChecks.forEach((c) => L.push(`- [ ] ${c}`));
+    // Filter checks by category forbidden fields
+    const filteredChecks = checks.filter((c) => {
+      const cl = c.toLowerCase();
+      return !catForbidden.some((f) => cl.includes(f.toLowerCase()));
+    });
+
+    const aiWarnings = content.warnings ?? [];
+    const categoryChecks = getCategoryChecklist(riskFlags, product.categoryName);
+    [...aiWarnings, ...filteredChecks].forEach((c) => L.push(`- ${c}`));
+
+    // Category-specific checklist from categoryRules
+    const catSpecificChecks = catRules.supplierQuestions.ru
+      .filter((q) => !catForbidden.some((f) => q.toLowerCase().includes(f.toLowerCase())));
+    const allCategoryChecks = [...categoryChecks, ...catSpecificChecks.slice(0, 5)];
+    // Deduplicate
+    const seenChecks = new Set<string>();
+    const uniqueCategoryChecks = allCategoryChecks.filter((c) => {
+      const key = c.toLowerCase().trim();
+      if (seenChecks.has(key)) return false;
+      seenChecks.add(key);
+      return true;
+    });
+
+    if (uniqueCategoryChecks.length) {
+      L.push('');
+      L.push('### Категорийный чек-лист');
+      L.push('');
+      uniqueCategoryChecks.forEach((c) => L.push(`- [ ] ${c}`));
+    }
   }
   L.push('');
 
