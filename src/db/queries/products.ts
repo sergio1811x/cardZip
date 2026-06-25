@@ -33,12 +33,7 @@ export async function upsertProduct(
       title_ru: product.titleRu,
       price_yuan: product.priceYuan,
       weight_kg: product.weightKg,
-      data_json: {
-        raw: product,
-        seoContent: product.seoContent,
-        wbData: product.wbData,
-        economics: product.economics,
-      },
+      data_json: product,
     },
     { onConflict: 'cache_key' }
   );

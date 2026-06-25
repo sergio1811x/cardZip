@@ -48,16 +48,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Кэш-проверка: если товар уже разбирали — сразу в step4
     const cacheKey = buildCacheKey(rawProduct.productId, rawProduct.titleCn, rawProduct.mainImageUrl);
     const cached = await findProductByKey(cacheKey);
-    const cachedProduct = (cached?.data_json as any)?.raw ?? cached?.data_json;
+    const cachedData = cached?.data_json as any;
+    const cachedProduct = cachedData?.conclusion ? cachedData : cachedData?.raw;
     const cacheValid = cachedProduct?.riskFlags && cachedProduct?.conclusion && cachedProduct?.economics;
-    if (cached?.data_json && cacheValid) {
+    if (cacheValid) {
       console.log(`[step1] Cache hit: ${cacheKey.slice(0, 12)}`);
       await supabase.from('jobs').update({
         status: 'done',
         result_json: {
-          rawProduct: cached.data_json,
+          rawProduct: cachedProduct,
           imageUrls: rawProduct.images,
-          product: cached.data_json,
+          product: cachedProduct,
         },
         finished_at: new Date().toISOString(),
       }).eq('id', jobId);
