@@ -37,39 +37,45 @@ export function createStepProgress(
   messageId: number,
   startPhase: string
 ) {
-  let tick = PHASE_INDEX[startPhase] ?? 0;
+  const startIdx = PHASE_INDEX[startPhase] ?? 0;
+  let localMax = startIdx;
+  let initialized = false;
 
-  const edit = async (idx: number) => {
-    // Проверяем глобальный максимум в Redis
+  // При старте читаем maxTick из Redis и стартуем только если наш phase >= сохранённого
+  const init = async () => {
     if (redis) {
-      const key = progressKey(messageId);
-      const stored = await redis.get(key).catch(() => null);
+      const stored = await redis.get(progressKey(messageId)).catch(() => null);
       const storedMax = stored ? parseInt(String(stored), 10) : 0;
-      if (idx < storedMax) return;
-      await redis.set(key, String(idx), { ex: 120 }).catch(() => {});
+      if (storedMax > localMax) localMax = storedMax;
     }
+    initialized = true;
+    doEdit(localMax);
+  };
 
+  const doEdit = (idx: number) => {
+    if (idx < localMax) return;
+    localMax = idx;
+    if (redis) redis.set(progressKey(messageId), String(idx), { ex: 120 }).catch(() => {});
     const step = STEPS[idx] ?? STEPS[STEPS.length - 1];
     const bar = buildBar(idx + 1, STEPS.length);
-    const text = `${bar}\n\n${step.text}...`;
-    bot.telegram.editMessageText(chatId, messageId, undefined, text).catch(() => {});
+    bot.telegram.editMessageText(chatId, messageId, undefined, `${bar}\n\n${step.text}...`).catch(() => {});
     bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
   };
 
-  edit(tick);
+  init();
 
   const timer = setInterval(() => {
-    tick++;
-    if (tick >= STEPS.length) tick = STEPS.length - 1;
-    edit(tick);
+    if (!initialized) return;
+    const next = localMax + 1;
+    if (next >= STEPS.length) return;
+    doEdit(next);
   }, 5_000);
 
   return {
     step(phase: string) {
       const newIdx = PHASE_INDEX[phase];
-      if (newIdx !== undefined) {
-        tick = Math.max(tick, newIdx);
-        edit(tick);
+      if (newIdx !== undefined && newIdx >= localMax) {
+        doEdit(newIdx);
       }
     },
     stop() {
