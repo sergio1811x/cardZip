@@ -49,9 +49,12 @@ async function batchSearch(queries: string[]): Promise<{ cards: WbCard[]; seenUr
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ secret: WB_PARSER_SECRET, queries, limit: 100 }),
-      signal: AbortSignal.timeout(45_000),
+      signal: AbortSignal.timeout(25_000),
     });
-    if (!res.ok) return { cards, seenUrls };
+    if (!res.ok) {
+      console.warn(`[step3] Batch search HTTP ${res.status}`);
+      return { cards, seenUrls };
+    }
     const data = await res.json() as any;
 
     for (const result of data.results ?? []) {
@@ -61,18 +64,6 @@ async function batchSearch(queries: string[]): Promise<{ cards: WbCard[]; seenUr
     }
   } catch (e: any) {
     console.warn('[step3] Batch search failed:', e.message);
-    // Fallback: sequential single queries
-    for (const query of queries.slice(0, 5)) {
-      try {
-        const params = new URLSearchParams({ secret: WB_PARSER_SECRET, query, limit: '100' });
-        const res = await fetch(`${WB_PARSER_URL}/search-by-text?${params}`, { signal: AbortSignal.timeout(10_000) });
-        if (!res.ok) continue;
-        const data = await res.json() as any;
-        for (const card of parseCards(data.products ?? [])) {
-          if (!seenUrls.has(card.url)) { seenUrls.add(card.url); cards.push(card); }
-        }
-      } catch { continue; }
-    }
   }
 
   return { cards, seenUrls };
@@ -109,7 +100,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market')
       : null;
 
-    // ─── PASS 1: Query Ladder L1-L5 ────────────────────────────────────
+    // ─── WB Search (все pass'ы с safety timeout) ──────────────────────
+    let allCards: WbCard[] = [];
+    let allQueries: string[] = [];
+    let similarity: any = { buckets: { directLocalAnalogs: [], similarLocalProducts: [], crossBorderAnalogs: [], categoryOnly: [], wrong: [] }, confidence: 'no_market' };
+
+    const wbSearchStart = Date.now();
+    try {
+
     const ladder = queryPlan ?? {} as any;
     const pass1Queries = validatedQueries.length >= 3
       ? validatedQueries.slice(0, 10)
@@ -127,8 +125,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log(`[step3] PASS 1: ${pass1Cards.length} cards`);
 
     const mining = mineResults(pass1Cards);
-    let allCards = [...pass1Cards];
-    let allQueries = [...pass1Queries];
+    allCards = [...pass1Cards];
+    allQueries = [...pass1Queries];
     let preRank = rankCandidates(allCards, structure, lexicon, allQueries);
 
     // ─── PASS 2: L4-L5 + Adaptive (if direct < 10) ─────────────────────
@@ -189,7 +187,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ─── Final ranking ───────────────────────────────────────────────────
-    const similarity = rankCandidates(allCards, structure, lexicon, pass1Queries);
+    similarity = rankCandidates(allCards, structure, lexicon, pass1Queries);
 
     // ─── LLM Judge batch (1 вызов на все borderline кандидаты) ──────────
     if (structure && similarity.buckets.directLocalAnalogs.length + similarity.buckets.similarLocalProducts.length > 0) {
@@ -223,6 +221,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     console.log(`[step3] Final: directLocal=${similarity.buckets.directLocalAnalogs.length} similarLocal=${similarity.buckets.similarLocalProducts.length} crossBorder=${similarity.buckets.crossBorderAnalogs.length} category=${similarity.buckets.categoryOnly.length} confidence=${similarity.confidence}`);
+
+    } catch (wbErr: any) {
+      console.error(`[step3] WB search failed after ${Date.now() - wbSearchStart}ms:`, wbErr.message);
+    }
 
     // ─── Build WbData for economics (only from LOCAL direct analogs) ────
     const directCards = similarity.buckets.directLocalAnalogs;
