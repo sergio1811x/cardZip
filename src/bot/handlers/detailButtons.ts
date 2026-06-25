@@ -33,9 +33,11 @@ export async function handleEconDetail(ctx: Context): Promise<void> {
   }
 
   await ctx.answerCbQuery();
-  await ctx.reply(buildEconomicsDetail(product), {
+  const { text, keyboard } = buildEconomicsDetail(product);
+  await ctx.reply(text, {
     parse_mode: 'HTML',
     link_preview_options: { is_disabled: true },
+    ...keyboard,
   });
 }
 
@@ -67,12 +69,17 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
     return;
   }
 
-  await ctx.answerCbQuery('Готовлю файлы...');
+  await ctx.answerCbQuery();
+
+  const chatId = ctx.chat!.id;
+  await ctx.telegram.sendMessage(chatId,
+    '📎 <b>Файлы готовы</b>\n\n• SEO-карточка для WB\n• ТЗ байеру / карго\n• Фото товара',
+    { parse_mode: 'HTML' }
+  );
 
   const result = job.result_json as any;
   const product = result?.product as ProductWithContent | undefined;
   const generatedFiles = result?.generatedFiles;
-  const chatId = ctx.chat!.id;
   const prefix = product?.productId?.slice(-8) ?? Date.now().toString().slice(-8);
 
   // SEO-карточка

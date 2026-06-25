@@ -175,9 +175,12 @@ function buildVerdictAdvice(wm: boolean, hasAnalogs: boolean, profit: number, mo
 
 // ─── Подробная экономика (по кнопке) ────────────────────────────────────────
 
-export function buildEconomicsDetail(product: ProductWithContent): string {
+export function buildEconomicsDetail(product: ProductWithContent): {
+  text: string;
+  keyboard: ReturnType<typeof Markup.inlineKeyboard>;
+} {
   const { economics, wbFiltered, maxPurchasePrice, budgets } = product;
-  if (!economics) return '💰 Данные экономики недоступны.';
+  if (!economics) return { text: '💰 Данные экономики недоступны.', keyboard: Markup.inlineKeyboard([]) };
   const b = economics.breakdown;
   const wm = economics.weightMissing;
   const hasConfirmedAnalogs = !!(product.similarityData && (product.similarityData.directCount ?? product.similarityData.highCount ?? 0) > 0);
@@ -248,7 +251,20 @@ export function buildEconomicsDetail(product: ProductWithContent): string {
     L.push('<i>Брендовый референс. Найдите OEM-аналог на 1688.</i>');
   }
 
-  return sanitize(L.join('\n'));
+  // Подсказка, если расчёт неполный
+  if (wm || !hasConfirmedAnalogs) {
+    L.push('');
+    L.push('📌 Для полного расчёта нужен вес с упаковкой.');
+  }
+
+  const buttons = [
+    [
+      Markup.button.callback('📥 Внести ответ поставщика', 'supplier_confirm'),
+      Markup.button.callback('⚙️ Изменить параметры', 'edit_params'),
+    ],
+  ];
+
+  return { text: sanitize(L.join('\n')), keyboard: Markup.inlineKeyboard(buttons) };
 }
 
 // ─── Что найдено на WB (по кнопке) ─────────────────────────────────────────
@@ -344,9 +360,12 @@ export function buildCreditsMessage(status: SubscriptionStatus): {
   const buttons = [
     [
       Markup.button.callback('📥 Ответ поставщика', 'supplier_confirm'),
-      Markup.button.callback('⚙️ Тарифы', 'edit_tariffs'),
+      Markup.button.callback('⚙️ Параметры', 'edit_params'),
     ],
-    [Markup.button.callback('📊 Мои анализы', 'my_analyses')],
+    [
+      Markup.button.callback('📊 Мои анализы', 'my_analyses'),
+      Markup.button.callback('💳 Купить анализы', 'buy_analyses'),
+    ],
   ];
 
   if (status.creditsRemaining <= 0) {

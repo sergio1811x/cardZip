@@ -112,6 +112,14 @@ bot.action('edit_tariffs', async (ctx) => {
   await ctx.answerCbQuery();
   return handleTariffsMenu(ctx);
 });
+bot.action('edit_params', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleTariffsMenu(ctx);
+});
+bot.action('buy_analyses', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleUpgrade(ctx);
+});
 bot.action(/^edit_tariff_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleEditTariff(ctx);

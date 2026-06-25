@@ -25,11 +25,15 @@ export async function handleSupplierQuestions(ctx: Context) {
   }
 
   await ctx.reply(
-    '📩 Выберите язык вопросов:',
-    Markup.inlineKeyboard([
-      [Markup.button.callback('🇷🇺 Русский', 'sq_ru')],
-      [Markup.button.callback('🇨🇳 中文', 'sq_cn')],
-    ])
+    '📩 <b>Вопросы поставщику</b>\n\n' +
+    'Скопируйте и отправьте поставщику на 1688.\n' +
+    'Выберите язык:',
+    {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('🇷🇺 На русском', 'sq_ru'), Markup.button.callback('🇨🇳 На китайском', 'sq_cn')],
+      ]),
+    }
   );
 }
 
