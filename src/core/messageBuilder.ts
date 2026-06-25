@@ -34,10 +34,10 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
 } {
   const { wbFiltered, economics, conclusion, similarityData: sim } = product;
-  if (!economics || !conclusion) {
-    console.error('[buildMainMessage] missing:', { economics: !!economics, conclusion: !!conclusion, keys: Object.keys(product ?? {}).join(',') });
+  if (!economics) {
     return { text: '❌ Данные анализа неполные.', keyboard: Markup.inlineKeyboard([[Markup.button.callback('🔄 Новый товар', 'new_search')]]) };
   }
+  const safeConclusion = conclusion ?? { platform: product.platform, icon: '🟡', headline: 'Нужны данные для оценки', disclaimers: [] };
   const wm = economics.weightMissing;
   const hasConfirmedAnalogs = !!(sim && (sim.directCount ?? sim.highCount ?? 0) > 0);
   const hasMarket = !!(wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0);
@@ -140,7 +140,7 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
   // ─── Вердикт ────────────────────────────────────────────────────────────────
   L.push('');
   L.push(`🎯 <b>Вердикт</b>`);
-  L.push(`${conclusion.icon} ${esc(conclusion.headline)}`);
+  L.push(`${safeConclusion.icon} ${esc(safeConclusion.headline)}`);
 
   // ─── Кнопки ─────────────────────────────────────────────────────────────────
   const buttons: any[][] = [
