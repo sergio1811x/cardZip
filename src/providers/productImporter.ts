@@ -248,23 +248,38 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
   let selectedSkuName: string | undefined;
   let selectedSkuPriceYuan: number | undefined;
 
-  if (quoteType === 'direct') {
-    displayPriceYuan = promotionPrice ?? directPrice ?? 0;
-  } else if (quoteType === 'by_sku') {
+  if (quoteType === 'by_sku' && skuPrices.length > 0) {
     if (skuPrices.length >= 3) {
       const mid = Math.floor(skuPrices.length / 2);
       displayPriceYuan = skuPrices.length % 2 ? skuPrices[mid] : (skuPrices[mid - 1] + skuPrices[mid]) / 2;
     } else {
-      displayPriceYuan = skuPrices[0] ?? promotionPrice ?? directPrice ?? 0;
+      displayPriceYuan = skuPrices[0];
     }
     const selected = skus.find((sku) => sku.price === displayPriceYuan) ?? skus.find((sku) => sku.price != null);
     selectedSkuName = selected?.name;
     selectedSkuPriceYuan = selected?.price;
+  } else if (quoteType === 'by_volume' && volumePrices.length > 0) {
+    displayPriceYuan = volumePrices[0];
   } else {
-    displayPriceYuan = volumePrices[0] ?? promotionPrice ?? directPrice ?? 0;
+    displayPriceYuan = promotionPrice ?? directPrice ?? 0;
   }
 
-  const extraInfoFlat = Object.assign({}, ...(json.extra_info ?? []));
+  // Fallback: если displayPrice всё ещё 0, пробуем все источники
+  if (displayPriceYuan <= 0) {
+    displayPriceYuan = promotionPrice ?? directPrice ?? skuPrices[0] ?? volumePrices[0] ?? 0;
+  }
+
+  // extra_info: может быть [{key, value}, ...] или [{field1: val1}, ...]
+  const extraInfoFlat: Record<string, unknown> = {};
+  for (const item of (json.extra_info ?? [])) {
+    if (item && typeof item === 'object') {
+      if ('key' in item && 'value' in item) {
+        extraInfoFlat[String(item.key)] = item.value;
+      } else {
+        Object.assign(extraInfoFlat, item);
+      }
+    }
+  }
   const repurchaseRate = json.repurchase_rate != null
     ? String(json.repurchase_rate)
     : typeof extraInfoFlat.repurchaseRate !== 'undefined'
@@ -326,8 +341,8 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
     description: json.description,
     priceYuan: normalized1688.pricing.displayPriceYuan,
     priceRange: priceRange.length > 0 ? priceRange : undefined,
-    priceIsRange: quoteType !== 'direct' || priceRange.length > 1,
-    moq: normalized1688.moq ?? 1,
+    priceIsRange: (skuPrices.length > 1 && skuPrices[0] !== skuPrices[skuPrices.length - 1]) || priceRange.length > 1,
+    moq: json.moq ?? priceRange.find((r) => r.minQty > 0)?.minQty ?? 1,
     weightKg: normalized1688.weightKg ?? 0,
     images,
     mainImageUrl: images[0] ?? skus.find((sku) => sku.image)?.image ?? '',
