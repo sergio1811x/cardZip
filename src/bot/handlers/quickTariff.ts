@@ -3,7 +3,7 @@ import { supabase } from '../../db/supabase';
 import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../../core/economicsCalc';
 import { buildConclusion } from '../../core/verdict';
 import { buildRiskFlags } from '../../core/riskFlags';
-import { buildMessage1 } from '../../core/messageBuilder';
+import { buildMainMessage } from '../../core/messageBuilder';
 import type { ProductWithContent } from '../../types';
 
 export async function handleQuickTariff(ctx: Context) {
@@ -63,11 +63,12 @@ export async function handleQuickTariff(ctx: Context) {
       riskFlags,
     };
 
-    const newText = buildMessage1(updatedProduct);
+    const { text: newText, keyboard } = buildMainMessage(updatedProduct, jobId);
 
     await ctx.editMessageText(newText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
+      ...keyboard,
     });
 
     await ctx.answerCbQuery(`${type === 'cargo' ? 'Карго' : 'Фулфилмент'}: ${value}${type === 'cargo' ? '$/кг' : '₽'}`);

@@ -6,7 +6,7 @@ import { marketProvider } from '../../providers/marketProvider';
 import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../../core/economicsCalc';
 import { zipBuilder } from '../../core/zipBuilder';
 import { formatSeoText } from '../../core/seoFormatter';
-import { buildMessage1, buildMessage2, buildMessage3 } from '../../core/messageBuilder';
+import { buildMainMessage, buildCreditsMessage } from '../../core/messageBuilder';
 import { buildConclusion } from '../../core/verdict';
 import { buildRiskFlags } from '../../core/riskFlags';
 import { filterWbData } from '../../core/wbFilter';
@@ -255,9 +255,11 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     await track(userId, 'generation_done', { durationMs, cacheHit: !!cached, url });
 
     // ─── Отправляем 3 сообщения ─────────────────────────────────────────────
-    await ctx.reply(buildMessage1(product), {
+    const { text: mainText, keyboard: mainKb } = buildMainMessage(product, '');
+    await ctx.reply(mainText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
+      ...mainKb,
     });
 
     const seoBuffer = Buffer.from(seoText, 'utf-8');
@@ -271,7 +273,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     }
 
     const freshStatus = await getStatus(userId);
-    const { text, keyboard } = buildMessage3(freshStatus);
+    const { text, keyboard } = buildCreditsMessage(freshStatus);
     await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
   } catch (e) {
     progress.stop();

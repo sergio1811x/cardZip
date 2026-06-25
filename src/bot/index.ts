@@ -17,6 +17,7 @@ import { handleWbLeaders } from './handlers/wbLeaders';
 import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 import { handleMyAnalyses, handleAnalysisDetail, handleResendFiles } from './handlers/myAnalyses';
+import { handleEconDetail, handleWbDetail, handleMaterialsResend } from './handlers/detailButtons';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -122,6 +123,11 @@ bot.action('reset_tariffs', async (ctx) => {
   await ctx.answerCbQuery();
   return handleResetTariffs(ctx);
 });
+
+// ─── Детальные кнопки (экономика, WB, материалы) ────────────────────────────
+bot.action(/^econ_detail_(.+)$/, handleEconDetail);
+bot.action(/^wb_detail_(.+)$/, handleWbDetail);
+bot.action(/^materials_(.+)$/, handleMaterialsResend);
 
 // ─── Быстрые тарифы (inline под экономикой) ──────────────────────────────────
 bot.action(/^(cargo|ff)_(\d+)_(.+)$/, async (ctx) => {

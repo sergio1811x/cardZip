@@ -5,7 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { markSent, type TelegramFileIds } from '../src/db/queries/jobs';
 import { getStatus, consumeCredit } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
-import { buildMessage1, buildMessage2, buildMessage3 } from '../src/core/messageBuilder';
+import { buildMainMessage, buildCreditsMessage } from '../src/core/messageBuilder';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
 import { zipBuilder } from '../src/core/zipBuilder';
@@ -61,25 +61,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
-    // ─── СООБЩЕНИЕ 1: Решение + рынок + экономика + проверки ────────────────
-    const msg1text = buildMessage1(product);
-    const msg2data = buildMessage2(product, job.id);
-    const fullMsg1 = msg1text + '\n\n' + msg2data.text;
-
-    await bot.telegram.sendMessage(chatId, fullMsg1, {
+    // ─── СООБЩЕНИЕ 1: Короткая выжимка + кнопки ───────────────────────────────
+    const { text: mainText, keyboard: mainKb } = buildMainMessage(product, job.id);
+    await bot.telegram.sendMessage(chatId, mainText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      ...msg2data.keyboard,
+      ...mainKb,
     });
 
-    // ─── СООБЩЕНИЕ 2: Документы ──────────────────────────────────────────────
-    await bot.telegram.sendMessage(chatId,
-      '📎 <b>Материалы готовы</b>\n• SEO-карточка для WB\n• ТЗ байеру / карго\n• Исходные фото товара',
-      { parse_mode: 'HTML' }
-    );
+    // ─── СООБЩЕНИЕ 2: Материалы ────────────────────────────────────────────────
+    const fileIds: TelegramFileIds = {};
     const prefix = product.productId?.slice(-8) ?? Date.now().toString().slice(-8);
 
-    const fileIds: TelegramFileIds = {};
+    await bot.telegram.sendMessage(chatId,
+      '📎 <b>Материалы готовы</b>\n• SEO-карточка для WB\n• ТЗ байеру / карго\n• Фото товара',
+      { parse_mode: 'HTML' }
+    );
 
     const seoMsg = await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), `wb_card_${prefix}.md`));
     fileIds.wb_card = seoMsg.document?.file_id;
@@ -92,15 +89,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       fileIds.photos_zip = zipMsg.document?.file_id;
     }
 
-    // ─── СООБЩЕНИЕ 3: Действия ───────────────────────────────────────────────
-    const { text, keyboard } = buildMessage3(freshStatus);
-    await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...keyboard });
+    // ─── СООБЩЕНИЕ 3: Кредиты ──────────────────────────────────────────────────
+    const { text: creditsText, keyboard: creditsKb } = buildCreditsMessage(freshStatus);
+    await bot.telegram.sendMessage(chatId, creditsText, { parse_mode: 'HTML', ...creditsKb });
 
     await markSent(job.id, fileIds);
-    // Снимаем lock обработки
     if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
 
-    // Кэшируем для быстрого повторного доступа
     const cacheKey = buildCacheKey(product.productId, product.titleCn, product.mainImageUrl);
     upsertProduct(job.user_id, { ...product, cacheKey }).catch((e) =>
       console.warn('[step4] Cache save failed:', e instanceof Error ? e.message : e)

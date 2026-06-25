@@ -5,7 +5,7 @@ import { redis } from '../../lib/redis';
 import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../../core/economicsCalc';
 import { buildConclusion } from '../../core/verdict';
 import { buildRiskFlags } from '../../core/riskFlags';
-import { buildMessage1, buildMessage2 } from '../../core/messageBuilder';
+import { buildMainMessage } from '../../core/messageBuilder';
 import { getUserTariffs } from '../../db/queries/userSettings';
 import type { ProductWithContent } from '../../types';
 
@@ -144,13 +144,11 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
 
     await ctx.reply(confirmedLines.join('\n'), { parse_mode: 'HTML' });
 
-    // Отправляем обновлённую экономику
-    const msg1 = buildMessage1(updatedProduct);
-    const msg2 = buildMessage2(updatedProduct, pending.jobId);
-    await ctx.reply(msg1 + '\n\n' + msg2.text, {
+    const { text: msgText, keyboard } = buildMainMessage(updatedProduct, pending.jobId);
+    await ctx.reply(msgText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      ...msg2.keyboard,
+      ...keyboard,
     });
 
   } catch (e) {
