@@ -52,10 +52,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       parse_date: parseDate,
     }));
 
-    const count = await upsertWbCategories(rows);
+    const result = await upsertWbCategories(rows);
 
-    console.log(`[wb-categories] Loaded ${count} / ${data.length} categories for ${parseDate}`);
-    res.status(200).json({ ok: true, loaded: count, total: data.length, date: parseDate });
+    console.log(`[wb-categories] Loaded ${result.total} / ${data.length} categories for ${parseDate}${result.error ? ` (error: ${result.error})` : ''}`);
+    res.status(200).json({ ok: result.total > 0, loaded: result.total, total: data.length, date: parseDate, error: result.error });
   } catch (e: any) {
     console.error('[wb-categories]', e.message);
     res.status(500).json({ error: e.message });

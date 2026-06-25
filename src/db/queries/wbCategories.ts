@@ -18,24 +18,43 @@ export interface WbCategory {
   parse_date: string;
 }
 
-export async function upsertWbCategories(rows: WbCategory[]): Promise<number> {
+export async function upsertWbCategories(rows: WbCategory[]): Promise<{ total: number; error?: string }> {
   const BATCH = 500;
   let total = 0;
+  let lastError: string | undefined;
 
   for (let i = 0; i < rows.length; i += BATCH) {
     const batch = rows.slice(i, i + BATCH);
     const { error } = await supabase
       .from('wb_categories')
       .upsert(batch.map((r) => ({
-        ...r,
+        category: r.category,
+        item: r.item,
+        sellers: r.sellers,
+        sellers_with_orders: r.sellers_with_orders,
+        product_cards: r.product_cards,
+        product_cards_with_orders: r.product_cards_with_orders,
+        revenue_rub: r.revenue_rub,
+        average_check_rub: r.average_check_rub,
+        average_rating: r.average_rating,
+        stock_quantity: r.stock_quantity,
+        redemption_rate: r.redemption_rate,
+        monopolization_percentage: r.monopolization_percentage,
+        turnover_days_per_week: r.turnover_days_per_week,
+        availability: r.availability,
+        parse_date: r.parse_date,
         updated_at: new Date().toISOString(),
       })), { onConflict: 'item,parse_date' });
 
-    if (error) console.error('[wbCategories] upsert error:', error.message);
-    else total += batch.length;
+    if (error) {
+      lastError = error.message;
+      console.error(`[wbCategories] batch ${i}-${i + batch.length} error:`, error.message);
+    } else {
+      total += batch.length;
+    }
   }
 
-  return total;
+  return { total, error: lastError };
 }
 
 export async function findWbCategory(query: string): Promise<WbCategory | null> {
