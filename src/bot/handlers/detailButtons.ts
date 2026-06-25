@@ -75,13 +75,7 @@ export async function handleBackToMain(ctx: Context): Promise<void> {
   }
 
   await ctx.answerCbQuery();
-  const { buildMainMessage } = require('../../core/messageBuilder');
-  const { text, keyboard } = buildMainMessage(product, match[1]);
-  await ctx.reply(text, {
-    parse_mode: 'HTML',
-    link_preview_options: { is_disabled: true },
-    ...keyboard,
-  });
+  await ctx.deleteMessage().catch(() => {});
 }
 
 export async function handleMaterialsResend(ctx: Context): Promise<void> {
