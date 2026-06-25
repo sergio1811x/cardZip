@@ -77,17 +77,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
       const dbUser = await getOrCreateUser(msg.from.id);
 
+      // Чистим зависшие jobs (всегда, даже если processing lock истёк)
+      await cleanupStuckJobs(dbUser.id, msg.chat.id, bot);
+
       // Проверяем: есть ли активный job у этого юзера
       if (redis) {
         const processing = await redis.get(`processing:${dbUser.id}`);
         if (processing) {
-          // Проверяем — может job завис (Vercel убил функцию)
-          const cleaned = await cleanupStuckJobs(dbUser.id, msg.chat.id, bot);
-          if (!cleaned) {
-            await bot.telegram.sendMessage(msg.chat.id, '⏳ Предыдущий анализ ещё выполняется. Дождитесь результата.');
-            return res.status(200).json({ ok: true });
-          }
-          // Job был зависшим — cleanup сделан, продолжаем обработку новой ссылки
+          await bot.telegram.sendMessage(msg.chat.id, '⏳ Предыдущий анализ ещё выполняется. Дождитесь результата.');
+          return res.status(200).json({ ok: true });
         }
       }
 
