@@ -352,7 +352,7 @@ export function buildMessage3(status: SubscriptionStatus): {
   }
 
   const buttons = [
-    [Markup.button.callback('🔄 Новый товар', 'new_search')],
+    [Markup.button.callback('🔄 Новый товар', 'new_search'), Markup.button.callback('📊 Мои анализы', 'my_analyses')],
     [
       Markup.button.callback('📩 Ответ поставщика', 'supplier_confirm'),
       Markup.button.callback('⚙️ Расчёт экономики', 'edit_tariffs'),

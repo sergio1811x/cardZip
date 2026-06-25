@@ -1,5 +1,11 @@
 import { supabase } from '../supabase';
 
+export interface TelegramFileIds {
+  wb_card?: string;
+  buyer_brief?: string;
+  photos_zip?: string;
+}
+
 export interface DbJob {
   id: string;
   user_id: string;
@@ -10,6 +16,7 @@ export interface DbJob {
   result_json: Record<string, unknown> | null;
   error: string | null;
   sent_to_telegram: boolean;
+  telegram_file_ids: TelegramFileIds | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -82,9 +89,35 @@ export async function getUnsentJobs(): Promise<DbJob[]> {
   return (data as DbJob[]) ?? [];
 }
 
-export async function markSent(jobId: string): Promise<void> {
+export async function markSent(jobId: string, telegramFileIds?: TelegramFileIds): Promise<void> {
   await supabase
     .from('jobs')
-    .update({ sent_to_telegram: true })
+    .update({
+      sent_to_telegram: true,
+      ...(telegramFileIds ? { telegram_file_ids: telegramFileIds } : {}),
+    })
     .eq('id', jobId);
+}
+
+export interface UserAnalysis {
+  id: string;
+  input_url: string;
+  result_json: Record<string, unknown>;
+  telegram_file_ids: TelegramFileIds | null;
+  created_at: string;
+  finished_at: string;
+}
+
+export async function getUserAnalyses(userId: string, limit = 10, offset = 0): Promise<UserAnalysis[]> {
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const { data } = await supabase
+    .from('jobs')
+    .select('id, input_url, result_json, telegram_file_ids, created_at, finished_at')
+    .eq('user_id', userId)
+    .eq('sent_to_telegram', true)
+    .gte('created_at', thirtyDaysAgo)
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  return (data as UserAnalysis[]) ?? [];
 }

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
 import { Telegraf, Input } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { markSent } from '../src/db/queries/jobs';
+import { markSent, type TelegramFileIds } from '../src/db/queries/jobs';
 import { getStatus, consumeCredit } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { buildMessage1, buildMessage2, buildMessage3 } from '../src/core/messageBuilder';
@@ -79,17 +79,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
     const prefix = product.productId?.slice(-8) ?? Date.now().toString().slice(-8);
 
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), `wb_card_${prefix}.md`));
-    await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), `buyer_brief_${prefix}.md`));
+    const fileIds: TelegramFileIds = {};
+
+    const seoMsg = await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(seoText, 'utf-8'), `wb_card_${prefix}.md`));
+    fileIds.wb_card = seoMsg.document?.file_id;
+
+    const briefMsg = await bot.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(briefText, 'utf-8'), `buyer_brief_${prefix}.md`));
+    fileIds.buyer_brief = briefMsg.document?.file_id;
+
     if (zipBuffer) {
-      await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, `photos_${prefix}.zip`));
+      const zipMsg = await bot.telegram.sendDocument(chatId, Input.fromBuffer(zipBuffer, `photos_${prefix}.zip`));
+      fileIds.photos_zip = zipMsg.document?.file_id;
     }
 
     // ─── СООБЩЕНИЕ 3: Действия ───────────────────────────────────────────────
     const { text, keyboard } = buildMessage3(freshStatus);
     await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML', ...keyboard });
 
-    await markSent(job.id);
+    await markSent(job.id, fileIds);
     // Снимаем lock обработки
     if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
 

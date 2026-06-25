@@ -16,6 +16,7 @@ import { handleSearch1688 } from './handlers/search1688';
 import { handleWbLeaders } from './handlers/wbLeaders';
 import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
+import { handleMyAnalyses, handleAnalysisDetail, handleResendFiles } from './handlers/myAnalyses';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -66,6 +67,7 @@ bot.command('upgrade', handleUpgrade);
 bot.command('last', handleLast);
 bot.command('admin', handleAdmin);
 bot.command('tariffs', async (ctx) => handleTariffsMenu(ctx));
+bot.command('my', (ctx) => handleMyAnalyses(ctx));
 
 // ─── Callback-кнопки ──────────────────────────────────────────────────────────
 bot.action('upgrade', async (ctx) => {
@@ -83,6 +85,22 @@ bot.action('new_search', async (ctx) => {
 bot.action('last', async (ctx) => {
   await ctx.answerCbQuery();
   return handleLast(ctx);
+});
+bot.action('my_analyses', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleMyAnalyses(ctx);
+});
+bot.action(/^analyses_page_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const page = parseInt(ctx.match[1]);
+  return handleMyAnalyses(ctx, page);
+});
+bot.action(/^analysis_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleAnalysisDetail(ctx);
+});
+bot.action(/^resend_files_(.+)$/, async (ctx) => {
+  return handleResendFiles(ctx);
 });
 bot.action('supplier_questions', async (ctx) => {
   await ctx.answerCbQuery();
