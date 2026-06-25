@@ -1,5 +1,5 @@
 import { Markup } from 'telegraf';
-import type { ProductWithContent, SubscriptionStatus } from '../types';
+import type { ProductWithContent, SubscriptionStatus, ProductAttribute, PriceRange } from '../types';
 
 function esc(s: unknown): string {
   const str = String(s ?? '');
@@ -40,6 +40,20 @@ function formatCreditsLine(status: SubscriptionStatus): string {
   if (status.creditsRemaining <= 0) return '📦 Анализы использованы.';
   const word = pluralize(status.creditsRemaining, 'анализ', 'анализа', 'анализов');
   return `📦 Осталось: ${status.creditsRemaining} ${word}`;
+}
+
+function extractAttr(attrs: ProductAttribute[] | undefined, keys: string[]): string {
+  if (!attrs?.length) return '';
+  for (const a of attrs) {
+    if (keys.some((k) => a.name.toLowerCase().includes(k.toLowerCase()))) return a.value;
+  }
+  return '';
+}
+
+function formatTiersShort(pr: PriceRange[]): string {
+  const valid = pr.filter((r) => r.minQty > 0);
+  if (!valid.length) return 'не распознаны';
+  return valid.map((r) => `${r.minQty}+ → ${r.price}¥`).join(', ');
 }
 
 const PLATFORM_LABELS: Record<string, string> = {
@@ -85,6 +99,18 @@ export function buildMainMessage(
     L.push(`Цена: ${product.priceYuan} ¥`);
   }
   if (product.supplierName) L.push(`Поставщик: ${esc(product.supplierName)}`);
+
+  // ─── Данные 1688 (выжимка) ─────────────────────────────────────────────────
+  L.push('');
+  L.push('📌 <b>Данные 1688</b>');
+  const material = extractAttr(product.attributes, ['材质', '面料', '材料', 'material', 'fabric']);
+  L.push(`• Материал: ${material || 'не указан'}`);
+  L.push(`• SKU: ${product.skus?.length ? `${product.skus.length} вариантов` : 'не найдены'}`);
+  L.push(`• MOQ: ${product.moq > 1 ? `${product.moq} шт` : 'не указан'}`);
+  const hasTiers = product.priceRange?.some((r) => r.minQty > 0);
+  L.push(`• Скидки: ${hasTiers ? formatTiersShort(product.priceRange!) : 'не распознаны'}`);
+  L.push(`• Фото: ${product.images?.length ?? 0} шт`);
+  L.push(`• Вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : 'не указан'}`);
 
   // ─── Статус ─────────────────────────────────────────────────────────────────
   L.push('');
@@ -171,14 +197,17 @@ export function buildMainMessage(
   // ─── Кнопки ─────────────────────────────────────────────────────────────────
   const buttons: any[][] = [
     [
-      Markup.button.callback('📩 Поставщику', 'supplier_questions'),
-      Markup.button.callback('💰 Экономика', `econ_detail_${jobId}`),
+      Markup.button.callback('📦 Данные 1688', `product_detail_${jobId}`),
+      Markup.button.callback('🔎 WB-рынок', `wb_detail_${jobId}`),
     ],
     [
-      Markup.button.callback('🔎 WB-рынок', `wb_detail_${jobId}`),
-      Markup.button.callback('📎 Файлы', `materials_${jobId}`),
+      Markup.button.callback('💰 Экономика', `econ_detail_${jobId}`),
+      Markup.button.callback('💬 Поставщику', 'supplier_questions'),
     ],
-    [Markup.button.callback('🔄 Новый товар', 'new_search')],
+    [
+      Markup.button.callback('📎 Файлы', `materials_${jobId}`),
+      Markup.button.callback('🔄 Новый товар', 'new_search'),
+    ],
   ];
 
   if (status && status.creditsRemaining <= 1) {
@@ -416,6 +445,107 @@ export function buildCreditsMessage(status: SubscriptionStatus): {
   }
 
   return { text, keyboard: Markup.inlineKeyboard(buttons) };
+}
+
+// ─── Данные 1688 (по кнопке) ────────────────────────────────────────────────
+
+export function build1688Detail(product: ProductWithContent, jobId: string): {
+  text: string;
+  keyboard: ReturnType<typeof Markup.inlineKeyboard>;
+} {
+  const L: string[] = [];
+  const SUPPLIER_TYPES: Record<string, string> = { factory: 'Фабрика', merchant: 'Торговая компания', seller: 'Продавец' };
+
+  L.push('📦 <b>Данные товара с 1688</b>');
+  L.push('');
+
+  // Названия
+  L.push('<b>Название CN:</b>');
+  L.push(esc(product.titleCn));
+  if (product.titleRu) {
+    L.push('');
+    L.push('<b>Название RU:</b>');
+    L.push(esc(product.titleRu));
+  }
+
+  // Цена
+  L.push('');
+  L.push('<b>Цена:</b>');
+  L.push(`• базовая: ${product.priceYuan} ¥`);
+  if (product.priceRange?.length) {
+    const valid = product.priceRange.filter((r) => r.minQty > 0);
+    if (valid.length) {
+      L.push('• скидки по количеству:');
+      valid.slice(0, 4).forEach((r) => {
+        const maxLabel = r.maxQty > 0 ? `–${r.maxQty}` : '+';
+        L.push(`  ${r.minQty}${maxLabel} шт → ${r.price} ¥`);
+      });
+    } else {
+      L.push('• скидки: не распознаны');
+    }
+  }
+
+  // SKU
+  if (product.skus?.length) {
+    L.push('');
+    L.push(`<b>SKU:</b> ${product.skus.length} вариантов`);
+    const withPrice = product.skus.filter((s) => s.price && s.price > 0);
+    if (withPrice.length) {
+      const prices = withPrice.map((s) => s.price!);
+      const minP = Math.min(...prices);
+      const maxP = Math.max(...prices);
+      L.push(minP === maxP ? `• цена: ${minP} ¥` : `• цена: ${minP}–${maxP} ¥`);
+    }
+    const names = product.skus.slice(0, 6).map((s) => s.name).filter(Boolean);
+    if (names.length) {
+      L.push(`• варианты: ${names.join(', ')}${product.skus.length > 6 ? '…' : ''}`);
+    }
+  } else {
+    L.push('');
+    L.push('<b>SKU:</b> не найдены');
+  }
+
+  // Поставщик
+  L.push('');
+  L.push('<b>Поставщик:</b>');
+  L.push(`• название: ${esc(product.supplierName)}`);
+  L.push(`• тип: ${SUPPLIER_TYPES[product.supplierType ?? ''] ?? 'не указан'}`);
+  if (product.supplierRating) L.push(`• рейтинг: ${product.supplierRating}/5`);
+  if (product.sold) L.push(`• заказов: ${fN(product.sold)}+`);
+  L.push(`• MOQ: ${product.moq > 1 ? `${product.moq} шт` : 'не указан'}`);
+
+  // Характеристики
+  if (product.attributes?.length) {
+    L.push('');
+    L.push('<b>Характеристики:</b>');
+    const important = ['材质', '面料', '材料', '季节', '风格', '性别', '适用', '图案', '厚薄', '弹力',
+      'material', 'fabric', 'season', 'style', 'gender'];
+    const shown = new Set<string>();
+    for (const a of product.attributes) {
+      if (shown.size >= 8) break;
+      const isImportant = important.some((k) => a.name.toLowerCase().includes(k.toLowerCase()));
+      if (isImportant || shown.size < 5) {
+        L.push(`• ${esc(a.name)}: ${esc(a.value)}`);
+        shown.add(a.name);
+      }
+    }
+    if (product.attributes.length > shown.size) {
+      L.push(`<i>и ещё ${product.attributes.length - shown.size} атрибутов</i>`);
+    }
+  }
+
+  // Логистика
+  L.push('');
+  L.push('<b>Логистика:</b>');
+  L.push(`• вес: ${product.weightKg > 0 ? `${product.weightKg} кг` : 'не указан'}`);
+  L.push(`• фото: ${product.images?.length ?? 0} шт`);
+  if (product.stock) L.push(`• остаток: ${fN(product.stock)} шт`);
+
+  const buttons = [
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
+  ];
+
+  return { text: sanitize(L.join('\n')), keyboard: Markup.inlineKeyboard(buttons) };
 }
 
 // ─── Legacy exports ─────────────────────────────────────────────────────────
