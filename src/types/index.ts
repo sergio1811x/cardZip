@@ -236,6 +236,7 @@ export interface AiContentRequest {
   riskFlags?: RiskFlags;
   wbTopKeywords?: string[];
   platform?: Platform;
+  categoryType?: string;
 }
 
 export interface AiContentResult {

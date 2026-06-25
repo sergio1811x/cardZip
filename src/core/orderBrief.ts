@@ -1,5 +1,6 @@
 import type { RawProduct1688, AiContentResult, EconomicsResult, RiskFlags, BudgetScenarios, PlatformConclusion } from '../types';
 import { getCategoryChecklist } from './categoryChecklist';
+import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryType } from './categoryRules';
 
 const PLATFORM_STATUS: Record<string, string> = {
   '1688': 'закупочная гипотеза',
@@ -19,6 +20,10 @@ export function formatOrderBrief(
   const L: string[] = [];
   const normalized = product.normalized1688;
   const pricing = normalized?.pricing;
+  const catType: ProductCategoryType = ((product as any).categoryType as ProductCategoryType) ??
+    detectCategoryFromAttributes(product.categoryName, product.attributes ?? [], product.titleCn);
+  const catRules = getCategoryRules(catType);
+  const catForbidden = catRules.forbiddenFields;
 
   L.push('# ТЗ для байера / карго');
   L.push('');
@@ -169,15 +174,34 @@ export function formatOrderBrief(
   checks.push('Согласовать упаковку (нейтральная, без иероглифов)');
   checks.push('Проверить качество на образце перед партией');
 
+  // Filter checks by category forbidden fields
+  const filteredChecks = checks.filter((c) => {
+    const cl = c.toLowerCase();
+    return !catForbidden.some((f) => cl.includes(f.toLowerCase()));
+  });
+
   const aiWarnings = content.warnings ?? [];
   const categoryChecks = getCategoryChecklist(riskFlags, product.categoryName);
-  [...aiWarnings, ...checks].forEach((c) => L.push(`- ${c}`));
+  [...aiWarnings, ...filteredChecks].forEach((c) => L.push(`- ${c}`));
 
-  if (categoryChecks.length) {
+  // Category-specific checklist from categoryRules
+  const catSpecificChecks = catRules.supplierQuestions.ru
+    .filter((q) => !catForbidden.some((f) => q.toLowerCase().includes(f.toLowerCase())));
+  const allCategoryChecks = [...categoryChecks, ...catSpecificChecks.slice(0, 5)];
+  // Deduplicate
+  const seenChecks = new Set<string>();
+  const uniqueCategoryChecks = allCategoryChecks.filter((c) => {
+    const key = c.toLowerCase().trim();
+    if (seenChecks.has(key)) return false;
+    seenChecks.add(key);
+    return true;
+  });
+
+  if (uniqueCategoryChecks.length) {
     L.push('');
     L.push('### Категорийный чек-лист');
     L.push('');
-    categoryChecks.forEach((c) => L.push(`- [ ] ${c}`));
+    uniqueCategoryChecks.forEach((c) => L.push(`- [ ] ${c}`));
   }
   L.push('');
 

@@ -41,7 +41,7 @@ function parseCards(products: any[]): WbCard[] {
   }).filter((c: WbCard) => c.price > 0);
 }
 
-async function searchWb(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string> }> {
+async function searchWb(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string>; is429?: boolean }> {
   const seenUrls = new Set<string>();
   const cards: WbCard[] = [];
 
@@ -54,6 +54,7 @@ async function searchWb(queries: string[]): Promise<{ cards: WbCard[]; seenUrls:
     });
     if (!res.ok) {
       console.warn(`[step3] WB search HTTP ${res.status}`);
+      if (res.status === 429) return { cards, seenUrls, is429: true };
       return { cards, seenUrls };
     }
     const data = await res.json() as any;
@@ -106,6 +107,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let allQueries: string[] = [];
     let similarity: any = { buckets: { directLocalAnalogs: [], similarLocalProducts: [], crossBorderAnalogs: [], categoryOnly: [], wrong: [] }, confidence: 'no_market', leaders: [] };
     let wbSearchCount = 0;
+    let wb429 = false;
 
     const wbSearchStart = Date.now();
     try {
@@ -142,7 +144,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // 4. Один batch search
     if (searchQueries.length > 0) {
-      const { cards, seenUrls } = await searchWb(searchQueries);
+      const searchResult = await searchWb(searchQueries);
+      const { cards, seenUrls } = searchResult;
+      if (searchResult.is429) wb429 = true;
       allCards = cards;
       allQueries = searchQueries;
       wbSearchCount = searchQueries.length;
@@ -208,6 +212,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     } catch (wbErr: any) {
       console.error(`[step3] WB search failed after ${Date.now() - wbSearchStart}ms:`, wbErr.message);
+      if (wbErr.message?.includes('429') || wbErr.message?.includes('rate limit')) {
+        wb429 = true;
+      }
     }
 
     // ─── Build WbData for economics (only LOCAL direct analogs) ─────────
@@ -297,6 +304,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           wbTrends,
           wbCoreQuery,
           categoryType,
+          ...(wb429 ? { wb429: true } : {}),
         },
         debugTrace,
       },

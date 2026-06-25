@@ -234,7 +234,14 @@ export function buildMainMessage(
   L.push(`Источник: ${PLATFORM_LABELS[product.platform] ?? product.platform}`);
 
   const priceStr = formatPriceDisplay(product);
-  L.push(`Цена: ${priceStr}`);
+  const econ = product.economics;
+  if (priceStr === 'нужно уточнить') {
+    L.push('Цена: нужно уточнить');
+  } else if (econ && econ.breakdown?.purchaseRub > 0 && !priceStr.startsWith('от ')) {
+    L.push(`Цена: ${priceStr} ≈ ${fP(econ.breakdown.purchaseRub)}`);
+  } else {
+    L.push(`Цена: ${priceStr}`);
+  }
   if (product.supplierName) L.push(`Поставщик: ${esc(product.supplierName)}`);
 
   const priceIsZero = !product.priceYuan || product.priceYuan <= 0;
@@ -261,7 +268,15 @@ export function buildMainMessage(
 
   L.push(`• Тип поставщика: ${SUPPLIER_TYPE_RU[normalized?.supplierType ?? product.supplierType ?? ''] ?? 'не указан'}`);
   L.push(`• MOQ: ${(normalized?.moq ?? product.moq) > 1 ? `${normalized?.moq ?? product.moq} шт` : 'не указан'}`);
-  L.push(`• SKU: ${(normalized?.skuCount ?? product.skus?.length) ? `${normalized?.skuCount ?? product.skus?.length} вариантов` : 'не указаны'}`);
+  const skuCount = normalized?.skuCount ?? product.skus?.length ?? 0;
+  const skuQuoteType = normalized?.pricing?.quoteType;
+  if (skuCount > 0) {
+    L.push(`• SKU: ${skuCount} вариантов`);
+  } else if (skuQuoteType === 'by_sku') {
+    L.push('• SKU: варианты не загружены');
+  } else {
+    L.push('• SKU: не предусмотрены');
+  }
   L.push(`• Фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
   L.push(`• Вес: ${fWeight(product.weightKg)}`);
   const catForbidden = getCategoryRules(catType).forbiddenFields;
@@ -285,7 +300,10 @@ export function buildMainMessage(
   // ─── Рынок WB ──────────────────────────────────────────────────────────────
   L.push('');
   L.push('🔎 <b>Рынок WB</b>');
-  if (hasConfirmedAnalogs) {
+  const wb429 = !!(product as any).wb429;
+  if (wb429) {
+    L.push('WB временно ограничил поиск. Прямые локальные аналоги не подтверждены.');
+  } else if (hasConfirmedAnalogs) {
     L.push(`Прямые локальные аналоги: ${directLocalCount}`);
     if (hasMarket) L.push(`Медиана цены: ${fP(wbFiltered!.medianPrice)}`);
   } else {
@@ -323,16 +341,13 @@ export function buildMainMessage(
   L.push('');
   L.push('💰 <b>Экономика</b>');
   if (priceIsZero) {
-    L.push('Не рассчитана — цена SKU не распознана.');
+    L.push('Не рассчитана — цена не распознана.');
   } else if (economics.platformMode === 'full') {
     if (wm) {
-      L.push('Расчёт предварительный.');
-      L.push(`Себестоимость без карго: ${fP(economics.costRub)}`);
+      L.push(`Предварительно без карго. Себестоимость без карго: ${fP(economics.costRub)}`);
       L.push('Вес не указан — карго, маржа и ROI не рассчитаны.');
     } else if (!hasConfirmedAnalogs || economics.isSyntheticPrice) {
-      L.push('Расчёт предварительный.');
-      L.push(`Себестоимость: ${fP(economics.costRub)}`);
-      L.push('Рынок не подтверждён — ROI не рассчитан.');
+      L.push(`Себестоимость: ${fP(economics.costRub)}. ROI не рассчитан: нет прямых WB-аналогов.`);
     } else {
       L.push(`Себестоимость: ${fP(economics.costRub)}`);
       if (wbFiltered) {
@@ -344,6 +359,9 @@ export function buildMainMessage(
         const sign = profitMed >= 0 ? '+' : '';
         L.push(`Прибыль (медиана): ${sign}${fP(profitMed)}`);
         if (economics.roiPercent) L.push(`ROI: ${economics.roiPercent}%`);
+        if (directLocalCount >= 1 && directLocalCount <= 4) {
+          L.push(`<i>⚠️ Ограниченная выборка (${directLocalCount} ${pluralize(directLocalCount, 'аналог', 'аналога', 'аналогов')})</i>`);
+        }
       }
     }
   } else if (economics.platformMode === 'sample_only') {
@@ -359,12 +377,18 @@ export function buildMainMessage(
   const clarify: string[] = [];
   if (priceIsZero) clarify.push('цену выбранного цвета/размера');
   else if (product.priceIsRange) clarify.push('подтвердите цену выбранного варианта');
-  // Берём первые 5-7 вопросов из категорийных правил
-  for (const q of catRules.supplierQuestions.ru.slice(0, 7)) {
+  if (wm) clarify.push('вес единицы с упаковкой');
+  // Category questions, filtered by what's actually missing
+  for (const q of catRules.supplierQuestions.ru) {
     if (clarify.length >= 7) break;
-    if (wm || !q.includes('вес')) clarify.push(q);
-    else if (!wm && q.includes('вес')) continue;
-    else clarify.push(q);
+    const ql = q.toLowerCase();
+    // Skip weight questions if weight exists
+    if (!wm && (ql.includes('вес') || ql.includes('weight'))) continue;
+    // Skip price questions if price exists and not range
+    if (!priceIsZero && !product.priceIsRange && (ql.includes('цен') || ql.includes('price'))) continue;
+    // Skip duplicates
+    if (clarify.some((c) => c.toLowerCase() === ql)) continue;
+    clarify.push(q);
   }
 
   if (clarify.length) {
@@ -566,6 +590,11 @@ export function buildWbDetail(product: ProductWithContent, jobId: string): {
   L.push('🔎 <b>WB-рынок</b>');
   L.push('');
 
+  if ((product as any).wb429) {
+    L.push('⚠️ WB временно ограничил поиск (429). Данные рынка могут быть неполными.');
+    L.push('');
+  }
+
   if (sim && sim.totalAnalyzed > 0) {
     const confMap: Record<string, [string, string]> = {
       high: ['🟢', 'Высокая'], medium: ['🟡', 'Средняя'], low: ['🟠', 'Низкая'],
@@ -679,15 +708,13 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
     L.push(min === max ? `• цена SKU: ${min} ¥` : `• диапазон SKU: ${min}–${max} ¥`);
   }
   if (product.priceRange?.length) {
-    const valid = product.priceRange.filter((r) => r.minQty > 0);
+    const valid = product.priceRange.filter((r) => r.minQty > 0 && r.price > 0);
     if (valid.length) {
-      L.push('• скидки по количеству:');
+      L.push('• оптовые цены:');
       valid.slice(0, 4).forEach((r) => {
-        const maxLabel = r.maxQty > 0 ? `–${r.maxQty}` : '+';
-        L.push(`  ${r.minQty}${maxLabel} шт → ${r.price} ¥`);
+        const maxLabel = r.maxQty > 0 ? `${r.minQty}–${r.maxQty} шт` : `от ${r.minQty} шт`;
+        L.push(`  ${maxLabel}: ${r.price} ¥`);
       });
-    } else {
-      L.push('• скидки: не распознаны');
     }
   }
 
@@ -708,10 +735,10 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
       L.push(`• варианты: ${names.join(', ')}${product.skus.length > 6 ? '…' : ''}`);
     }
   } else if (quoteType === 'by_sku') {
-    L.push('<b>SKU:</b> не удалось распознать');
+    L.push('<b>SKU:</b> варианты не загружены');
     L.push('<i>Товар продаётся по SKU, но варианты не загрузились. Уточните у поставщика.</i>');
   } else {
-    L.push('<b>SKU:</b> не найдены');
+    L.push('<b>SKU:</b> не предусмотрены');
   }
 
   // Поставщик
@@ -732,7 +759,11 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
       if (shownCount >= 10) break;
       if (isJunkAttrValue(a.value)) continue;
       const ruName = translateAttrName(a.name);
-      L.push(`• ${esc(ruName ?? a.name)}: ${esc(translateAttrValue(a.value))}`);
+      const ruVal = translateAttrValue(a.value);
+      const displayName = ruName ?? a.name;
+      // Filter out untranslated Chinese from both name and value
+      if (hasUntranslatedChinese(ruVal) || (!ruName && hasUntranslatedChinese(a.name))) continue;
+      L.push(`• ${esc(displayName)}: ${esc(ruVal)}`);
       shownCount++;
     }
     if (product.attributes.length > shownCount) L.push(`<i>и ещё ${product.attributes.length - shownCount} атрибутов</i>`);

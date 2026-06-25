@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AiContentGenerator, AiContentRequest, AiContentResult } from '../types';
+import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryType } from '../core/categoryRules';
 
 // Тексты: DeepSeek → Gemini → Llama
 const MODELS = [
@@ -98,6 +99,19 @@ function buildPrompt(req: AiContentRequest): string {
 - В titleRuBranded включи оригинальное обозначение поставщика: "${req.brand}${req.model ? ' ' + req.model : ''}".`
     : '';
 
+  // Category-specific rules
+  const catType: ProductCategoryType = (req.categoryType as ProductCategoryType) ??
+    detectCategoryFromAttributes(req.categoryName, req.attributes ?? [], req.titleCn);
+  const catRules = getCategoryRules(catType);
+  const categoryBlock = catRules.seoHints.forbiddenInSeo.length
+    ? `\nКАТЕГОРИЯ ТОВАРА: ${catType}
+ЗАПРЕЩЁННЫЕ ПОЛЯ ДЛЯ ЭТОЙ КАТЕГОРИИ (НЕ упоминай в SEO):
+${catRules.seoHints.forbiddenInSeo.map((f) => `- ${f}`).join('\n')}
+${catType === 'shoes' ? '- Для обуви НЕ писать: мощность, напряжение, аккумулятор, рукав, плотность ткани\n' : ''}${catType === 'electronics' ? '- Для техники НЕ писать: размерная сетка, стелька, рукав, ткань\n' : ''}- НЕ используй китайские слова в SEO-тексте
+- НЕ используй транслитерацию китайских терминов (например, НЕ пиши "сисе гань", "тасы се" и т.п.)`
+    : `\n- НЕ используй китайские слова в SEO-тексте
+- НЕ используй транслитерацию китайских терминов`;
+
   const riskBlock = req.riskFlags
     ? `\nРИСКИ (учти при генерации):
 ${req.riskFlags.isElectrical ? '- Электротовар: не пиши "безопасный", не утверждай про сертификаты\n' : ''}${req.riskFlags.isChildren ? '- Детский товар: не пиши "для детей" без подтверждения\n' : ''}${req.riskFlags.isCosmetic ? '- Косметика: не пиши про состав, который не подтверждён\n' : ''}${req.riskFlags.isFood ? '- Пищевой товар: не пиши про полезные свойства\n' : ''}${req.riskFlags.isMedical ? '- Медицинский товар: не пиши про лечебные свойства\n' : ''}`
@@ -125,6 +139,7 @@ ${productInfo}
 ${brandBlock}
 ${riskBlock}
 ${wbKeywordsBlock}
+${categoryBlock}
 УРОВНИ ДАННЫХ:
 - supplier_confirmed (из атрибутов поставщика) → можно писать в заголовок, описание, буллеты, характеристики.
 - title_inferred (только из названия/фото) → показывать как "похоже на...", НЕ как факт. НЕ в заголовке и буллетах.
