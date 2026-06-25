@@ -1,8 +1,9 @@
 import { Markup } from 'telegraf';
 import type { ProductWithContent, SubscriptionStatus } from '../types';
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function esc(s: unknown): string {
+  const str = String(s ?? '');
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function sanitize(text: string): string {
@@ -33,6 +34,9 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
 } {
   const { wbFiltered, economics, conclusion, similarityData: sim } = product;
+  if (!economics || !conclusion) {
+    return { text: '❌ Данные анализа неполные.', keyboard: Markup.inlineKeyboard([[Markup.button.callback('🔄 Новый товар', 'new_search')]]) };
+  }
   const wm = economics.weightMissing;
   const hasConfirmedAnalogs = !!(sim && (sim.directCount ?? sim.highCount ?? 0) > 0);
   const hasMarket = !!(wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0);
@@ -157,6 +161,7 @@ export function buildMainMessage(product: ProductWithContent, jobId: string): {
 
 export function buildEconomicsDetail(product: ProductWithContent): string {
   const { economics, wbFiltered, maxPurchasePrice, budgets } = product;
+  if (!economics) return '💰 Данные экономики недоступны.';
   const b = economics.breakdown;
   const wm = economics.weightMissing;
   const hasConfirmedAnalogs = !!(product.similarityData && (product.similarityData.directCount ?? product.similarityData.highCount ?? 0) > 0);
