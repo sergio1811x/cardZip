@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AiContentGenerator, AiContentRequest, AiContentResult } from '../types';
 import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryType } from '../core/categoryRules';
+import { validateSeoContent } from '../core/reportValidator';
 
 // Тексты: DeepSeek → Gemini → Llama
 const MODELS = [
@@ -128,7 +129,27 @@ ${req.wbTopKeywords.slice(0, 10).map(k => `- ${k}`).join('\n')}`
     ? 'Товар с Tmall (бренд). НЕ используй бренд в названии. Пиши нейтрально.'
     : 'Товар с 1688 (оптовая площадка). Пиши для продажи на WB.';
 
-  return `Ты — копирайтер для маркетплейса Wildberries. Режим: Safe Listing — пиши ТОЛЬКО подтверждённые факты.
+  // Build forbidden fields block
+  const forbiddenFields = catRules.forbiddenFields;
+  const forbiddenBlock = forbiddenFields.length
+    ? `КАТЕГОРИЯ ТОВАРА: ${catType}
+
+ЗАПРЕЩЁННЫЕ ТЕМЫ ДЛЯ ЭТОЙ КАТЕГОРИИ (НИКОГДА не упоминать):
+${forbiddenFields.map((f) => `- ${f}`).join('\n')}
+
+ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА:
+- Пиши как карточку для WB, а не как перевод 1688.
+- НЕ использовать китайские слова и raw-значения (现货, 加厚, 注塑鞋, 包头拖).
+- НЕ использовать транслитерацию китайских терминов.
+- НЕ писать складские/технические поля поставщика как преимущества.
+- НЕ использовать характеристики из запрещённого списка выше.
+- НЕ придумывать неподтверждённые свойства.
+- Если данных нет — добавь в needsClarification, не придумывай.
+
+`
+    : '';
+
+  return `${forbiddenBlock}Ты — копирайтер для маркетплейса Wildberries. Режим: Safe Listing — пиши ТОЛЬКО подтверждённые факты.
 
 КОНТЕКСТ:
 ${platformContext}
@@ -297,6 +318,14 @@ function postProcess(result: AiContentResult, req: AiContentRequest): AiContentR
 
   result.description = stripBannedClaims(result.description, confirmed);
   result.bullets = result.bullets.map((b) => stripBannedClaims(b, confirmed));
+
+  // Validate SEO content against category rules
+  const categoryType: ProductCategoryType = (req as any).categoryType ?? detectCategoryFromAttributes(req.categoryName, req.attributes ?? [], req.titleCn);
+  const seoValidation = validateSeoContent(result, categoryType);
+  if (!seoValidation.ok) {
+    console.warn(`[seo] Validator: ${seoValidation.errors.join(', ')}`);
+    Object.assign(result, seoValidation.fixed);
+  }
 
   return result;
 }

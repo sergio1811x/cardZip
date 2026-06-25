@@ -117,7 +117,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const materials = structure?.material ?? [];
     const productType = structure?.productType ?? '';
     const filteredTrends = trendsResult?.trends?.length
-      ? filterRelevantTrends(trendsResult.trends, wbCoreQuery, productType, materials)
+      ? filterRelevantTrends(trendsResult.trends, wbCoreQuery, productType, materials, lexicon?.hardNegativeTerms, structure?.directAnalogBlockers)
       : [];
 
     // 2. Строим пул кандидатов
@@ -255,7 +255,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ─── WBCON trends for display ───────────────────────────────────────
     const trendsResult2 = await trendsPromise;
     const wbTrends = trendsResult2?.trends?.length
-      ? filterRelevantTrends(trendsResult2.trends, wbCoreQuery, structure?.productType ?? '', structure?.material ?? [])
+      ? filterRelevantTrends(trendsResult2.trends, wbCoreQuery, structure?.productType ?? '', structure?.material ?? [], lexicon?.hardNegativeTerms, structure?.directAnalogBlockers)
       : [];
 
     // ─── Similarity data for display ────────────────────────────────────

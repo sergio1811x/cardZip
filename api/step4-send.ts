@@ -6,6 +6,7 @@ import { markSent } from '../src/db/queries/jobs';
 import { getStatus, consumeCredit } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { buildMainMessage } from '../src/core/messageBuilder';
+import { validateReport } from '../src/core/reportValidator';
 import { findWbCategoriesByKeywords } from '../src/db/queries/wbCategories';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
@@ -74,7 +75,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ─── Одно сообщение: выжимка + остаток + кнопки ───────────────────────────
     const { text: mainText, keyboard: mainKb } = buildMainMessage(product, job.id, freshStatus, wbCategory);
-    await bot.telegram.sendMessage(chatId, mainText, {
+
+    // Validate report text
+    const validation = validateReport(mainText, (product as any).categoryType ?? 'other', {
+      hasPrice: product.priceYuan > 0,
+      hasWeight: product.weightKg > 0,
+      hasDirectAnalogs: !!(product.similarityData?.directCount && product.similarityData.directCount > 0),
+      wb429: !!(product as any).wb429,
+    });
+    if (!validation.ok) {
+      console.warn(`[step4] Validator found ${validation.errors.length} issues:`, validation.errors.join(', '));
+    }
+    const finalText = validation.ok ? mainText : validation.fixedText;
+
+    await bot.telegram.sendMessage(chatId, finalText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       ...mainKb,

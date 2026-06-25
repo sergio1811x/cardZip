@@ -53,6 +53,8 @@ export function filterRelevantTrends(
   coreQuery: string,
   productType: string,
   materials: string[],
+  negativeMatches?: string[],
+  directAnalogBlockers?: string[],
 ): WbTrend[] {
   const excludePatterns = [
     /медицинск/i, /ортопедическ/i, /профессиональн/i,
@@ -64,7 +66,7 @@ export function filterRelevantTrends(
   const typeLower = productType.toLowerCase();
   const materialSet = new Set(materials.map((m) => m.toLowerCase()));
 
-  return trends
+  let result = trends
     .filter((t) => {
       const w = t.search_words.toLowerCase();
 
@@ -82,6 +84,24 @@ export function filterRelevantTrends(
 
       return true;
     })
-    .sort((a, b) => b.weeks_request_per_day - a.weeks_request_per_day)
-    .slice(0, 10);
+    .sort((a, b) => b.weeks_request_per_day - a.weeks_request_per_day);
+
+  // Filter by negative matches
+  if (negativeMatches?.length) {
+    const filtered = result.filter(t => {
+      const w = t.search_words.toLowerCase();
+      return !negativeMatches.some(neg => w.includes(neg.toLowerCase()));
+    });
+    if (filtered.length > 0) result = filtered;
+  }
+
+  // Filter by analog blockers
+  if (directAnalogBlockers?.length) {
+    result = result.filter(t => {
+      const w = t.search_words.toLowerCase();
+      return !directAnalogBlockers.some(blocker => w.includes(blocker.toLowerCase()));
+    });
+  }
+
+  return result.slice(0, 10);
 }

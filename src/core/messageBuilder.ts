@@ -289,12 +289,25 @@ export function buildMainMessage(
 
   // ─── Статус ─────────────────────────────────────────────────────────────────
   L.push('');
-  if (wm || !hasConfirmedAnalogs) {
+  const wb429Flag = !!(product as any).wb429;
+  if (priceIsZero) {
     L.push('🟡 <b>Статус: нужны данные</b>');
-  } else if (economics.grossProfitRub > 0) {
+  } else if (wb429Flag) {
+    L.push('🟡 <b>Статус: WB-поиск ограничен</b>');
+  } else if (wm && !hasConfirmedAnalogs) {
+    L.push('🟡 <b>Статус: нужны данные</b>');
+  } else if (!hasConfirmedAnalogs) {
+    L.push('🟡 <b>Статус: рынок не подтверждён</b>');
+  } else if (wm) {
+    L.push('🟡 <b>Статус: нужен вес</b>');
+  } else if (directLocalCount > 0 && directLocalCount < 5) {
+    L.push('🟡 <b>Статус: можно изучать</b>');
+  } else if (economics.grossProfitRub > 0 && directLocalCount >= 5) {
     L.push('🟢 <b>Статус: можно тестировать</b>');
-  } else {
+  } else if (economics.grossProfitRub <= 0) {
     L.push('🔴 <b>Статус: экономика слабая</b>');
+  } else {
+    L.push('🟡 <b>Статус: нужны данные</b>');
   }
 
   // ─── Рынок WB ──────────────────────────────────────────────────────────────
@@ -386,6 +399,10 @@ export function buildMainMessage(
     if (!wm && (ql.includes('вес') || ql.includes('weight'))) continue;
     // Skip price questions if price exists and not range
     if (!priceIsZero && !product.priceIsRange && (ql.includes('цен') || ql.includes('price'))) continue;
+    // Skip MOQ questions if MOQ is known
+    if ((product.moq ?? 0) > 1 && (ql.includes('moq') || ql.includes('минимальн') || ql.includes('парти'))) continue;
+    // Skip SKU questions if SKUs exist
+    if ((product.skus?.length ?? 0) > 0 && (ql.includes('sku') || ql.includes('вариант') || ql.includes('размер'))) continue;
     // Skip duplicates
     if (clarify.some((c) => c.toLowerCase() === ql)) continue;
     clarify.push(q);
@@ -400,7 +417,7 @@ export function buildMainMessage(
   // ─── Вердикт ────────────────────────────────────────────────────────────────
   L.push('');
   L.push('🎯 <b>Вердикт</b>');
-  L.push(buildSmartVerdict(wm, hasConfirmedAnalogs, economics.grossProfitRub, economics.platformMode, priceIsZero, !!wbCategory));
+  L.push(buildSmartVerdict(wm, hasConfirmedAnalogs, economics.grossProfitRub, economics.platformMode, priceIsZero, !!wbCategory, directLocalCount, !!(product as any).wb429));
 
   // ─── Остаток анализов ───────────────────────────────────────────────────────
   if (status) {
@@ -433,19 +450,25 @@ export function buildMainMessage(
   return { text: sanitize(L.join('\n')), keyboard: Markup.inlineKeyboard(buttons) };
 }
 
-function buildSmartVerdict(wm: boolean, hasAnalogs: boolean, profit: number, mode: string, priceZero: boolean, hasWbCategory: boolean): string {
+function buildSmartVerdict(wm: boolean, hasAnalogs: boolean, profit: number, mode: string, priceZero: boolean, hasWbCategory: boolean, directCount: number, wb429: boolean): string {
   if (mode === 'reference_only') return 'Этот товар — брендовый референс. Найдите OEM-аналог на 1688.';
   if (mode === 'sample_only') return 'Закажите образец и запросите оптовую цену для расчёта партии.';
-  if (priceZero) return 'Цена не распознана. Уточните цену SKU у поставщика и повторите расчёт.';
+  if (priceZero) return 'Цена не распознана. Уточните цену SKU у поставщика.';
+  if (wb429) return 'WB временно ограничил поиск. Попробуйте повторить анализ позже или проверьте рынок вручную.';
 
   if (!hasAnalogs && hasWbCategory) {
-    if (wm) return 'Категория WB живая, но нужны данные. Уточните цену SKU, вес и повторите расчёт.';
-    return 'Категория WB живая, но прямые аналоги не подтверждены. Перед закупкой проверьте похожие товары на WB.';
+    if (wm) return 'Категория WB найдена, но нужны данные. Уточните вес и повторите расчёт.';
+    return 'Категория WB найдена, но прямые аналоги не подтверждены. Проверьте похожие товары на WB вручную.';
   }
 
-  if (wm && !hasAnalogs) return 'Сначала уточните данные у поставщика и повторите расчёт.';
-  if (wm) return 'Уточните вес и размеры у поставщика — после этого бот рассчитает полную экономику.';
-  if (!hasAnalogs) return 'Аналоги на WB не найдены. Оцените рынок вручную перед закупкой.';
+  if (wm && !hasAnalogs) return 'Для оценки нужны вес и подтверждённые WB-аналоги.';
+  if (wm) return 'Уточните вес у поставщика — после этого бот рассчитает полную экономику.';
+  if (!hasAnalogs) return 'Прямые аналоги на WB не найдены. Проверьте рынок вручную.';
+  if (directCount > 0 && directCount < 5) {
+    return profit > 0
+      ? 'Аналоги найдены, но выборка ограничена. Экономика ориентировочная.'
+      : 'Аналоги найдены, но экономика слабая. Попробуйте договориться о лучшей цене.';
+  }
   if (profit > 0) return 'Экономика положительная. Можно заказывать тестовую партию.';
   return 'Экономика слабая. Попробуйте договориться о лучшей цене или выбрать другой товар.';
 }
