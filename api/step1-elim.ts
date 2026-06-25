@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const cached = await findProductByKey(cacheKey);
     const cachedData = cached?.data_json as any;
     const cachedProduct = cachedData?.conclusion ? cachedData : cachedData?.raw;
-    const cacheValid = cachedProduct?.riskFlags && cachedProduct?.conclusion && cachedProduct?.economics;
+    const cacheValid = cachedProduct?.riskFlags && cachedProduct?.conclusion && cachedProduct?.economics && cachedProduct?.wbTrends;
     if (cacheValid) {
       console.log(`[step1] Cache hit: ${cacheKey.slice(0, 12)}`);
       await supabase.from('jobs').update({
