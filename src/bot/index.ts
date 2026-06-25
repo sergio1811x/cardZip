@@ -5,7 +5,7 @@ import { handleStart } from './handlers/start';
 import { handleLink } from './handlers/link';
 import { handleUpgrade, handlePayTest, handlePayPack10, handlePayPack30, handlePayWeek, handleSuccessPayment } from './handlers/upgrade';
 import { handleLast } from './handlers/last';
-import { handleAdmin, handleUpdateWbCategories } from './handlers/admin';
+import { handleAdmin, handleUpdateWbCategories, handleAdminWbDateInput, getAdminWbDatePending } from './handlers/admin';
 import { isAppError } from '../lib/errors';
 import { checkCallbackLimit, checkGlobalLimit } from './middleware/rateLimit';
 import { handleSupplierQuestions, handleSupplierQuestionsLang } from './handlers/supplierQuestions';
@@ -180,8 +180,13 @@ bot.on('text', async (ctx) => {
   const userId = (ctx as any).dbUserId as string | undefined;
   const chatId = ctx.chat?.id;
 
-  // Проверяем pending states: подтверждение поставщика → тариф
+  // Проверяем pending states: admin wb date → подтверждение поставщика → тариф
   if (chatId) {
+    const wbDatePending = await getAdminWbDatePending(chatId);
+    if (wbDatePending) {
+      const handled = await handleAdminWbDateInput(ctx, text);
+      if (handled) return;
+    }
     const confirmPending = await getPendingConfirm(chatId);
     if (confirmPending) {
       const handled = await handleSupplierConfirmText(ctx, text);

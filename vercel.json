@@ -9,11 +9,5 @@
     "api/step3-market.ts": { "maxDuration": 60 },
     "api/step4-send.ts": { "maxDuration": 60 },
     "api/update-wb-categories.ts": { "maxDuration": 60 }
-  },
-  "crons": [
-    {
-      "path": "/api/update-wb-categories?secret=${TELEGRAM_WEBHOOK_SECRET}",
-      "schedule": "0 6 * * 1"
-    }
-  ]
+  }
 }
