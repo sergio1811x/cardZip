@@ -225,8 +225,13 @@ export function buildMainMessage(
   const wm = economics.weightMissing;
   const directLocalCount = sim?.directCount ?? 0;
   const crossBorderCount = sim?.crossBorderCount ?? 0;
-  const hasConfirmedAnalogs = directLocalCount > 0;
-  const hasMarket = !!(wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0);
+  // hasMarket = единый критерий: есть реальная медиана ИЗ подтверждённых аналогов
+  const hasMarket = !!(wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0 && !economics.isSyntheticPrice);
+  // hasConfirmedAnalogs = есть рынок, а не просто сырые кандидаты
+  const hasConfirmedAnalogs = hasMarket;
+  // SKU risk
+  const skuNotLoaded = product.normalized1688?.pricing?.quoteType === 'by_sku' && (!product.skus?.length);
+  const priceUnreliable = skuNotLoaded || economics.isSyntheticPrice;
   const L: string[] = [];
 
   // ─── Товар ──────────────────────────────────────────────────────────────────
@@ -298,15 +303,17 @@ export function buildMainMessage(
     L.push('🟡 <b>Статус: нужны данные</b>');
   } else if (wb429Flag) {
     L.push('🟡 <b>Статус: WB-поиск ограничен</b>');
-  } else if (wm && !hasConfirmedAnalogs) {
+  } else if (priceUnreliable) {
+    L.push('🟡 <b>Статус: расчёт недостоверен</b>');
+  } else if (wm && !hasMarket) {
     L.push('🟡 <b>Статус: нужны данные</b>');
-  } else if (!hasConfirmedAnalogs) {
+  } else if (!hasMarket) {
     L.push('🟡 <b>Статус: рынок не подтверждён</b>');
   } else if (wm) {
     L.push('🟡 <b>Статус: нужен вес</b>');
-  } else if (directLocalCount > 0 && directLocalCount < 5) {
+  } else if (hasMarket && wbFiltered!.relevantCount < 5) {
     L.push('🟡 <b>Статус: можно изучать</b>');
-  } else if (economics.grossProfitRub > 0 && directLocalCount >= 5) {
+  } else if (economics.grossProfitRub > 0 && wbFiltered!.relevantCount >= 5) {
     L.push('🟢 <b>Статус: можно тестировать</b>');
   } else if (economics.grossProfitRub <= 0) {
     L.push('🔴 <b>Статус: экономика слабая</b>');
@@ -319,16 +326,20 @@ export function buildMainMessage(
   L.push('🔎 <b>Рынок WB</b>');
   const wb429 = !!(product as any).wb429;
   if (wb429) {
-    L.push('WB временно ограничил поиск. Прямые локальные аналоги не подтверждены.');
-  } else if (hasConfirmedAnalogs) {
-    L.push(`Прямые локальные аналоги: ${directLocalCount}`);
-    if (hasMarket) L.push(`Медиана цены: ${fP(wbFiltered!.medianPrice)}`);
+    L.push('WB временно ограничил поиск.');
+    L.push('Прямые аналоги не подтверждены.');
+  } else if (hasMarket) {
+    L.push(`Подтверждённые аналоги: ${wbFiltered!.relevantCount}`);
+    L.push(`Медиана цены: ${fP(wbFiltered!.medianPrice)}`);
+    if (wbFiltered!.relevantCount < 5) L.push('<i>Выборка ограничена.</i>');
+  } else if (directLocalCount > 0) {
+    L.push(`Найдено ${directLocalCount} похожих карточек, но прямые аналоги не подтверждены.`);
+    L.push('Рыночную цену и ROI не считаю.');
   } else {
-    L.push('Прямые локальные аналоги не подтверждены.');
+    L.push('Прямые аналоги на WB не найдены.');
     if (crossBorderCount > 0) {
-      L.push(`Найден${crossBorderCount > 1 ? 'о' : ''} ${crossBorderCount} cross-border ${crossBorderCount === 1 ? 'товар' : 'товаров'} — не используем для экономики.`);
+      L.push(`Cross-border: ${crossBorderCount} — не используем для экономики.`);
     }
-    if (sim?.similarCount && sim.similarCount > 0) L.push(`Похожие товары: ${sim.similarCount}`);
     if (sim?.categoryCount && sim.categoryCount > 0) L.push(`Широкая категория: ${sim.categoryCount}`);
   }
 
@@ -363,8 +374,12 @@ export function buildMainMessage(
     if (wm) {
       L.push(`Предварительно без карго. Себестоимость без карго: ${fP(economics.costRub)}`);
       L.push('Вес не указан — карго, маржа и ROI не рассчитаны.');
-    } else if (!hasConfirmedAnalogs || economics.isSyntheticPrice) {
-      L.push(`Себестоимость: ${fP(economics.costRub)}. ROI не рассчитан: нет прямых WB-аналогов.`);
+    } else if (priceUnreliable) {
+      L.push(`Себестоимость: ~${fP(economics.costRub)} (ориентировочно).`);
+      L.push('Расчёт недостоверен — цена SKU не подтверждена.');
+    } else if (!hasMarket) {
+      L.push(`Себестоимость: ${fP(economics.costRub)}.`);
+      L.push('ROI не рассчитан: прямые аналоги WB не подтверждены.');
     } else {
       L.push(`Себестоимость: ${fP(economics.costRub)}`);
       if (wbFiltered) {
@@ -424,7 +439,7 @@ export function buildMainMessage(
   // ─── Вердикт ────────────────────────────────────────────────────────────────
   L.push('');
   L.push('🎯 <b>Вердикт</b>');
-  L.push(buildSmartVerdict(wm, hasConfirmedAnalogs, economics.grossProfitRub, economics.platformMode, priceIsZero, !!wbCategory, directLocalCount, !!(product as any).wb429));
+  L.push(buildSmartVerdict(wm, hasMarket, economics.grossProfitRub, economics.platformMode, priceIsZero, !!wbCategory, wbFiltered?.relevantCount ?? 0, !!(product as any).wb429, priceUnreliable));
 
   // ─── Остаток анализов ───────────────────────────────────────────────────────
   if (status) {
@@ -457,11 +472,12 @@ export function buildMainMessage(
   return { text: sanitize(L.join('\n')), keyboard: Markup.inlineKeyboard(buttons) };
 }
 
-function buildSmartVerdict(wm: boolean, hasAnalogs: boolean, profit: number, mode: string, priceZero: boolean, hasWbCategory: boolean, directCount: number, wb429: boolean): string {
+function buildSmartVerdict(wm: boolean, hasAnalogs: boolean, profit: number, mode: string, priceZero: boolean, hasWbCategory: boolean, confirmedCount: number, wb429: boolean, priceUnreliable?: boolean): string {
   if (mode === 'reference_only') return 'Этот товар — брендовый референс. Найдите OEM-аналог на 1688.';
   if (mode === 'sample_only') return 'Закажите образец и запросите оптовую цену для расчёта партии.';
   if (priceZero) return 'Цена не распознана. Уточните цену SKU у поставщика.';
-  if (wb429) return 'WB временно ограничил поиск. Попробуйте повторить анализ позже или проверьте рынок вручную.';
+  if (wb429) return 'WB временно ограничил поиск. Попробуйте повторить анализ позже.';
+  if (priceUnreliable) return 'Расчёт недостоверен. Сначала подтвердите цену выбранного SKU у поставщика.';
 
   if (!hasAnalogs && hasWbCategory) {
     if (wm) return 'Категория WB найдена, но нужны данные. Уточните вес и повторите расчёт.';
@@ -470,8 +486,8 @@ function buildSmartVerdict(wm: boolean, hasAnalogs: boolean, profit: number, mod
 
   if (wm && !hasAnalogs) return 'Для оценки нужны вес и подтверждённые WB-аналоги.';
   if (wm) return 'Уточните вес у поставщика — после этого бот рассчитает полную экономику.';
-  if (!hasAnalogs) return 'Прямые аналоги на WB не найдены. Проверьте рынок вручную.';
-  if (directCount > 0 && directCount < 5) {
+  if (!hasAnalogs) return 'Прямые аналоги на WB не подтверждены. Проверьте рынок вручную.';
+  if (confirmedCount > 0 && confirmedCount < 5) {
     return profit > 0
       ? 'Аналоги найдены, но выборка ограничена. Экономика ориентировочная.'
       : 'Аналоги найдены, но экономика слабая. Попробуйте договориться о лучшей цене.';
@@ -490,7 +506,8 @@ export function buildEconomicsDetail(product: ProductWithContent, jobId: string)
   if (!economics) return { text: '💰 Данные экономики недоступны.', keyboard: Markup.inlineKeyboard([]) };
   const b = economics.breakdown;
   const wm = economics.weightMissing;
-  const hasConfirmedAnalogs = !!(product.similarityData && (product.similarityData.directCount ?? 0) > 0);
+  const hasMarketForEcon = !!(wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0 && !economics.isSyntheticPrice);
+  const hasConfirmedAnalogs = hasMarketForEcon;
   const L: string[] = [];
 
   L.push('💰 <b>Экономика</b>');
