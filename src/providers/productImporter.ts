@@ -403,7 +403,20 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     signal: AbortSignal.timeout(15_000),
   });
 
-  // Elim → RapidAPI fallback
+  // RapidAPI (основной для 1688) → Elim (fallback)
+  if (platform === '1688') {
+    try {
+      const rapidResult = await fetchFromRapidApi(productId);
+      if (rapidResult) {
+        console.log(`[import] RapidAPI success for ${productId}`);
+        return rapidResult;
+      }
+    } catch (e) {
+      console.warn(`[import] RapidAPI failed: ${(e as Error).message}`);
+    }
+  }
+
+  // Elim fallback
   let elimError: string | null = null;
   try {
     const MAX_RETRIES = 2;
@@ -414,7 +427,7 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
         break;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.warn(`[elim] Попытка ${attempt}/${MAX_RETRIES} не удалась: ${msg}`);
+        console.warn(`[elim] Попытка ${attempt}/${MAX_RETRIES}: ${msg}`);
         if (attempt === MAX_RETRIES) elimError = msg;
       }
     }
@@ -430,13 +443,6 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     }
   } catch (e) {
     elimError = e instanceof Error ? e.message : String(e);
-  }
-
-  // RapidAPI fallback
-  if (platform === '1688') {
-    console.log(`[import] Elim failed (${elimError}), trying RapidAPI for ${productId}`);
-    const rapidResult = await fetchFromRapidApi(productId);
-    if (rapidResult) return rapidResult;
   }
 
   throw new AppError(
