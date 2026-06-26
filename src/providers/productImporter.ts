@@ -365,6 +365,8 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
   };
 }
 
+import { fetchFromRapidApi } from './rapidApiProvider';
+
 async function fetchProduct(url: string): Promise<RawProduct1688> {
   // Резолвим короткие ссылки из мобильного приложения
   let resolvedUrl = url;
@@ -401,48 +403,47 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     signal: AbortSignal.timeout(15_000),
   });
 
-  const MAX_RETRIES = 2;
-  let res: Response | undefined;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      res = await doFetch();
-      break;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[elim] Попытка ${attempt}/${MAX_RETRIES} не удалась: ${msg}`);
-      if (attempt === MAX_RETRIES) {
-        throw new AppError(
-          'PROVIDER_DOWN',
-          `Elim недоступен после ${MAX_RETRIES} попыток: ${platform}/${productId}`,
-          '⏱ Сервис не отвечает. Попробуйте через 1–2 минуты.'
-        );
+  // Elim → RapidAPI fallback
+  let elimError: string | null = null;
+  try {
+    const MAX_RETRIES = 2;
+    let res: Response | undefined;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        res = await doFetch();
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[elim] Попытка ${attempt}/${MAX_RETRIES} не удалась: ${msg}`);
+        if (attempt === MAX_RETRIES) elimError = msg;
       }
     }
+
+    if (res?.ok) {
+      const json = (await res.json()) as ElimResponse;
+      if (json.success && json.title) {
+        return buildNormalizedProduct(json, platform, productId);
+      }
+      elimError = `Elim: ${json.message ?? 'no title'}`;
+    } else if (res) {
+      elimError = `Elim HTTP ${res.status}`;
+    }
+  } catch (e) {
+    elimError = e instanceof Error ? e.message : String(e);
   }
 
-  if (!res) {
-    throw new AppError('PROVIDER_DOWN', 'Elim: res undefined', '⏱ Сервис не отвечает. Попробуйте позже.');
+  // RapidAPI fallback
+  if (platform === '1688') {
+    console.log(`[import] Elim failed (${elimError}), trying RapidAPI for ${productId}`);
+    const rapidResult = await fetchFromRapidApi(productId);
+    if (rapidResult) return rapidResult;
   }
 
-  if (!res.ok) {
-    throw new AppError(
-      'PROVIDER_DOWN',
-      `Elim HTTP ${res.status}`,
-      `⚠️ Не удалось получить данные товара (HTTP ${res.status}). Попробуйте позже.`
-    );
-  }
-
-  const json = (await res.json()) as ElimResponse;
-
-  if (!json.success || !json.title) {
-    throw new AppError(
-      'PROVIDER_DOWN',
-      `Elim ошибка: ${json.message ?? JSON.stringify(json).slice(0, 300)}`,
-      '⚠️ Товар не найден или ссылка устарела. Проверь URL и попробуй ещё раз.'
-    );
-  }
-
-  return buildNormalizedProduct(json, platform, productId);
+  throw new AppError(
+    'PROVIDER_DOWN',
+    `Все провайдеры недоступны: ${elimError}`,
+    '⏱ Не удалось получить данные товара. Попробуйте через 1–2 минуты.'
+  );
 }
 
 export const productImporter: ProductImporter = { fetchProduct, parseUrl };
