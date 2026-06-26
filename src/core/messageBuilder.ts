@@ -203,6 +203,80 @@ const PLATFORM_LABELS: Record<string, string> = {
   tmall: 'Tmall',
 };
 
+// ─── Единый источник решений по рынку и цене ────────────────────────────────
+
+interface MarketDecision {
+  rawCandidatesCount: number;
+  confirmedCount: number;
+  similarCount: number;
+  crossBorderCount: number;
+  categoryCount: number;
+  canShowMedianPrice: boolean;
+  canCalculateROI: boolean;
+  medianPrice: number;
+  confidence: string;
+  wb429: boolean;
+}
+
+interface PriceDecision {
+  priceIsZero: boolean;
+  priceUnreliable: boolean;
+  skuNotLoaded: boolean;
+  displayPrice: string;
+  reason: string;
+}
+
+function buildMarketDecision(product: ProductWithContent): MarketDecision {
+  const sim = product.similarityData;
+  const wbf = product.wbFiltered;
+  const eco = product.economics;
+  const wb429 = !!(product as any).wb429;
+
+  const rawCandidatesCount = sim?.directCount ?? 0;
+  const similarCount = sim?.similarCount ?? 0;
+  const crossBorderCount = sim?.crossBorderCount ?? 0;
+  const categoryCount = sim?.categoryCount ?? 0;
+
+  const hasRealMedian = !!(wbf && wbf.relevantCount > 0 && wbf.medianPrice > 0);
+  const isSynthetic = eco?.isSyntheticPrice ?? false;
+
+  const confirmedCount = hasRealMedian && !isSynthetic ? wbf!.relevantCount : 0;
+  const canShowMedianPrice = confirmedCount > 0;
+  const canCalculateROI = confirmedCount >= 5 && !isSynthetic && !eco?.weightMissing;
+
+  const confidence = wb429 ? 'rate_limited'
+    : confirmedCount >= 5 ? 'high'
+    : confirmedCount > 0 ? 'low'
+    : sim?.confidence ?? 'no_market';
+
+  return {
+    rawCandidatesCount,
+    confirmedCount,
+    similarCount,
+    crossBorderCount,
+    categoryCount,
+    canShowMedianPrice,
+    canCalculateROI,
+    medianPrice: canShowMedianPrice ? wbf!.medianPrice : 0,
+    confidence,
+    wb429,
+  };
+}
+
+function buildPriceDecision(product: ProductWithContent): PriceDecision {
+  const priceIsZero = !product.priceYuan || product.priceYuan <= 0;
+  const skuNotLoaded = product.normalized1688?.pricing?.quoteType === 'by_sku' && (!product.skus?.length);
+  const priceUnreliable = !priceIsZero && (skuNotLoaded || (product.economics?.isSyntheticPrice ?? false));
+  const displayPrice = formatPriceDisplay(product);
+
+  let reason = '';
+  if (priceIsZero) reason = 'цена не распознана';
+  else if (skuNotLoaded) reason = 'цена SKU не подтверждена';
+  else if (product.economics?.isSyntheticPrice) reason = 'цена синтетическая';
+
+  return { priceIsZero, priceUnreliable, skuNotLoaded, displayPrice, reason };
+}
+
 // ─── Главное сообщение (единственное после анализа) ─────────────────────────
 
 export function buildMainMessage(
@@ -223,15 +297,8 @@ export function buildMainMessage(
     detectCategoryFromAttributes(product.categoryName, product.attributes ?? [], product.titleCn);
   const intel = (product as any).intelligence;
   const wm = economics.weightMissing;
-  const directLocalCount = sim?.directCount ?? 0;
-  const crossBorderCount = sim?.crossBorderCount ?? 0;
-  // hasMarket = единый критерий: есть реальная медиана ИЗ подтверждённых аналогов
-  const hasMarket = !!(wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0 && !economics.isSyntheticPrice);
-  // hasConfirmedAnalogs = есть рынок, а не просто сырые кандидаты
-  const hasConfirmedAnalogs = hasMarket;
-  // SKU risk
-  const skuNotLoaded = product.normalized1688?.pricing?.quoteType === 'by_sku' && (!product.skus?.length);
-  const priceUnreliable = skuNotLoaded || economics.isSyntheticPrice;
+  const market = buildMarketDecision(product);
+  const priceDec = buildPriceDecision(product);
   const L: string[] = [];
 
   // ─── Товар ──────────────────────────────────────────────────────────────────
@@ -240,18 +307,14 @@ export function buildMainMessage(
   L.push('');
   L.push(`Источник: ${PLATFORM_LABELS[product.platform] ?? product.platform}`);
 
-  const priceStr = formatPriceDisplay(product);
-  const econ = product.economics;
-  if (priceStr === 'нужно уточнить') {
+  if (priceDec.displayPrice === 'нужно уточнить') {
     L.push('Цена: нужно уточнить');
-  } else if (econ && econ.breakdown?.purchaseRub > 0 && !priceStr.startsWith('от ')) {
-    L.push(`Цена: ${priceStr} ≈ ${fP(econ.breakdown.purchaseRub)}`);
+  } else if (economics.breakdown?.purchaseRub > 0 && !priceDec.displayPrice.startsWith('от ')) {
+    L.push(`Цена: ${priceDec.displayPrice} ≈ ${fP(economics.breakdown.purchaseRub)}`);
   } else {
-    L.push(`Цена: ${priceStr}`);
+    L.push(`Цена: ${priceDec.displayPrice}`);
   }
   if (product.supplierName) L.push(`Поставщик: ${esc(product.supplierName)}`);
-
-  const priceIsZero = !product.priceYuan || product.priceYuan <= 0;
 
   // ─── Данные 1688 (выжимка) ─────────────────────────────────────────────────
   L.push('');
@@ -298,22 +361,21 @@ export function buildMainMessage(
 
   // ─── Статус ─────────────────────────────────────────────────────────────────
   L.push('');
-  const wb429Flag = !!(product as any).wb429;
-  if (priceIsZero) {
+  if (priceDec.priceIsZero) {
     L.push('🟡 <b>Статус: нужны данные</b>');
-  } else if (wb429Flag) {
+  } else if (market.wb429) {
     L.push('🟡 <b>Статус: WB-поиск ограничен</b>');
-  } else if (priceUnreliable) {
+  } else if (priceDec.priceUnreliable) {
     L.push('🟡 <b>Статус: расчёт недостоверен</b>');
-  } else if (wm && !hasMarket) {
+  } else if (wm && !market.canShowMedianPrice) {
     L.push('🟡 <b>Статус: нужны данные</b>');
-  } else if (!hasMarket) {
+  } else if (!market.canShowMedianPrice) {
     L.push('🟡 <b>Статус: рынок не подтверждён</b>');
   } else if (wm) {
     L.push('🟡 <b>Статус: нужен вес</b>');
-  } else if (hasMarket && wbFiltered!.relevantCount < 5) {
+  } else if (market.confirmedCount < 5) {
     L.push('🟡 <b>Статус: можно изучать</b>');
-  } else if (economics.grossProfitRub > 0 && wbFiltered!.relevantCount >= 5) {
+  } else if (economics.grossProfitRub > 0 && market.confirmedCount >= 5) {
     L.push('🟢 <b>Статус: можно тестировать</b>');
   } else if (economics.grossProfitRub <= 0) {
     L.push('🔴 <b>Статус: экономика слабая</b>');
@@ -324,26 +386,25 @@ export function buildMainMessage(
   // ─── Рынок WB ──────────────────────────────────────────────────────────────
   L.push('');
   L.push('🔎 <b>Рынок WB</b>');
-  const wb429 = !!(product as any).wb429;
-  if (wb429) {
+  if (market.wb429) {
     L.push('WB временно ограничил поиск.');
     L.push('Прямые аналоги не подтверждены.');
-  } else if (hasMarket) {
-    L.push(`Подтверждённые аналоги: ${wbFiltered!.relevantCount}`);
-    L.push(`Медиана цены: ${fP(wbFiltered!.medianPrice)}`);
-    if (wbFiltered!.relevantCount < 5) L.push('<i>Выборка ограничена.</i>');
-  } else if (directLocalCount > 0) {
-    L.push(`Найдено ${directLocalCount} похожих карточек, но прямые аналоги не подтверждены.`);
+  } else if (market.canShowMedianPrice) {
+    L.push(`Подтверждённые аналоги: ${market.confirmedCount}`);
+    L.push(`Медиана цены: ${fP(market.medianPrice)}`);
+    if (market.confirmedCount < 5) L.push('<i>Выборка ограничена.</i>');
+  } else if (market.rawCandidatesCount > 0) {
+    L.push(`Найдено ${market.rawCandidatesCount} похожих карточек, но прямые аналоги не подтверждены.`);
     L.push('Рыночную цену и ROI не считаю.');
   } else {
     L.push('Прямые аналоги на WB не найдены.');
-    if (crossBorderCount > 0) {
-      L.push(`Cross-border: ${crossBorderCount} — не используем для экономики.`);
+    if (market.crossBorderCount > 0) {
+      L.push(`Cross-border: ${market.crossBorderCount} — не используем для экономики.`);
     }
-    if (sim?.categoryCount && sim.categoryCount > 0) L.push(`Широкая категория: ${sim.categoryCount}`);
+    if (market.categoryCount > 0) L.push(`Широкая категория: ${market.categoryCount}`);
   }
 
-  if (wbCategory && !hasConfirmedAnalogs) {
+  if (wbCategory && !market.canShowMedianPrice) {
     L.push('');
     L.push(`📊 <b>Категория WB: ${esc(wbCategory.item)}</b>`);
     L.push('<i>Данные по категории, не по конкретному товару.</i>');
@@ -368,16 +429,16 @@ export function buildMainMessage(
   // ─── Экономика ──────────────────────────────────────────────────────────────
   L.push('');
   L.push('💰 <b>Экономика</b>');
-  if (priceIsZero) {
+  if (priceDec.priceIsZero) {
     L.push('Не рассчитана — цена не распознана.');
   } else if (economics.platformMode === 'full') {
     if (wm) {
       L.push(`Предварительно без карго. Себестоимость без карго: ${fP(economics.costRub)}`);
       L.push('Вес не указан — карго, маржа и ROI не рассчитаны.');
-    } else if (priceUnreliable) {
+    } else if (priceDec.priceUnreliable) {
       L.push(`Себестоимость: ~${fP(economics.costRub)} (ориентировочно).`);
-      L.push('Расчёт недостоверен — цена SKU не подтверждена.');
-    } else if (!hasMarket) {
+      L.push(`Расчёт недостоверен — ${priceDec.reason}.`);
+    } else if (!market.canShowMedianPrice) {
       L.push(`Себестоимость: ${fP(economics.costRub)}.`);
       L.push('ROI не рассчитан: прямые аналоги WB не подтверждены.');
     } else {
@@ -391,8 +452,8 @@ export function buildMainMessage(
         const sign = profitMed >= 0 ? '+' : '';
         L.push(`Прибыль (медиана): ${sign}${fP(profitMed)}`);
         if (economics.roiPercent) L.push(`ROI: ${economics.roiPercent}%`);
-        if (directLocalCount >= 1 && directLocalCount <= 4) {
-          L.push(`<i>⚠️ Ограниченная выборка (${directLocalCount} ${pluralize(directLocalCount, 'аналог', 'аналога', 'аналогов')})</i>`);
+        if (market.confirmedCount >= 1 && market.confirmedCount <= 4) {
+          L.push(`<i>⚠️ Ограниченная выборка (${market.confirmedCount} ${pluralize(market.confirmedCount, 'аналог', 'аналога', 'аналогов')})</i>`);
         }
       }
     }
@@ -407,8 +468,8 @@ export function buildMainMessage(
   // ─── Что уточнить (по Product Intelligence или CategoryRules) ──────
   const clarify: string[] = [];
 
-  if (priceIsZero) clarify.push('цену выбранного варианта');
-  else if (product.priceIsRange) clarify.push('подтвердите цену выбранного варианта');
+  if (priceDec.priceIsZero) clarify.push('цену выбранного варианта');
+  else if (priceDec.priceUnreliable || product.priceIsRange) clarify.push('подтвердите цену выбранного варианта');
 
   if (intel?.reportRules?.buyerMustCheck?.length) {
     // Use intelligence-driven questions
@@ -417,7 +478,7 @@ export function buildMainMessage(
       const qLower = q.toLowerCase();
       // Skip if already covered or data exists
       if (qLower.includes('вес') && product.weightKg > 0) continue;
-      if (qLower.includes('цен') && !priceIsZero && !product.priceIsRange) continue;
+      if (qLower.includes('цен') && !priceDec.priceIsZero && !priceDec.priceUnreliable) continue;
       if (clarify.some(c => c.toLowerCase().includes(qLower.slice(0, 10)))) continue;
       clarify.push(q);
     }
@@ -439,7 +500,7 @@ export function buildMainMessage(
   // ─── Вердикт ────────────────────────────────────────────────────────────────
   L.push('');
   L.push('🎯 <b>Вердикт</b>');
-  L.push(buildSmartVerdict(wm, hasMarket, economics.grossProfitRub, economics.platformMode, priceIsZero, !!wbCategory, wbFiltered?.relevantCount ?? 0, !!(product as any).wb429, priceUnreliable));
+  L.push(buildSmartVerdict(wm, market.canShowMedianPrice, economics.grossProfitRub, economics.platformMode, priceDec.priceIsZero, !!wbCategory, market.confirmedCount, market.wb429, priceDec.priceUnreliable));
 
   // ─── Остаток анализов ───────────────────────────────────────────────────────
   if (status) {
@@ -632,29 +693,34 @@ export function buildWbDetail(product: ProductWithContent, jobId: string): {
   keyboard: ReturnType<typeof Markup.inlineKeyboard>;
 } {
   const { wbFiltered, similarityData: sim } = product;
+  const market = buildMarketDecision(product);
   const L: string[] = [];
 
   L.push('🔎 <b>WB-рынок</b>');
   L.push('');
 
-  if ((product as any).wb429) {
-    L.push('⚠️ WB временно ограничил поиск (429). Данные рынка могут быть неполными.');
+  if (market.wb429) {
+    L.push('⚠️ WB временно ограничил поиск.');
     L.push('');
   }
 
-  if (sim && sim.totalAnalyzed > 0) {
-    const confMap: Record<string, [string, string]> = {
-      high: ['🟢', 'Высокая'], medium: ['🟡', 'Средняя'], low: ['🟠', 'Низкая'],
-      crossborder_only: ['🟤', 'Только cross-border'],
-      category_only: ['🔵', 'Только категория'], no_market: ['🔴', 'Не подтверждён'],
-    };
-    const [confIcon, confLabel] = confMap[sim.confidence ?? ''] ?? ['🔴', 'Не подтверждён'];
-    L.push(`${confIcon} Уверенность: <b>${confLabel}</b>`);
-    L.push(`Прямые локальные: ${sim.directCount ?? 0}`);
-    L.push(`Похожие локальные: ${sim.similarCount ?? 0}`);
-    if (sim.crossBorderCount) L.push(`Cross-border: ${sim.crossBorderCount} (не используем для экономики)`);
-    if (sim.categoryCount) L.push(`Широкая категория: ${sim.categoryCount}`);
+  const confMap: Record<string, [string, string]> = {
+    high: ['🟢', 'Высокая'], medium: ['🟡', 'Средняя'], low: ['🟠', 'Низкая'],
+    rate_limited: ['🟠', 'Ограничен'],
+    crossborder_only: ['🟤', 'Только cross-border'],
+    category_only: ['🔵', 'Только категория'], no_market: ['🔴', 'Не подтверждён'],
+  };
+  const [confIcon, confLabel] = confMap[market.confidence] ?? ['🔴', 'Не подтверждён'];
+  L.push(`${confIcon} Уверенность: <b>${confLabel}</b>`);
+
+  if (market.confirmedCount > 0) {
+    L.push(`Подтверждённые аналоги: ${market.confirmedCount}`);
+  } else if (market.rawCandidatesCount > 0) {
+    L.push(`Похожие карточки: ${market.rawCandidatesCount} (не подтверждены как прямые аналоги)`);
   }
+  if (market.similarCount > 0) L.push(`Похожие локальные: ${market.similarCount}`);
+  if (market.crossBorderCount > 0) L.push(`Cross-border: ${market.crossBorderCount} (не используем для экономики)`);
+  if (market.categoryCount > 0) L.push(`Широкая категория: ${market.categoryCount}`);
 
   if (wbFiltered && wbFiltered.relevantCount > 0 && wbFiltered.medianPrice > 0) {
     L.push('');
@@ -733,12 +799,14 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   L.push('');
 
   // Названия
+  const intel1688 = (product as any).intelligence;
   L.push('<b>Название CN:</b>');
-  L.push(esc(product.titleCn));
-  if (product.titleRu) {
+  L.push(esc(intel1688?.cleanTitles?.titleCnClean || product.titleCn));
+  const titleRuDisplay = intel1688?.cleanTitles?.titleRuClean || product.titleRu;
+  if (titleRuDisplay) {
     L.push('');
     L.push('<b>Название RU:</b>');
-    L.push(esc(product.titleRu));
+    L.push(esc(titleRuDisplay));
   }
 
   // Цена
