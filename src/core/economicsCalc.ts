@@ -35,6 +35,37 @@ function getSmartCargoRate(categoryHint?: string): number {
   return DEFAULTS.cargoPerKgUsd;
 }
 
+const CATEGORY_DEFAULT_WEIGHT: Record<string, number> = {
+  clothing: 0.3,
+  shoes: 0.8,
+  electronics: 0.5,
+  accessories: 0.2,
+  textile: 0.4,
+  toys: 0.3,
+  bags: 0.5,
+  default: 0.4,
+};
+
+const CLOTHING_CATS = /одежд|cloth|服|衣|裤|鞋|dress|shirt|pants|yoga|fitness|спорт|комбинезон|леггинс|топ|футболк/i;
+const SHOES_CATS = /обувь|shoe|鞋|кроссовк|ботинк|сандал|тапк/i;
+const ELECTRONICS_CATS = /электрон|electron|phone|телефон|наушник|earphone|cable|кабель|зарядк|power|камер|часы|watch/i;
+const ACCESSORIES_CATS = /аксессуар|accessor|бижутер|jewelr|кольц|серьг|браслет|чехол|case/i;
+const TEXTILE_CATS = /текстил|textile|постельн|полотенц|шторы|покрывал/i;
+const TOYS_CATS = /игрушк|toy|кукл|конструктор|puzzle/i;
+const BAGS_CATS = /сумк|bag|рюкзак|backpack|кошелёк|wallet|портфел/i;
+
+function getCategoryDefaultWeight(categoryHint?: string): { weightKg: number; category: string } {
+  if (!categoryHint) return { weightKg: CATEGORY_DEFAULT_WEIGHT.default, category: 'default' };
+  if (SHOES_CATS.test(categoryHint)) return { weightKg: CATEGORY_DEFAULT_WEIGHT.shoes, category: 'shoes' };
+  if (CLOTHING_CATS.test(categoryHint)) return { weightKg: CATEGORY_DEFAULT_WEIGHT.clothing, category: 'clothing' };
+  if (ELECTRONICS_CATS.test(categoryHint)) return { weightKg: CATEGORY_DEFAULT_WEIGHT.electronics, category: 'electronics' };
+  if (ACCESSORIES_CATS.test(categoryHint)) return { weightKg: CATEGORY_DEFAULT_WEIGHT.accessories, category: 'accessories' };
+  if (TEXTILE_CATS.test(categoryHint)) return { weightKg: CATEGORY_DEFAULT_WEIGHT.textile, category: 'textile' };
+  if (TOYS_CATS.test(categoryHint)) return { weightKg: CATEGORY_DEFAULT_WEIGHT.toys, category: 'toys' };
+  if (BAGS_CATS.test(categoryHint)) return { weightKg: CATEGORY_DEFAULT_WEIGHT.bags, category: 'bags' };
+  return { weightKg: CATEGORY_DEFAULT_WEIGHT.default, category: 'default' };
+}
+
 // ─── FX Rate ─────────────────────────────────────────────────────────────────
 
 const FALLBACK_YUAN_TO_RUB = 11.8;
@@ -82,9 +113,21 @@ function getPlatformMode(platform: string): PlatformMode {
 export async function calcEconomics(input: EconomicsInput): Promise<EconomicsResult> {
   const { platform, priceYuan, weightKg, wbMedianPrice, wbAvgPrice, categoryHint, tariffs } = input;
   const yuanToRub = await fetchYuanRate();
-  const weightMissing = !weightKg || weightKg <= 0;
+  const rawWeightMissing = !weightKg || weightKg <= 0;
   const isCustom = !!(tariffs?.cargoPerKgUsd || tariffs?.fulfillmentRub || tariffs?.taxPercent || tariffs?.targetMarginPercent || tariffs?.drrPercent);
   const platformMode = getPlatformMode(platform);
+
+  // Category default weight when real weight is missing
+  let effectiveWeight = weightKg;
+  let weightSource: 'product' | 'category_default' | 'user_input' = 'product';
+  let categoryDefaultWeightKg: number | undefined;
+  if (rawWeightMissing) {
+    const catDefault = getCategoryDefaultWeight(categoryHint);
+    effectiveWeight = catDefault.weightKg;
+    weightSource = 'category_default';
+    categoryDefaultWeightKg = catDefault.weightKg;
+  }
+  const weightMissing = rawWeightMissing;
 
   const cargoPerKgUsd = tariffs?.cargoPerKgUsd ?? getSmartCargoRate(categoryHint);
   const fulfillmentRub = tariffs?.fulfillmentRub ?? DEFAULTS.fulfillmentRub;
@@ -92,11 +135,11 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   const targetMargin = tariffs?.targetMarginPercent ?? DEFAULTS.targetMarginPercent;
   const drrPercent = tariffs?.drrPercent ?? DEFAULTS.drrPercent;
 
-  // Себестоимость (одинаково для всех платформ)
+  // Себестоимость — при отсутствии веса используем категорийный дефолт
   const purchaseRub = Math.round(priceYuan * yuanToRub);
   const bankMarkupRub = Math.round(purchaseRub * DEFAULTS.bankMarkupPercent / 100);
-  const cargoRub = weightMissing ? 0 : Math.round(weightKg * cargoPerKgUsd * USD_TO_RUB);
-  const internalLogisticsRub = weightMissing ? 0 : fulfillmentRub;
+  const cargoRub = Math.round(effectiveWeight * cargoPerKgUsd * USD_TO_RUB);
+  const internalLogisticsRub = fulfillmentRub;
   const costRub = purchaseRub + bankMarkupRub + cargoRub + internalLogisticsRub;
 
   // Для Taobao/Tmall — только себестоимость, без расчёта прибыли
@@ -112,7 +155,8 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
     return {
       yuanToRub, platformMode, breakdown, costRub,
       avgSaleRub: 0, grossProfitRub: 0, grossMarginPercent: 0, roiPercent: 0,
-      weightMissing, isCustomTariffs: isCustom, isSyntheticPrice: true,
+      weightMissing, weightSource, categoryDefaultWeightKg,
+      isCustomTariffs: isCustom, isSyntheticPrice: true,
       disclaimer,
     };
   }
@@ -149,7 +193,8 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   return {
     yuanToRub, platformMode, breakdown, costRub, avgSaleRub,
     grossProfitRub, grossMarginPercent, roiPercent,
-    weightMissing, isCustomTariffs: isCustom, isSyntheticPrice,
+    weightMissing, weightSource, categoryDefaultWeightKg,
+    isCustomTariffs: isCustom, isSyntheticPrice,
     disclaimer,
   };
 }
@@ -177,7 +222,8 @@ export function calcMaxPurchasePrice(
   const taxRub = wbMedianPrice * taxPercent / 100;
 
   const allowedCostRub = wbMedianPrice - wbCommRub - DEFAULTS.wbLogisticsRub - drrRub - taxRub - targetProfitRub;
-  const cargoRub = weightKg > 0 ? weightKg * cargoPerKgUsd * USD_TO_RUB : 0;
+  const effectiveW = weightKg > 0 ? weightKg : getCategoryDefaultWeight().weightKg;
+  const cargoRub = effectiveW * cargoPerKgUsd * USD_TO_RUB;
   const maxProductRub = allowedCostRub - cargoRub - fulfillmentRub;
   const maxYuan = maxProductRub / (yuanToRub * (1 + DEFAULTS.bankMarkupPercent / 100));
 

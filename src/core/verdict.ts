@@ -34,6 +34,9 @@ export function buildConclusion(
 
   // ─── 1688 ──────────────────────────────────────────────────────────────────
   disclaimers.push('Подтвердите цену выбранного SKU, вес с упаковкой и цену партии у поставщика.');
+  if (economics.isEstimatedPrice) {
+    disclaimers.push('Расчёт предварительный — цена взята из ориентировочных данных поставщика.');
+  }
 
   const hasStrongWb = wbFiltered && (wbFiltered.quality === 'reliable' || wbFiltered.quality === 'limited');
   const hasWeakWb = wbFiltered && wbFiltered.quality === 'unreliable' && wbFiltered.relevantCount > 0;
@@ -41,7 +44,9 @@ export function buildConclusion(
   const marginPositive = economics.grossProfitRub > 0;
   const wm = economics.weightMissing;
 
-  if (wm) {
+  if (wm && economics.categoryDefaultWeightKg) {
+    disclaimers.push(`Вес оценочный (~${Math.round(economics.categoryDefaultWeightKg * 1000)}г). Уточните реальный вес у поставщика.`);
+  } else if (wm) {
     return {
       platform,
       icon: '🟡',

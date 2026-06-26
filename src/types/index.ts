@@ -42,6 +42,8 @@ export interface NormalizedPriceInfo {
   selectedSkuPriceYuan?: number;
   priceRanges?: PriceRange[];
   rawPriceFields: string[];
+  isEstimatedPrice?: boolean;
+  estimateSource?: 'min_tiered' | 'min_sku' | 'promo' | 'direct';
 }
 
 export interface NormalizedAttributeSummaryItem {
@@ -487,8 +489,11 @@ export interface EconomicsResult {
   grossMarginPercent: number;
   roiPercent: number;
   weightMissing: boolean;
+  weightSource?: 'product' | 'category_default' | 'user_input';
+  categoryDefaultWeightKg?: number;
   isCustomTariffs: boolean;
   isSyntheticPrice: boolean;
+  isEstimatedPrice?: boolean;
   disclaimer: string;
 }
 

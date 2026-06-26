@@ -265,8 +265,29 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
   }
 
   // Fallback: если displayPrice всё ещё 0, пробуем все источники
+  let isEstimatedPrice = false;
+  let estimateSource: 'min_tiered' | 'min_sku' | 'promo' | 'direct' | undefined;
   if (displayPriceYuan <= 0) {
-    displayPriceYuan = promotionPrice ?? directPrice ?? skuPrices[0] ?? volumePrices[0] ?? 0;
+    if (volumePrices.length > 0) {
+      displayPriceYuan = Math.min(...volumePrices);
+      isEstimatedPrice = true;
+      estimateSource = 'min_tiered';
+    } else if (skuPrices.length > 0) {
+      displayPriceYuan = skuPrices[0];
+      isEstimatedPrice = true;
+      estimateSource = 'min_sku';
+    } else if (promotionPrice) {
+      displayPriceYuan = promotionPrice;
+      isEstimatedPrice = true;
+      estimateSource = 'promo';
+    } else if (directPrice) {
+      displayPriceYuan = directPrice;
+      isEstimatedPrice = true;
+      estimateSource = 'direct';
+    }
+    if (isEstimatedPrice) {
+      console.log(`[import] Estimated price: ${displayPriceYuan}¥ from ${estimateSource}`);
+    }
   }
 
   // extra_info: может быть [{key, value}, ...] или [{field1: val1}, ...]
@@ -300,6 +321,8 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
       selectedSkuPriceYuan,
       priceRanges: priceRange.length > 0 ? priceRange : undefined,
       rawPriceFields,
+      isEstimatedPrice,
+      estimateSource,
     },
     moq: json.moq ?? priceRange.find((r) => r.minQty > 0)?.minQty,
     skuCount: skus.length,

@@ -85,6 +85,19 @@ export function formatSeoText(
     L.push('');
   }
 
+  // WB-запросы для SEO
+  const wbTrends = (product as any).wbTrends as Array<{ search_words: string; weeks_request_per_day: number }> | undefined;
+  if (wbTrends?.length) {
+    L.push('## Рекомендуемые поисковые запросы WB');
+    L.push('');
+    wbTrends.slice(0, 8).forEach((t) => {
+      const rpd = t.weeks_request_per_day;
+      const label = rpd >= 1000 ? `~${(rpd / 1000).toFixed(1)}к/день` : `~${rpd}/день`;
+      L.push(`- ${t.search_words} (${label})`);
+    });
+    L.push('');
+  }
+
   if (content.isFallback) {
     L.push('> ⚠️ SEO-контент сгенерирован в упрощённом режиме. Отредактируйте перед публикацией.');
     L.push('');

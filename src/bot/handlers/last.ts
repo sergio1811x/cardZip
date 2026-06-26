@@ -1,6 +1,9 @@
 import type { Context } from 'telegraf';
-import { findLastProductByUser } from '../../db/queries/products';
+import { Markup } from 'telegraf';
+import { supabase } from '../../db/supabase';
 import { track } from '../../services/analyticsService';
+import { formatCnyRange, formatWeightKg, formatRubPrice } from '../../lib/formatters';
+import { resolvePurchasePrice } from '../../core/priceResolver';
 
 export async function handleLast(ctx: Context): Promise<void> {
   const userId = (ctx as any).dbUserId as string | undefined;
@@ -8,26 +11,85 @@ export async function handleLast(ctx: Context): Promise<void> {
 
   track(userId, 'last_used');
 
-  const product = await findLastProductByUser(userId);
-  if (!product) {
-    await ctx.reply('У тебя пока нет сохранённых товаров. Отправь ссылку на 1688 — всё сохранится автоматически.');
+  // Read from the last completed job — single source of truth
+  const { data: lastJob } = await supabase
+    .from('jobs')
+    .select('id, result_json, created_at')
+    .eq('user_id', userId)
+    .in('status', ['done', 'sent'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (!lastJob?.result_json) {
+    await ctx.reply('У вас пока нет завершённых анализов. Отправьте ссылку на товар с 1688.');
     return;
   }
 
-  const data = product.data_json as any;
-  const seoContent = data?.seoContent;
-  const wbData = data?.wbData;
+  const result = lastJob.result_json as any;
+  const raw = result.rawProduct;
+  const product = result.product;
 
-  await ctx.reply(
-    `📋 <b>Последний товар</b>\n\n` +
-      `<b>${escHtml(product.title_ru ?? product['1688_id'])}</b>\n\n` +
-      `Цена: ${product.price_yuan} ¥\n` +
-      `Вес: ${product.weight_kg} кг\n` +
-      (wbData ? `Ср. цена WB: ${wbData.avgPrice?.toLocaleString('ru-RU')} ₽\n` : '') +
-      `\nСохранён: ${new Date(product.created_at).toLocaleDateString('ru-RU')}\n\n` +
-      `Чтобы обновить данные — отправь ссылку заново.`,
-    { parse_mode: 'HTML' }
-  );
+  if (!raw) {
+    await ctx.reply('Данные последнего анализа не найдены. Отправьте ссылку заново.');
+    return;
+  }
+
+  // Use the same price resolver as the main card
+  const resolved = resolvePurchasePrice(raw);
+  const priceLabel = resolved.displayLabel;
+  const weightLabel = formatWeightKg(raw.weightKg);
+
+  // WB market data from the saved analysis (same source as main card)
+  const wbFiltered = product?.wbFiltered;
+  const wbMedian = wbFiltered?.medianPrice;
+
+  const title = product?.titleRu || raw.titleCn || raw.productId;
+  const date = new Date(lastJob.created_at).toLocaleDateString('ru-RU');
+
+  const lines: string[] = [];
+  lines.push(`📋 <b>Последний анализ</b>`);
+  lines.push('');
+  lines.push(`<b>${escHtml(title)}</b>`);
+  lines.push('');
+  lines.push(`Цена: ${priceLabel}`);
+  lines.push(`Вес: ${weightLabel}`);
+  if (wbMedian && wbMedian > 0) {
+    lines.push(`Медиана WB: ${formatRubPrice(wbMedian)}`);
+  }
+
+  // Economics summary from saved data
+  const economics = product?.economics;
+  if (economics?.costRub > 0) {
+    const prefix = economics.weightMissing ? '~' : '';
+    lines.push(`Себестоимость: ${prefix}${formatRubPrice(economics.costRub)}`);
+    if (economics.roiPercent && !economics.isSyntheticPrice && !economics.weightMissing) {
+      lines.push(`ROI: ${economics.roiPercent}%`);
+    }
+  }
+
+  lines.push('');
+  lines.push(`Анализ от ${date}`);
+
+  const buttons: any[][] = [
+    [
+      Markup.button.callback('📦 Данные 1688', `product_detail_${lastJob.id}`),
+      Markup.button.callback('🔎 WB-рынок', `wb_detail_${lastJob.id}`),
+    ],
+    [
+      Markup.button.callback('💰 Экономика', `econ_detail_${lastJob.id}`),
+      Markup.button.callback('💬 Поставщику', 'supplier_questions'),
+    ],
+    [
+      Markup.button.callback('📎 Файлы', `materials_${lastJob.id}`),
+      Markup.button.callback('🔄 Новый товар', 'new_search'),
+    ],
+  ];
+
+  await ctx.reply(lines.join('\n'), {
+    parse_mode: 'HTML',
+    ...Markup.inlineKeyboard(buttons),
+  });
 }
 
 function escHtml(str: string): string {

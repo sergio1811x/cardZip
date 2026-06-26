@@ -1,6 +1,8 @@
 import type { RawProduct1688, AiContentResult, EconomicsResult, RiskFlags, BudgetScenarios, PlatformConclusion, ProductIntelligence } from '../types';
 import { getCategoryChecklist } from './categoryChecklist';
 import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryType } from './categoryRules';
+import { resolvePurchasePrice } from './priceResolver';
+import { formatWeightKg } from '../lib/formatters';
 
 const PLATFORM_STATUS: Record<string, string> = {
   '1688': 'закупочная гипотеза',
@@ -64,12 +66,17 @@ export function formatOrderBrief(
   // Закупка
   L.push('## 💰 Параметры закупки');
   L.push('');
-  L.push(`**Цена:** ${pricing?.displayPriceYuan ?? product.priceYuan} ¥ (~${economics.breakdown.purchaseRub} ₽)`);
-  if (pricing?.quoteType) L.push(`**Тип котировки:** ${pricing.quoteType}`);
+  const resolvedPrice = resolvePurchasePrice(product);
+  const priceDisplay = resolvedPrice.valueCny
+    ? `${resolvedPrice.displayLabel} (~${economics.breakdown.purchaseRub} ₽)`
+    : '— (уточнить у поставщика)';
+  L.push(`**Цена:** ${priceDisplay}`);
+  if (resolvedPrice.isEstimated) L.push(`**Источник цены:** ${resolvedPrice.source === 'discount_tier_min' ? 'минимальная tier-цена' : resolvedPrice.source}`);
   L.push(`**Статус цены:** ${PLATFORM_STATUS[product.platform]}`);
   L.push(`**MOQ:** ${normalized?.moq ?? product.moq} шт.`);
-  if ((normalized?.weightKg ?? product.weightKg) > 0) {
-    L.push(`**Вес единицы:** ${normalized?.weightKg ?? product.weightKg} кг`);
+  const weightDisplay = formatWeightKg(normalized?.weightKg ?? product.weightKg);
+  if (weightDisplay !== '—') {
+    L.push(`**Вес единицы:** ${weightDisplay}`);
   } else {
     L.push('**Вес:** ⚠️ Не указан — уточнить у поставщика!');
   }
@@ -241,7 +248,17 @@ export function formatOrderBrief(
   // Экономика
   L.push('## 📊 Расчёт (справочно)');
   L.push('');
-  if (economics.weightMissing) {
+  if (economics.weightMissing && economics.categoryDefaultWeightKg) {
+    L.push(`**Статус экономики: ОЦЕНОЧНАЯ** (вес ~${Math.round(economics.categoryDefaultWeightKg * 1000)}г по категории)`);
+    L.push('');
+    L.push(`- Себестоимость: ~${economics.costRub} ₽ (вес оценочный)`);
+    L.push(`- Курс: 1 ¥ = ${economics.yuanToRub.toFixed(2)} ₽`);
+    if (economics.platformMode === 'full' && !economics.isSyntheticPrice) {
+      L.push(`- Цена продажи (медиана WB): ${economics.avgSaleRub} ₽`);
+      L.push(`- Ориентировочная прибыль: ${economics.grossProfitRub} ₽`);
+      L.push(`- ROI: ~${economics.roiPercent}% (уточнить после получения веса)`);
+    }
+  } else if (economics.weightMissing) {
     L.push('**Статус экономики: НЕПОЛНАЯ**');
     L.push('**Причина:** отсутствует вес товара с упаковкой.');
     L.push('');
@@ -262,7 +279,13 @@ export function formatOrderBrief(
   L.push('### Допущения расчёта');
   L.push('');
   L.push(`- Банковская комиссия: ${economics.breakdown.bankMarkupRub > 0 ? '3%' : 'не учтена'}`);
-  L.push(`- Карго: ${economics.weightMissing ? 'не учтено (нет веса)' : economics.breakdown.cargoRub + ' ₽'}`);
+  if (economics.weightMissing && economics.categoryDefaultWeightKg) {
+    L.push(`- Карго: ~${economics.breakdown.cargoRub} ₽ (вес ~${economics.categoryDefaultWeightKg} кг, оценочно)`);
+  } else if (economics.weightMissing) {
+    L.push(`- Карго: не учтено (нет веса)`);
+  } else {
+    L.push(`- Карго: ${economics.breakdown.cargoRub} ₽`);
+  }
   L.push(`- Фулфилмент: ${economics.breakdown.internalLogisticsRub} ₽`);
   L.push(`- Комиссия WB: 20%`);
   L.push(`- ДРР: ${economics.breakdown.drrPercent}%`);

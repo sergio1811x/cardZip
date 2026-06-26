@@ -120,31 +120,39 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
   const result = job.result_json as any;
   const product = result?.product as ProductWithContent | undefined;
   const generatedFiles = result?.generatedFiles;
-  const prefix = product?.productId?.slice(-8) ?? Date.now().toString().slice(-8);
+  const offerId = product?.productId?.slice(-8) ?? Date.now().toString().slice(-8);
+  const shortTitle = (product?.titleRu ?? '')
+    .replace(/[^\w\sа-яёА-ЯЁ-]/g, '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 4)
+    .join('_')
+    .substring(0, 40) || offerId;
+  const prefix = `${shortTitle}_${offerId}`;
 
   // SEO-карточка
   if (generatedFiles?.seoText) {
     await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
-      Buffer.from(generatedFiles.seoText, 'utf-8'), `wb_card_${prefix}.md`
+      Buffer.from(generatedFiles.seoText, 'utf-8'), `Карточка_WB_${prefix}.md`
     )).catch(() => {});
   } else if (product?.seoContent) {
     const safeFlags = product.riskFlags ?? {} as any;
     const text = formatSeoText(product, product.seoContent, safeFlags);
     await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
-      Buffer.from(text, 'utf-8'), `wb_card_${prefix}.md`
+      Buffer.from(text, 'utf-8'), `Карточка_WB_${prefix}.md`
     )).catch(() => {});
   }
 
   // ТЗ байеру
   if (generatedFiles?.briefText) {
     await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
-      Buffer.from(generatedFiles.briefText, 'utf-8'), `buyer_brief_${prefix}.md`
+      Buffer.from(generatedFiles.briefText, 'utf-8'), `ТЗ_байеру_${prefix}.md`
     )).catch(() => {});
   } else if (product?.seoContent && product?.economics) {
     const safeFlags = product.riskFlags ?? {} as any;
     const text = formatOrderBrief(product, product.seoContent, product.economics, safeFlags, job.input_url, product.budgets, product.conclusion);
     await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
-      Buffer.from(text, 'utf-8'), `buyer_brief_${prefix}.md`
+      Buffer.from(text, 'utf-8'), `ТЗ_байеру_${prefix}.md`
     )).catch(() => {});
   }
 
@@ -153,7 +161,7 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
   if (imageUrls?.length) {
     const zip = await zipBuilder.buildFromUrls(imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null);
     if (zip) {
-      await ctx.telegram.sendDocument(chatId, Input.fromBuffer(zip, `photos_${prefix}.zip`)).catch(() => {});
+      await ctx.telegram.sendDocument(chatId, Input.fromBuffer(zip, `Фото_1688_${prefix}.zip`)).catch(() => {});
     }
   }
 }

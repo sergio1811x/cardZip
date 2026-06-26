@@ -2,6 +2,8 @@ import { Markup } from 'telegraf';
 import type { ProductWithContent, SubscriptionStatus, ProductAttribute, PriceRange } from '../types';
 import type { WbCategory } from '../db/queries/wbCategories';
 import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryType } from './categoryRules';
+import { resolvePurchasePrice, type ResolvedPurchasePrice } from './priceResolver';
+import { formatWeightKg as fmtWeight, formatCnyPrice as fmtCny, formatRubPrice as fmtRub } from '../lib/formatters';
 
 function esc(s: unknown): string {
   const str = String(s ?? '');
@@ -160,7 +162,7 @@ const SUPPLIER_TYPE_RU: Record<string, string> = {
 };
 
 function fWeight(w: number): string {
-  if (w <= 0) return 'не указан';
+  if (!w || w <= 0) return '—';
   return `~${w.toFixed(2)} кг`;
 }
 
@@ -276,15 +278,16 @@ function buildMarketDecision(product: ProductWithContent): MarketDecision {
 }
 
 function buildPriceDecision(product: ProductWithContent): PriceDecision {
-  const priceIsZero = !product.priceYuan || product.priceYuan <= 0;
+  const resolved = resolvePurchasePrice(product);
+  const priceIsZero = resolved.valueCny === null;
   const skuNotLoaded = product.normalized1688?.pricing?.quoteType === 'by_sku' && (!product.skus?.length);
-  const priceUnreliable = !priceIsZero && (skuNotLoaded || (product.economics?.isSyntheticPrice ?? false));
-  const displayPrice = formatPriceDisplay(product);
+  const priceUnreliable = !priceIsZero && (resolved.isEstimated || resolved.needsSkuConfirmation);
+  const displayPrice = resolved.displayLabel;
 
   let reason = '';
   if (priceIsZero) reason = 'цена не распознана';
+  else if (resolved.isEstimated) reason = `ориентир от ${resolved.source === 'discount_tier_min' ? 'мин. tier-цены' : resolved.source}`;
   else if (skuNotLoaded) reason = 'цена SKU не подтверждена';
-  else if (product.economics?.isSyntheticPrice) reason = 'цена синтетическая';
 
   return { priceIsZero, priceUnreliable, skuNotLoaded, displayPrice, reason };
 }
@@ -311,6 +314,8 @@ export function buildMainMessage(
   const wm = economics.weightMissing;
   const market = buildMarketDecision(product);
   const priceDec = buildPriceDecision(product);
+  const resolved = resolvePurchasePrice(product);
+  const isEstPrice = resolved.isEstimated;
   const L: string[] = [];
 
   // ─── Товар ──────────────────────────────────────────────────────────────────
@@ -318,15 +323,22 @@ export function buildMainMessage(
   L.push(`📦 <b>${esc(displayTitle)}</b>`);
   L.push('');
   L.push(`Источник: ${PLATFORM_LABELS[product.platform] ?? product.platform}`);
-
-  if (priceDec.displayPrice === 'нужно уточнить') {
-    L.push('Цена: нужно уточнить');
-  } else if (economics.breakdown?.purchaseRub > 0 && !priceDec.displayPrice.startsWith('от ')) {
-    L.push(`Цена: ${priceDec.displayPrice} ≈ ${fP(economics.breakdown.purchaseRub)}`);
+  if (resolved.valueCny === null) {
+    L.push('Цена: —');
+  } else if (economics.breakdown?.purchaseRub > 0) {
+    L.push(`Цена: ${resolved.displayLabel} ≈ ${fP(economics.breakdown.purchaseRub)}`);
   } else {
-    L.push(`Цена: ${priceDec.displayPrice}`);
+    L.push(`Цена: ${resolved.displayLabel}`);
   }
-  if (product.supplierName) L.push(`Поставщик: ${esc(product.supplierName)}`);
+  if (product.supplierName) {
+    const supplierDisplay = /[一-鿿]/.test(product.supplierName) ? undefined : product.supplierName;
+    const supplierType = SUPPLIER_TYPE_RU[product.normalized1688?.supplierType ?? product.supplierType ?? ''];
+    if (supplierDisplay) {
+      L.push(`Поставщик: ${esc(supplierDisplay)}`);
+    } else if (supplierType) {
+      L.push(`Поставщик: ${supplierType}`);
+    }
+  }
 
   // ─── Данные 1688 (выжимка) ─────────────────────────────────────────────────
   L.push('');
@@ -365,7 +377,7 @@ export function buildMainMessage(
     L.push('• SKU: не предусмотрены');
   }
   L.push(`• Фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
-  L.push(`• Вес: ${fWeight(product.weightKg)}`);
+  L.push(`• Вес: ${fmtWeight(product.weightKg)}`);
 
   // Группированные атрибуты (без дублей)
   const catForbidden = getCategoryRules(catType).forbiddenFields;
@@ -404,20 +416,20 @@ export function buildMainMessage(
     L.push('🟡 <b>Статус: нужны данные</b>');
   } else if (market.wb429) {
     L.push('🟡 <b>Статус: WB-поиск ограничен</b>');
-  } else if (priceDec.priceUnreliable) {
-    L.push('🟡 <b>Статус: расчёт недостоверен</b>');
-  } else if (wm && !market.canShowMedianPrice) {
-    L.push('🟡 <b>Статус: нужны данные</b>');
   } else if (!market.canShowMedianPrice) {
     L.push('🟡 <b>Статус: рынок не подтверждён</b>');
+  } else if (economics.grossProfitRub <= 0 && !wm) {
+    L.push('🔴 <b>Статус: экономика слабая</b>');
+  } else if (wm && economics.categoryDefaultWeightKg && economics.grossProfitRub > 0) {
+    L.push('🟡 <b>Статус: предварительно положительный</b>');
   } else if (wm) {
-    L.push('🟡 <b>Статус: нужен вес</b>');
+    L.push('🟡 <b>Статус: уточните вес</b>');
+  } else if (isEstPrice) {
+    L.push('🟡 <b>Статус: подтвердите цену</b>');
   } else if (market.confirmedCount < 5) {
     L.push('🟡 <b>Статус: можно изучать</b>');
-  } else if (economics.grossProfitRub > 0 && market.confirmedCount >= 5) {
+  } else if (economics.grossProfitRub > 0) {
     L.push('🟢 <b>Статус: можно тестировать</b>');
-  } else if (economics.grossProfitRub <= 0) {
-    L.push('🔴 <b>Статус: экономика слабая</b>');
   } else {
     L.push('🟡 <b>Статус: нужны данные</b>');
   }
@@ -429,13 +441,18 @@ export function buildMainMessage(
     L.push('WB временно ограничил поиск.');
     L.push('Прямые аналоги не подтверждены.');
   } else if (market.canShowMedianPrice) {
-    L.push(`Подтверждённые аналоги: ${market.confirmedCount}`);
+    if (market.rawCandidatesCount > market.confirmedCount) {
+      L.push(`🎯 Прямые аналоги: ${market.confirmedCount} локальных (из ${market.rawCandidatesCount} найденных)`);
+    } else {
+      L.push(`🎯 Прямые аналоги: ${market.confirmedCount}`);
+    }
     L.push(`Медиана цены: ${fP(market.medianPrice)}`);
     if (wbFiltered) {
       const demand = wbFiltered.totalFeedbacks > 1000 ? 'высокий' : wbFiltered.totalFeedbacks > 100 ? 'средний' : 'низкий';
       const comp = market.confirmedCount > 50 ? 'высокая' : market.confirmedCount > 20 ? 'средняя' : 'низкая';
       L.push(`Спрос: ${demand} · Конкуренция: ${comp}`);
     }
+    if (market.crossBorderCount > 0) L.push(`Cross-border: ${market.crossBorderCount} (не для экономики)`);
     if (market.confirmedCount < 5) L.push('<i>Выборка ограничена.</i>');
   } else if (market.rawCandidatesCount > 0) {
     L.push(`Найдено ${market.rawCandidatesCount} похожих карточек, но прямые аналоги не подтверждены.`);
@@ -470,7 +487,7 @@ export function buildMainMessage(
     });
     const maxFreq = Math.max(...wbTrends.slice(0, 5).map((t) => t.weeks_request_per_day));
     if (maxFreq < 500) {
-      L.push('<i>Ниша узкая — спрос по точным запросам низкий.</i>');
+      L.push('<i>Точные запросы узкие — тестировать осторожно, 20–50 шт.</i>');
     }
   }
 
@@ -478,16 +495,21 @@ export function buildMainMessage(
   L.push('');
   L.push('💰 <b>Экономика</b>');
   if (priceDec.priceIsZero) {
-    L.push('Не рассчитана — цена не распознана.');
+    L.push('Не рассчитана — нет видимых цен поставщика.');
+    L.push('Нажмите «💬 Поставщику» → уточните цену → «📥 Внести ответ».');
   } else if (economics.platformMode === 'full') {
+    if (resolved.isEstimated) {
+      const srcLabel = resolved.source === 'discount_tier_min' ? 'мин. из оптовых порогов' : resolved.source === 'explicit_sku_price' ? 'мин. SKU' : 'промо-цена';
+      L.push(`<i>⚠️ Расчёт предварительный от ${resolved.valueCny}¥ (${srcLabel})</i>`);
+    }
     if (wm) {
-      L.push(`Предварительно без карго. Себестоимость без карго: ${fP(economics.costRub)}`);
-      L.push('Вес не указан — карго, маржа и ROI не рассчитаны.');
-      L.push('');
-      L.push('<i>Ориентир по весу:');
-      L.push('• до 300 г — интересно');
-      L.push('• 300–500 г — осторожно');
-      L.push('• выше 500 г — маржа может просесть</i>');
+      const catW = economics.categoryDefaultWeightKg;
+      if (catW) {
+        L.push(`Себестоимость: ~${fP(economics.costRub)} (вес ~${Math.round(catW * 1000)}г по категории)`);
+      } else {
+        L.push(`Себестоимость без карго: ${fP(economics.costRub)}`);
+      }
+      L.push('<i>⚖️ Вес оценочный — уточните у поставщика для точного расчёта.</i>');
     } else if (priceDec.priceUnreliable) {
       L.push(`Себестоимость: ~${fP(economics.costRub)} (ориентировочно).`);
       L.push(`Расчёт недостоверен — ${priceDec.reason}.`);
@@ -587,27 +609,43 @@ export function buildMainMessage(
 }
 
 function buildSmartVerdict(wm: boolean, hasAnalogs: boolean, profit: number, mode: string, priceZero: boolean, hasWbCategory: boolean, confirmedCount: number, wb429: boolean, priceUnreliable?: boolean): string {
-  if (mode === 'reference_only') return 'Этот товар — брендовый референс. Найдите OEM-аналог на 1688.';
+  if (mode === 'reference_only') return 'Брендовый референс. Найдите OEM-аналог на 1688.';
   if (mode === 'sample_only') return 'Закажите образец и запросите оптовую цену для расчёта партии.';
-  if (priceZero) return 'Цена не распознана. Уточните цену SKU у поставщика.';
   if (wb429) return 'WB временно ограничил поиск. Попробуйте повторить анализ позже.';
-  if (priceUnreliable) return 'Расчёт недостоверен. Сначала подтвердите цену выбранного SKU у поставщика.';
+
+  if (priceZero) {
+    return 'Нет видимых цен поставщика.\n\nЧто сделать:\n1. Нажмите «💬 Поставщику»\n2. Отправьте вопросы\n3. Нажмите «📥 Внести ответ» — пересчитаю экономику';
+  }
+
+  if (priceUnreliable) {
+    return 'Расчёт предварительный — финальная цена зависит от выбранного SKU.\n\nЧто сделать:\n1. Нажмите «💬 Поставщику»\n2. Уточните цену выбранного SKU и вес\n3. Нажмите «📥 Внести ответ» — пересчитаю экономику';
+  }
 
   if (!hasAnalogs && hasWbCategory) {
-    if (wm) return 'Категория WB найдена, но нужны данные. Уточните вес и повторите расчёт.';
     return 'Категория WB найдена, но прямые аналоги не подтверждены. Проверьте похожие товары на WB вручную.';
   }
 
-  if (wm && !hasAnalogs) return 'Для оценки нужны вес и подтверждённые WB-аналоги.';
-  if (wm) return 'Уточните вес у поставщика — после этого бот рассчитает полную экономику.';
-  if (!hasAnalogs) return 'Прямые аналоги на WB не подтверждены. Проверьте рынок вручную.';
+  if (wm && !hasAnalogs) {
+    return 'Для точной оценки нужен вес и подтверждённые аналоги WB.\n\nЧто сделать:\n1. Нажмите «💬 Поставщику» — уточните вес\n2. Нажмите «📥 Внести ответ» — пересчитаю';
+  }
+
+  if (wm) {
+    return 'Расчёт по оценочному весу — уточните у поставщика.\n\nЧто сделать:\n1. Нажмите «💬 Поставщику» — уточните вес с упаковкой\n2. Нажмите «📥 Внести ответ» — пересчитаю точный ROI';
+  }
+
+  if (!hasAnalogs) return 'Прямые аналоги на WB не подтверждены. Проверьте рынок вручную перед закупкой.';
+
   if (confirmedCount > 0 && confirmedCount < 5) {
     return profit > 0
-      ? 'Аналоги найдены, но выборка ограничена. Экономика ориентировочная.'
-      : 'Аналоги найдены, но экономика слабая. Попробуйте договориться о лучшей цене.';
+      ? 'Аналоги найдены (выборка ограничена). Экономика ориентировочная — можно изучать.\n\nНажмите «📎 Файлы» → ТЗ для байера.'
+      : 'Аналоги найдены, но маржа слабая. Попробуйте уточнить цену через «💬 Поставщику».';
   }
-  if (profit > 0) return 'Экономика положительная. Можно заказывать тестовую партию.';
-  return 'Экономика слабая. Попробуйте договориться о лучшей цене или выбрать другой товар.';
+
+  if (profit > 0) {
+    return 'Можно тестировать осторожно: 20–50 шт после подтверждения SKU.\n\nНажмите «📎 Файлы» → скачайте ТЗ для байера.';
+  }
+
+  return 'Маржа слабая по текущим данным.\n\nЧто сделать:\n1. Запросите лучшую цену через «💬 Поставщику»\n2. Или найдите аналог дешевле';
 }
 
 // ─── Экономика (по кнопке) ──────────────────────────────────────────────────
@@ -628,47 +666,51 @@ export function buildEconomicsDetail(product: ProductWithContent, jobId: string)
   L.push('');
 
   if (economics.platformMode === 'full') {
-    if (wm) {
+    if (wm && economics.categoryDefaultWeightKg) {
+      L.push(`Расчёт по оценочному весу ~${Math.round(economics.categoryDefaultWeightKg * 1000)}г (категория товара).`);
+      L.push('<i>Уточните вес у поставщика для точного расчёта.</i>');
+      L.push('');
+    } else if (wm) {
       L.push('Расчёт предварительный: нет веса товара.');
       L.push('');
     }
 
-    // Объясняем разницу цен, если priceRange
-    if (product.priceRange?.length) {
-      const valid = product.priceRange.filter((r) => r.minQty > 0);
-      if (valid.length) {
-        const minPrice = valid[valid.length - 1].price;
-        if (minPrice !== b.purchaseYuan) {
-          L.push(`Цена товара: от ${minPrice} ¥`);
-          L.push(`Расчётный SKU: ${b.purchaseYuan} ¥ ≈ ${fP(b.purchaseRub)}`);
-        } else {
-          L.push(`Закупка: ${b.purchaseYuan} ¥ × ${economics.yuanToRub.toFixed(2)} = ${fP(b.purchaseRub)}`);
-        }
+    // Цена закупки с учётом resolved price
+    const resolvedForEcon = resolvePurchasePrice(product);
+    if (b.purchaseYuan > 0) {
+      if (resolvedForEcon.isEstimated && resolvedForEcon.minCny && resolvedForEcon.maxCny && resolvedForEcon.minCny !== resolvedForEcon.maxCny) {
+        L.push(`Цена поставщика: ${resolvedForEcon.displayLabel}`);
+        L.push(`Расчёт от: ${b.purchaseYuan} ¥ ≈ ${fP(b.purchaseRub)}`);
       } else {
         L.push(`Закупка: ${b.purchaseYuan} ¥ × ${economics.yuanToRub.toFixed(2)} = ${fP(b.purchaseRub)}`);
       }
     } else {
-      L.push(`Закупка: ${b.purchaseYuan} ¥ × ${economics.yuanToRub.toFixed(2)} = ${fP(b.purchaseRub)}`);
+      L.push('Закупка: —');
     }
 
     L.push(`Банк / обмен: +${fP(b.bankMarkupRub)}`);
     if (!wm) {
       L.push(`Карго (${product.weightKg} кг): +${fP(b.cargoRub)}`);
+    } else if (economics.categoryDefaultWeightKg) {
+      L.push(`Карго (~${economics.categoryDefaultWeightKg} кг, оценочно): +${fP(b.cargoRub)}`);
     }
     L.push(`Фулфилмент: +${fP(b.internalLogisticsRub)}`);
     L.push('');
-    L.push(`<b>Себестоимость${wm ? ' без карго' : ''}: ${fP(economics.costRub)}</b>`);
+    const costLabel = wm && !economics.categoryDefaultWeightKg ? 'Себестоимость без карго' : wm ? 'Себестоимость (вес оценочный)' : 'Себестоимость';
+    L.push(`<b>${costLabel}: ${fP(economics.costRub)}</b>`);
 
     // Что не рассчитано
-    if (wm || !hasConfirmedAnalogs || economics.isSyntheticPrice) {
+    if ((!hasConfirmedAnalogs || economics.isSyntheticPrice) && !(wm && economics.categoryDefaultWeightKg)) {
       const missing: string[] = [];
-      if (wm) missing.push('карго — нет веса');
+      if (wm && !economics.categoryDefaultWeightKg) missing.push('карго — нет веса');
       if (!hasConfirmedAnalogs || economics.isSyntheticPrice) missing.push('маржа — нет подтверждённой цены WB');
-      if (wm || !hasConfirmedAnalogs) missing.push('ROI — нет ' + [wm ? 'веса' : '', !hasConfirmedAnalogs ? 'рынка WB' : ''].filter(Boolean).join(' и '));
+      if ((!hasConfirmedAnalogs) && !(wm && economics.categoryDefaultWeightKg)) missing.push('ROI — нет ' + (!hasConfirmedAnalogs ? 'рынка WB' : 'данных'));
 
-      L.push('');
-      L.push('<b>Не рассчитано:</b>');
-      missing.forEach((m) => L.push(`• ${m}`));
+      if (missing.length) {
+        L.push('');
+        L.push('<b>Не рассчитано:</b>');
+        missing.forEach((m) => L.push(`• ${m}`));
+      }
     }
 
     // Полные сценарии
@@ -725,9 +767,12 @@ export function buildEconomicsDetail(product: ProductWithContent, jobId: string)
     L.push('<i>Брендовый референс. Найдите OEM-аналог на 1688.</i>');
   }
 
-  if (wm || !hasConfirmedAnalogs) {
+  if (wm && !economics.categoryDefaultWeightKg) {
     L.push('');
     L.push('📌 Для полного расчёта нужен вес с упаковкой.');
+  } else if (wm && economics.categoryDefaultWeightKg) {
+    L.push('');
+    L.push(`📌 Вес оценочный (~${Math.round(economics.categoryDefaultWeightKg * 1000)}г). Уточните у поставщика для точного расчёта.`);
   }
 
   const buttons = [
@@ -862,13 +907,14 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
     L.push(esc(titleRuDisplay));
   }
 
-  // Цена
+  // Цена — через resolver
+  const resolved1688 = resolvePurchasePrice(product);
   L.push('');
   L.push('<b>Цена:</b>');
-  if (product.priceYuan > 0) {
-    L.push(`• базовая: ${product.priceYuan} ¥`);
+  if (resolved1688.valueCny) {
+    L.push(`• ${resolved1688.displayLabel}`);
   } else {
-    L.push('• базовая: не распознана');
+    L.push('• —');
   }
   if (normalized?.pricing?.skuMinPriceYuan && normalized?.pricing?.skuMaxPriceYuan) {
     const min = normalized.pricing.skuMinPriceYuan;
@@ -912,7 +958,8 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
   // Поставщик
   L.push('');
   L.push('<b>Поставщик:</b>');
-  L.push(`• название: ${esc(product.supplierName)}`);
+  const supplierNameClean = /[一-鿿]/.test(product.supplierName) ? `(${SUPPLIER_TYPE_RU[normalized?.supplierType ?? product.supplierType ?? ''] ?? 'продавец'})` : esc(product.supplierName);
+  L.push(`• название: ${supplierNameClean}`);
   L.push(`• тип: ${SUPPLIER_TYPE_RU[normalized?.supplierType ?? product.supplierType ?? ''] ?? 'не указан'}`);
   if (product.supplierRating) L.push(`• рейтинг: ${product.supplierRating}/5`);
   if (product.sold) L.push(`• заказов: ${fN(product.sold)}+`);
@@ -923,24 +970,40 @@ export function build1688Detail(product: ProductWithContent, jobId: string): {
     L.push('');
     L.push('<b>Характеристики:</b>');
     let shownCount = 0;
+    const seenAttrKeys = new Set<string>();
+    const seenAttrValues = new Map<string, Set<string>>();
     for (const a of product.attributes) {
       if (shownCount >= 10) break;
       if (isJunkAttrValue(a.value)) continue;
       const ruName = translateAttrName(a.name);
       const ruVal = translateAttrValue(a.value);
       const displayName = ruName ?? a.name;
-      // Filter out untranslated Chinese from both name and value
       if (hasUntranslatedChinese(ruVal) || (!ruName && hasUntranslatedChinese(a.name))) continue;
-      L.push(`• ${esc(displayName)}: ${esc(ruVal)}`);
+      // Dedup: skip if same name+value already shown
+      const key = displayName.toLowerCase();
+      const valLower = ruVal.toLowerCase();
+      if (!seenAttrValues.has(key)) seenAttrValues.set(key, new Set());
+      if (seenAttrValues.get(key)!.has(valLower)) continue;
+      seenAttrValues.get(key)!.add(valLower);
+      // Group same-name attrs into one line
+      if (seenAttrKeys.has(key)) continue;
+      const allVals = product.attributes
+        .filter(b => (translateAttrName(b.name) ?? b.name).toLowerCase() === key && !isJunkAttrValue(b.value))
+        .map(b => translateAttrValue(b.value))
+        .filter(v => !hasUntranslatedChinese(v));
+      const uniqueVals = [...new Set(allVals.map(v => v.toLowerCase()))].map(v => allVals.find(a => a.toLowerCase() === v)!);
+      seenAttrKeys.add(key);
+      L.push(`• ${esc(displayName)}: ${esc(uniqueVals.join(', '))}`);
       shownCount++;
     }
-    if (product.attributes.length > shownCount) L.push(`<i>и ещё ${product.attributes.length - shownCount} атрибутов</i>`);
+    const hiddenCount = product.attributes.length - shownCount;
+    if (hiddenCount > 0) L.push(`<i>и ещё ${hiddenCount} атрибутов</i>`);
   }
 
   // Логистика
   L.push('');
   L.push('<b>Логистика:</b>');
-  L.push(`• вес: ${fWeight(product.weightKg)}`);
+  L.push(`• вес: ${fmtWeight(product.weightKg)}`);
   L.push(`• фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
   if (product.stock) L.push(`• остаток: ${fN(product.stock)} шт`);
 
