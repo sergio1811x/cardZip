@@ -165,8 +165,8 @@ function buildAttributes(attributes: ElimResponse['attributes']): ProductAttribu
     .map((a) => ({ name: a.name!, value: a.value! }));
 }
 
-function buildSkus(skus: ElimResponse['skus']): ProductSku[] {
-  return (skus ?? [])
+function buildSkus(skus: ElimResponse['skus'], attributes?: ElimResponse['attributes']): ProductSku[] {
+  const result = (skus ?? [])
     .filter((s) => s.name)
     .map((s) => ({
       name: s.name!,
@@ -174,6 +174,20 @@ function buildSkus(skus: ElimResponse['skus']): ProductSku[] {
       stock: s.quantity,
       image: s.pic_url,
     }));
+
+  // If all SKU names are raw codes (e.g. "0:5"), try to replace with color names from attributes
+  const allRawCodes = result.length > 0 && result.every(s => /^\d+:\d+(;\d+:\d+)*$/.test(s.name));
+  if (allRawCodes && attributes?.length) {
+    const colorAttr = attributes.find(a => a.name && /颜色|color|цвет/i.test(a.name));
+    const colorValues = colorAttr?.value?.split(/[,，、;；\s/]+/).map(s => s.trim()).filter(Boolean) ?? [];
+    if (colorValues.length > 0) {
+      result.forEach((sku, i) => {
+        if (i < colorValues.length) sku.name = colorValues[i];
+      });
+    }
+  }
+
+  return result;
 }
 
 function pickKeyAttributes(categoryName: string | undefined, attributes: ProductAttribute[]): Array<{ label: string; value: string }> {
@@ -218,7 +232,7 @@ function pickKeyAttributes(categoryName: string | undefined, attributes: Product
 function buildNormalizedProduct(json: ElimResponse, platform: Platform, productId: string): RawProduct1688 {
   const images = (json.img_urls ?? []).slice(0, 15);
   const attributes = buildAttributes(json.attributes);
-  const skus = buildSkus(json.skus);
+  const skus = buildSkus(json.skus, json.attributes);
   const priceRange = buildPriceRanges(json.price_range);
   const quoteType = mapQuoteType(json.quote_type, skus.length > 0, priceRange.length > 0);
   const rawPriceFields = [
