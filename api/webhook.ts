@@ -129,16 +129,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
 
       const host = req.headers.host || 'card-zip.vercel.app';
-      const sent = await callStep(host, '/api/step1-elim', { jobId: job.id });
-
-      if (!sent) {
-        await bot.telegram.editMessageText(
-          msg.chat.id, progressMsg.message_id, undefined,
-          '❌ Не удалось запустить обработку. Попробуй ещё раз.',
-          { parse_mode: 'HTML' }
-        ).catch(() => {});
-        await supabase.from('jobs').update({ status: 'failed', error: 'step1_trigger_failed' }).eq('id', job.id);
-      }
+      // Fire-and-forget — не ждём ответа, не фейлим job при таймауте
+      callStep(host, '/api/step1-elim', { jobId: job.id }).catch(() => {});
     } catch (e) {
       console.error('[webhook] URL pipeline:', e);
     }
