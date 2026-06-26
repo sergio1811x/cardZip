@@ -1,7 +1,7 @@
 import type { RawProduct1688, Platform, ProductAttribute, ProductSku, PriceRange } from '../types';
 
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
-const RAPIDAPI_HOST = 'ecomm-datahub-1688-datahub-v1.p.rapidapi.com';
+const RAPIDAPI_HOST = '1688-datahub.p.rapidapi.com';
 
 interface RapidApiResponse {
   result?: {
