@@ -2,6 +2,27 @@ import { supabase } from '../db/supabase';
 import { redis } from './redis';
 import { Telegraf } from 'telegraf';
 
+function getUserMessage(errorMsg: string): string {
+  const lower = errorMsg.toLowerCase();
+
+  if (lower.includes('не удалось распознать url') || lower.includes('invalid_url'))
+    return '❌ Эта ссылка не на товар.\n\nБот работает только со ссылками на конкретный товар с 1688, Taobao или Tmall.\nСсылки на подборки, магазины и категории не поддерживаются.';
+
+  if (lower.includes('elim') && (lower.includes('timeout') || lower.includes('не ответил')))
+    return '❌ Сервис парсинга не отвечает.\n\nПопробуйте через 1–2 минуты.\nКредит не списан.';
+
+  if (lower.includes('elim') && lower.includes('401'))
+    return '❌ Ошибка доступа к парсеру.\n\nМы уже знаем о проблеме. Попробуйте позже.\nКредит не списан.';
+
+  if (lower.includes('товар не найден') || lower.includes('ссылка устарела'))
+    return '❌ Товар не найден.\n\nСсылка могла устареть или товар удалён с площадки.\nПопробуйте другую ссылку.';
+
+  if (lower.includes('step') && lower.includes('trigger'))
+    return '❌ Сервер перегружен.\n\nПопробуйте через минуту.\nКредит не списан.';
+
+  return '❌ Не удалось завершить анализ.\n\nПопробуйте ещё раз.\nКредит не списан.';
+}
+
 export async function handleStepError(
   jobId: string,
   errorMsg: string,
@@ -16,28 +37,23 @@ export async function handleStepError(
 
     if (!job) return;
 
-    // Помечаем failed
     await supabase.from('jobs').update({
       status: 'failed',
       error: errorMsg,
       finished_at: new Date().toISOString(),
     }).eq('id', jobId);
 
-    // Заменяем прогресс на ошибку
+    const userMsg = getUserMessage(errorMsg);
+
     if (job.tg_message_id && bot) {
       await bot.telegram.editMessageText(
-        job.tg_chat_id, job.tg_message_id, undefined,
-        '❌ Не удалось завершить анализ.\n\nПопробуйте ещё раз.\nКредит не списан.'
+        job.tg_chat_id, job.tg_message_id, undefined, userMsg
       ).catch(() => {
-        // Если editMessage не сработал — удаляем и шлём новое
         bot.telegram.deleteMessage(job.tg_chat_id, job.tg_message_id!).catch(() => {});
-        bot.telegram.sendMessage(job.tg_chat_id,
-          '❌ Не удалось завершить анализ.\n\nПопробуйте ещё раз.\nКредит не списан.'
-        ).catch(() => {});
+        bot.telegram.sendMessage(job.tg_chat_id, userMsg).catch(() => {});
       });
     }
 
-    // Снимаем processing lock
     if (redis && job.user_id) {
       await redis.del(`processing:${job.user_id}`).catch(() => {});
     }
