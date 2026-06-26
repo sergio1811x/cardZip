@@ -197,6 +197,18 @@ function formatPriceDisplay(product: ProductWithContent): string {
 }
 
 
+function extractMultiValues(attrs: ProductAttribute[] | undefined, keys: string[]): string[] {
+  if (!attrs?.length) return [];
+  const values: string[] = [];
+  for (const a of attrs) {
+    if (keys.some((k) => a.name.toLowerCase().includes(k.toLowerCase()))) {
+      const parts = a.value.split(/[,，、;；\s]+/).map(s => s.trim()).filter(Boolean);
+      values.push(...parts);
+    }
+  }
+  return [...new Set(values)];
+}
+
 const PLATFORM_LABELS: Record<string, string> = {
   '1688': '1688',
   taobao: 'Taobao',
@@ -338,10 +350,15 @@ export function buildMainMessage(
 
   L.push(`• Тип поставщика: ${SUPPLIER_TYPE_RU[normalized?.supplierType ?? product.supplierType ?? ''] ?? 'не указан'}`);
   L.push(`• MOQ: ${(normalized?.moq ?? product.moq) > 1 ? `${normalized?.moq ?? product.moq} шт` : 'не указан'}`);
+  // SKU: проверяем и атрибуты, если skus пустой
   const skuCount = normalized?.skuCount ?? product.skus?.length ?? 0;
   const skuQuoteType = normalized?.pricing?.quoteType;
+  const attrColors = extractMultiValues(product.attributes, ['颜色', 'color']);
+  const attrSizes = extractMultiValues(product.attributes, ['尺码', '尺寸', 'size']);
   if (skuCount > 0) {
     L.push(`• SKU: ${skuCount} вариантов`);
+  } else if (attrColors.length > 1 || attrSizes.length > 1) {
+    L.push('• SKU: варианты частично распознаны');
   } else if (skuQuoteType === 'by_sku') {
     L.push('• SKU: варианты не загружены');
   } else {
@@ -349,13 +366,35 @@ export function buildMainMessage(
   }
   L.push(`• Фото: ${normalized?.imageCount ?? product.images?.length ?? 0} шт`);
   L.push(`• Вес: ${fWeight(product.weightKg)}`);
+
+  // Группированные атрибуты (без дублей)
   const catForbidden = getCategoryRules(catType).forbiddenFields;
   const intelHide = new Set((intel?.reportRules?.attributesToHide ?? []).map((s: string) => s.toLowerCase()));
-  translatedAttrs
-    .filter((a) => !catForbidden.some((f) => a.label.toLowerCase().includes(f.toLowerCase())))
-    .filter((a) => !intelHide.has(a.label.toLowerCase()) && !intelHide.has(a.value.toLowerCase()))
-    .slice(0, 4)
-    .forEach((a) => L.push(`• ${a.label}: ${esc(a.value)}`));
+  const shownLabels = new Set<string>();
+  const groupedAttrs: { label: string; value: string }[] = [];
+
+  // Сначала добавляем сгруппированные цвета/размеры
+  if (attrColors.length > 1) {
+    const translated = attrColors.map(translateAttrValue).filter(v => !hasUntranslatedChinese(v));
+    if (translated.length) groupedAttrs.push({ label: 'Цвета', value: translated.join(', ') });
+    shownLabels.add('цвет');
+  }
+  if (attrSizes.length > 1) {
+    groupedAttrs.push({ label: 'Размеры', value: attrSizes.join(', ') });
+    shownLabels.add('размер');
+  }
+
+  // Остальные атрибуты без дублей
+  for (const a of translatedAttrs) {
+    if (groupedAttrs.length + shownLabels.size >= 6) break;
+    const labelLower = a.label.toLowerCase();
+    if (shownLabels.has(labelLower)) continue;
+    if (catForbidden.some((f) => labelLower.includes(f.toLowerCase()))) continue;
+    if (intelHide.has(labelLower) || intelHide.has(a.value.toLowerCase())) continue;
+    shownLabels.add(labelLower);
+    groupedAttrs.push(a);
+  }
+  groupedAttrs.slice(0, 5).forEach((a) => L.push(`• ${a.label}: ${esc(a.value)}`));
   const hasTiers = product.priceRange?.some((r) => r.minQty > 0);
   if (hasTiers) L.push(`• Скидки: ${formatTiersShort(product.priceRange!)}`);
 
@@ -392,6 +431,11 @@ export function buildMainMessage(
   } else if (market.canShowMedianPrice) {
     L.push(`Подтверждённые аналоги: ${market.confirmedCount}`);
     L.push(`Медиана цены: ${fP(market.medianPrice)}`);
+    if (wbFiltered) {
+      const demand = wbFiltered.totalFeedbacks > 1000 ? 'высокий' : wbFiltered.totalFeedbacks > 100 ? 'средний' : 'низкий';
+      const comp = market.confirmedCount > 50 ? 'высокая' : market.confirmedCount > 20 ? 'средняя' : 'низкая';
+      L.push(`Спрос: ${demand} · Конкуренция: ${comp}`);
+    }
     if (market.confirmedCount < 5) L.push('<i>Выборка ограничена.</i>');
   } else if (market.rawCandidatesCount > 0) {
     L.push(`Найдено ${market.rawCandidatesCount} похожих карточек, но прямые аналоги не подтверждены.`);
@@ -424,6 +468,10 @@ export function buildMainMessage(
       const label = rpd >= 1000 ? `~${(rpd / 1000).toFixed(1)}к/день` : `~${rpd}/день`;
       L.push(`• ${esc(t.search_words)} — ${label}`);
     });
+    const maxFreq = Math.max(...wbTrends.slice(0, 5).map((t) => t.weeks_request_per_day));
+    if (maxFreq < 500) {
+      L.push('<i>Ниша узкая — спрос по точным запросам низкий.</i>');
+    }
   }
 
   // ─── Экономика ──────────────────────────────────────────────────────────────
@@ -435,6 +483,11 @@ export function buildMainMessage(
     if (wm) {
       L.push(`Предварительно без карго. Себестоимость без карго: ${fP(economics.costRub)}`);
       L.push('Вес не указан — карго, маржа и ROI не рассчитаны.');
+      L.push('');
+      L.push('<i>Ориентир по весу:');
+      L.push('• до 300 г — интересно');
+      L.push('• 300–500 г — осторожно');
+      L.push('• выше 500 г — маржа может просесть</i>');
     } else if (priceDec.priceUnreliable) {
       L.push(`Себестоимость: ~${fP(economics.costRub)} (ориентировочно).`);
       L.push(`Расчёт недостоверен — ${priceDec.reason}.`);
