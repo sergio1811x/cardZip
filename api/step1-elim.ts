@@ -26,7 +26,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (!job || job.status !== 'pending') {
+    const allowedStatuses = ['pending', 'processing'];
+    if (!job || !allowedStatuses.includes(job.status)) {
       console.log(`[step1] Skip: job ${jobId} status=${job?.status ?? 'NOT_FOUND'}`);
       return res.status(200).json({ ok: true, skip: true });
     }

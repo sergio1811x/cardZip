@@ -11,7 +11,7 @@ export async function cleanupStuckJobs(userId: string, chatId: number, botOrTele
     .from('jobs')
     .select('id, tg_message_id, status, updated_at, created_at')
     .eq('user_id', userId)
-    .in('status', ['pending', 'elim', 'elim_done', 'sku_pending', 'ai_processing', 'ai_done', 'market_processing', 'done'])
+    .in('status', ['pending', 'processing', 'elim', 'elim_done', 'sku_pending', 'ai_processing', 'ai_done', 'market_processing'])
     .limit(10);
 
   // Фильтруем зависшие: старше 90с ИЛИ done+not_sent
