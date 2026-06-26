@@ -59,12 +59,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`[step1] Elim: ${rawProduct.titleCn?.slice(0, 30)} | imgs:${rawProduct.images.length} | skus:${rawProduct.skus?.length ?? 0}`);
 
-    // Кэш-проверка: если товар уже разбирали — сразу в step4
-    const cacheKey = buildCacheKey(rawProduct.productId, rawProduct.titleCn, rawProduct.mainImageUrl);
-    const cached = await findProductByKey(cacheKey);
-    const cachedData = cached?.data_json as any;
-    const cachedProduct = cachedData?.conclusion ? cachedData : cachedData?.raw;
-    const cacheValid = cachedProduct?.riskFlags && cachedProduct?.conclusion && cachedProduct?.economics && cachedProduct?.wbTrends;
+    // Кэш отключён — всегда полный pipeline
+    const cacheValid = false;
     if (cacheValid) {
       console.log(`[step1] Cache hit: ${cacheKey.slice(0, 12)}`);
       await supabase.from('jobs').update({
