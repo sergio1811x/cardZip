@@ -1,4 +1,5 @@
 import type { RawProduct1688, Platform, ProductAttribute, ProductSku, PriceRange } from '../types';
+import { translateSkuNamesViaLlm } from '../core/cnTranslate';
 
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
 const RAPIDAPI_HOST = '1688-datahub.p.rapidapi.com';
@@ -88,11 +89,16 @@ export async function fetchFromRapidApi(productId: string): Promise<RawProduct16
       return names.length > 0 ? names.join(' / ') : propMap;
     }
 
-    const skus: ProductSku[] = skuBase.map((s) => ({
+    const skusRaw: ProductSku[] = skuBase.map((s) => ({
       name: resolveSkuName(s.propMap ?? ''),
       price: s.promotionPrice ? parseFloat(s.promotionPrice) : s.price ? parseFloat(s.price) : undefined,
       stock: s.quantity ? parseInt(s.quantity) : undefined,
     })).filter((s) => s.name);
+
+    // Translate Chinese SKU names to Russian
+    const skuNames = skusRaw.map(s => s.name);
+    const translatedNames = await translateSkuNamesViaLlm(skuNames);
+    const skus: ProductSku[] = skusRaw.map((s, i) => ({ ...s, name: translatedNames[i] ?? s.name }));
 
     // Price
     const skuPrices = skus.map((s) => s.price).filter((p): p is number => p != null && p > 0).sort((a, b) => a - b);

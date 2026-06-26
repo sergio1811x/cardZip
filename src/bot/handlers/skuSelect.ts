@@ -1,5 +1,6 @@
 import type { Context } from 'telegraf';
 import { supabase } from '../../db/supabase';
+import { redis } from '../../lib/redis';
 
 export async function handleSkuSelect(ctx: Context) {
   const match = (ctx as any).match as RegExpMatchArray | undefined;
@@ -41,6 +42,13 @@ export async function handleSkuSelect(ctx: Context) {
       status: 'elim_done',
       result_json: { ...(job.result_json as any), rawProduct: raw },
     }).eq('id', jobId);
+
+    // Clear step locks so step2/step3/step4 can re-run for this job
+    if (redis) {
+      for (const step of ['step1', 'step2', 'step3', 'step4']) {
+        await redis.del(`lock:${step}:${jobId}`).catch(() => {});
+      }
+    }
 
     await ctx.answerCbQuery(skuIndex === 'all' ? 'Считаем по диапазону' : `Выбран: ${skus[parseInt(skuIndex)]?.name?.slice(0, 20) ?? skuIndex}`);
 

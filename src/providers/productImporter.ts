@@ -1,4 +1,5 @@
 import { AppError } from '../lib/errors';
+import { translateSkuNamesViaLlm } from '../core/cnTranslate';
 import type {
   Normalized1688Data,
   ParsedUrl,
@@ -472,7 +473,17 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     if (res?.ok) {
       const json = (await res.json()) as ElimResponse;
       if (json.success && json.title) {
-        return buildNormalizedProduct(json, platform, productId);
+        const product = buildNormalizedProduct(json, platform, productId);
+        // Translate Chinese SKU names
+        if (product.skus?.length) {
+          const names = product.skus.map(s => s.name);
+          const translated = await translateSkuNamesViaLlm(names);
+          product.skus.forEach((s, i) => { s.name = translated[i] ?? s.name; });
+          if (product.normalized1688?.skuVariants) {
+            product.normalized1688.skuVariants.forEach((s, i) => { if (translated[i]) s.name = translated[i]; });
+          }
+        }
+        return product;
       }
       elimError = `Elim: ${json.message ?? 'no title'}`;
     } else if (res) {
