@@ -129,8 +129,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
 
       const host = req.headers.host || 'card-zip.vercel.app';
-      // Fire-and-forget — не ждём ответа, не фейлим job при таймауте
-      callStep(host, '/api/step1-elim', { jobId: job.id }).catch(() => {});
+      // Ждём отправки но не фейлим job при таймауте — step1 может стартовать с задержкой
+      await callStep(host, '/api/step1-elim', { jobId: job.id });
     } catch (e) {
       console.error('[webhook] URL pipeline:', e);
     }
