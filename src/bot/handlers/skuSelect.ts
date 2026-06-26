@@ -55,25 +55,39 @@ export async function handleSkuSelect(ctx: Context) {
     // Удаляем кнопки выбора
     await ctx.editMessageText('🔄 Обрабатываем выбранный вариант...', { parse_mode: 'HTML' }).catch(() => {});
 
-    // Запускаем step2-ai
-    const host = process.env.VERCEL_URL || 'card-zip.vercel.app';
-    for (let i = 0; i < 2; i++) {
+    // Запускаем step2-ai — используем production host
+    const host = 'card-zip.vercel.app';
+    let step2Ok = false;
+    for (let i = 0; i < 3; i++) {
       try {
+        console.log(`[skuSelect] Calling step2 attempt ${i + 1} for job ${jobId}`);
         const ac = new AbortController();
-        setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step2-ai`, {
+        setTimeout(() => ac.abort(), 8000);
+        const resp = await fetch(`https://${host}/api/step2-ai`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }),
           signal: ac.signal,
         });
-        return;
-      } catch {
-        if (i === 0) await new Promise(r => setTimeout(r, 500));
+        const body = await resp.json().catch(() => ({})) as any;
+        console.log(`[skuSelect] step2 response: ${resp.status} ${JSON.stringify(body)}`);
+        if (resp.ok && !body.skip) { step2Ok = true; break; }
+        if (body.skip) {
+          console.warn(`[skuSelect] step2 skipped job ${jobId}, clearing locks and retrying`);
+          if (redis) {
+            await redis.del(`lock:step2:${jobId}`).catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.error(`[skuSelect] step2 attempt ${i + 1} failed:`, (e as Error).message);
+        if (i < 2) await new Promise(r => setTimeout(r, 1000));
       }
     }
 
-    await ctx.editMessageText('❌ Не удалось запустить обработку. Попробуйте ещё раз.').catch(() => {});
+    if (!step2Ok) {
+      console.error(`[skuSelect] All step2 attempts failed for job ${jobId}`);
+      await ctx.editMessageText('❌ Не удалось запустить обработку. Отправьте ссылку ещё раз.').catch(() => {});
+    }
   } catch (e) {
     console.error('[skuSelect]', e);
     await ctx.answerCbQuery('Ошибка').catch(() => {});
