@@ -68,6 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       attributes: raw.attributes,
       skus: raw.skus,
       price: raw.priceYuan,
+      mainImageUrl: raw.mainImageUrl,
     }).catch(() => null);
 
     const [analysis, intelligence] = await Promise.all([analysisPromise, intelligencePromise]);

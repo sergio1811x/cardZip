@@ -119,6 +119,8 @@ export interface ProductIntelligence {
     shortNameRu: string;
     productKind: string;
     categoryPath: string[];
+    categoryType: string;
+    subCategoryType: string;
     audience: string;
     useCases: string[];
     coreObject: string;
@@ -130,6 +132,15 @@ export interface ProductIntelligence {
     ageGroup: string;
     importantFeatures: string[];
     notConfirmedFeatures: string[];
+    visibleFeatures: string[];
+    possibleConfusions: string[];
+  };
+
+  cleanTitles: {
+    titleCnClean: string;
+    titleRuClean: string;
+    titleForReport: string;
+    titleForWb: string;
   };
 
   wbSearch: {
@@ -168,7 +179,9 @@ export interface ProductIntelligence {
     skuRisk: string;
     priceRisk: string;
     weightRisk: string;
-    confidence: string;
+    overallConfidence: string;
+    visionConfidence: string;
+    textConfidence: string;
     reason: string;
   };
 }
