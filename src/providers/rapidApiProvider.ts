@@ -71,10 +71,25 @@ export async function fetchFromRapidApi(productId: string): Promise<RawProduct16
       .filter((a) => a.name && a.value)
       .map((a) => ({ name: a.name!, value: a.value! }));
 
-    // SKU
+    // SKU — resolve propMap codes (e.g. "0:5") to human names via sku.props
     const skuBase = item.sku?.base ?? [];
+    const skuProps = item.sku?.props ?? [];
+
+    function resolveSkuName(propMap: string): string {
+      // propMap format: "propIdx:valueIdx" or "propIdx:valueIdx;propIdx:valueIdx"
+      const parts = propMap.split(';').map(p => p.trim()).filter(Boolean);
+      const names: string[] = [];
+      for (const part of parts) {
+        const [pi, vi] = part.split(':').map(Number);
+        const prop = skuProps[pi];
+        const val = prop?.values?.[vi];
+        if (val?.name) names.push(val.name);
+      }
+      return names.length > 0 ? names.join(' / ') : propMap;
+    }
+
     const skus: ProductSku[] = skuBase.map((s) => ({
-      name: s.propMap ?? '',
+      name: resolveSkuName(s.propMap ?? ''),
       price: s.promotionPrice ? parseFloat(s.promotionPrice) : s.price ? parseFloat(s.price) : undefined,
       stock: s.quantity ? parseInt(s.quantity) : undefined,
     })).filter((s) => s.name);
