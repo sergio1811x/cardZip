@@ -79,9 +79,9 @@ export function selectTopQueries(
 ): QueryCandidate[] {
   const coreLower = context.coreObject.toLowerCase();
   const typeLower = context.productType.toLowerCase();
-  const materialsLower = new Set(context.materials.map((m) => m.toLowerCase()));
-  const conflictsLower = [...context.hardConflicts, ...context.softConflicts].map((c) => c.toLowerCase());
-  const doNotLower = context.doNotSearch.map((d) => d.toLowerCase());
+  const materialsLower = new Set((context.materials ?? []).map((m) => m.toLowerCase()));
+  const conflictsLower = [...(context.hardConflicts ?? []), ...(context.softConflicts ?? [])].map((c) => c.toLowerCase());
+  const doNotLower = (context.doNotSearch ?? []).map((d) => d.toLowerCase());
 
   const scored = pool.map((c) => {
     let score = c.score;

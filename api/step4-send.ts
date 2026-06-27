@@ -143,7 +143,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           signal: ac.signal,
         });
         break;
-      } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
+      } catch (e: any) {
+        console.warn(`[step4] step5 chain attempt ${i + 1} failed: ${e.message}`);
+        if (i === 0) await new Promise(r => setTimeout(r, 500));
+      }
     }
 
     console.log(`[step4] Job ${jobId} snapshot built, chaining step5`);
