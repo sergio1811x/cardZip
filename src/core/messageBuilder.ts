@@ -361,7 +361,12 @@ export function buildMainMessage(
   }
 
   L.push(`• Тип поставщика: ${SUPPLIER_TYPE_RU[normalized?.supplierType ?? product.supplierType ?? ''] ?? 'не указан'}`);
+  if (product.sold) L.push(`• Заказов: ${fN(product.sold)}+`);
   L.push(`• MOQ: ${(normalized?.moq ?? product.moq) > 1 ? `${normalized?.moq ?? product.moq} шт` : 'не указан'}`);
+  if ((normalized as any)?.shipsFrom && !hasUntranslatedChinese(String((normalized as any).shipsFrom))) {
+    L.push(`• Отгрузка: ${esc((normalized as any).shipsFrom)}`);
+  }
+  if ((normalized as any)?.shippingFeeCny) L.push(`• Доставка по Китаю: ${(normalized as any).shippingFeeCny} ¥`);
   // SKU: проверяем и атрибуты, если skus пустой
   const skuCount = normalized?.skuCount ?? product.skus?.length ?? 0;
   const skuQuoteType = normalized?.pricing?.quoteType;

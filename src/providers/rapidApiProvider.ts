@@ -13,10 +13,11 @@ interface RapidApiResponse {
       catId?: string;
       sales?: string;
       images?: string[];
+      video?: { id?: number | string; thumbnail?: string; url?: string };
       properties?: { list?: Array<{ name?: string; value?: string }> };
       sku?: {
         def?: { quantity?: string | number; price?: string; minOrder?: string; unit?: string };
-        saleInfo?: { skuRangePrice?: Array<{ startAmount?: string; price?: string }> };
+        saleInfo?: { skuRangePrice?: Array<{ startAmount?: string; price?: string }>; promotionPrice?: Array<{ startAmount?: string; price?: string }> };
         base?: Array<{
           skuId?: string;
           propMap?: string;
@@ -25,15 +26,24 @@ interface RapidApiResponse {
           quantity?: string;
           soldCount?: string;
         }>;
-        props?: Array<{ name?: string; values?: Array<{ name?: string; image?: string }> }>;
+        props?: Array<{ pid?: number; name?: string; values?: Array<{ vid?: number; name?: string; image?: string }> }>;
       };
     };
-    delivery?: { shipsFrom?: string };
+    delivery?: { shipsFrom?: string; freeShipping?: string | boolean; shipFeeDetails?: Array<{ fee?: number; type?: string }> };
+    service?: Array<{ title?: string; desc?: string }>;
     seller?: {
       sellerId?: string;
+      sellerTitle?: string;
       storeTitle?: string;
+      storeId?: string;
+      storeUrl?: string;
+      storeImage?: string;
+      storeRegDate?: string;
+      storeAge?: string;
       storeRating?: string;
       storeReturnBuyRate?: string;
+      storeReturnPercent?: string;
+      storeEvaluates?: Array<{ title?: string; score?: number; level?: string }>;
     };
   };
 }
@@ -144,13 +154,33 @@ export async function fetchFromRapidApi(productId: string): Promise<RawProduct16
       else if (gMatch) weightKg = parseFloat(gMatch[1]) / 1000;
     }
 
-    // Seller type guess from store title
+    // Seller type
     const sellerType: 'factory' | 'merchant' | 'seller' =
       seller?.storeTitle?.includes('工厂') || seller?.storeTitle?.includes('厂') ? 'factory'
       : seller?.storeTitle?.includes('实力') || seller?.storeTitle?.includes('供应商') ? 'merchant'
       : 'seller';
 
-    console.log(`[rapidapi] Success: ${productId} | title: ${item.title?.slice(0, 30)} | skus: ${skus.length} | price: ${priceYuan}`);
+    // Delivery info
+    const delivery = json.result.delivery;
+    const shippingFee = delivery?.shipFeeDetails?.[0]?.fee;
+    const shipsFrom = delivery?.shipsFrom ?? '';
+
+    // Seller evaluations
+    const evaluates = seller?.storeEvaluates;
+    const sellerScores = evaluates?.length ? evaluates.map((e: any) => `${e.title}: ${e.score}`).join(', ') : '';
+
+    // Video
+    const videoUrl = item.video?.url ? (item.video.url.startsWith('//') ? `https:${item.video.url}` : item.video.url) : undefined;
+
+    // SKU color images
+    const skuColorImages = (skuProps[0]?.values ?? [])
+      .filter((v: any) => v.image)
+      .map((v: any) => ({ name: v.name, image: v.image.startsWith('//') ? `https:${v.image}` : v.image }));
+
+    // Total SKU stock
+    const totalSkuStock = skuBase.reduce((sum: number, s: any) => sum + (parseInt(s.quantity) || 0), 0);
+
+    console.log(`[rapidapi] Success: ${productId} | skus: ${skus.length} | price: ${priceYuan} | ship: ${shipsFrom} | fee: ${shippingFee ?? '?'}¥`);
 
     const normalized1688: any = {
       pricing: {
@@ -171,6 +201,17 @@ export async function fetchFromRapidApi(productId: string): Promise<RawProduct16
       weightKg: weightKg > 0 ? weightKg : undefined,
       attributes,
       keyAttributes: attributes.slice(0, 5).map((a) => ({ label: a.name, value: a.value })),
+      // Новые данные
+      shipsFrom,
+      shippingFeeCny: shippingFee,
+      videoUrl,
+      sellerScores,
+      storeAge: seller?.storeAge ? parseInt(seller.storeAge) : undefined,
+      storeRating: seller?.storeRating ? parseInt(seller.storeRating) : undefined,
+      returnBuyRate: seller?.storeReturnBuyRate,
+      skuColorImages,
+      totalSkuStock: totalSkuStock > 0 ? totalSkuStock : undefined,
+      services: (json.result.service ?? []).map((s: any) => s.title).filter(Boolean),
       debug: {
         provider: 'rapidapi',
         quoteType: skus.length > 0 ? 'by_sku' : 'direct',
@@ -193,7 +234,9 @@ export async function fetchFromRapidApi(productId: string): Promise<RawProduct16
       images,
       mainImageUrl: images[0] ?? '',
       supplierName: seller?.storeTitle ?? '',
-      supplierRating: seller?.storeRating ? parseFloat(seller.storeRating) : undefined,
+      supplierRating: evaluates?.length
+        ? Math.round(evaluates.reduce((s: number, e: any) => s + (e.score ?? 0), 0) / evaluates.length * 10) / 10
+        : seller?.storeRating ? parseFloat(seller.storeRating) : undefined,
       supplierType: sellerType,
       sold: item.sales ? parseInt(item.sales) : undefined,
       stock,
