@@ -117,21 +117,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       normalized1688: rawProduct.normalized1688,
     };
 
-    // SKU выбор: 2+ SKU с разными ценами ИЛИ много вариантов без цен
+    // SKU выбор: 2+ SKU с разными ценами или вариантами
     const skus = rawProduct.skus ?? [];
     const uniquePrices = new Set(skus.filter(s => s.price).map(s => s.price));
-    const needSkuChoice = skus.length >= 2 && (uniquePrices.size >= 2 || (skus.length >= 4 && uniquePrices.size === 0));
+    const needSkuChoice = skus.length >= 2;
 
     if (needSkuChoice && job.tg_message_id) {
-      // Показываем кнопки выбора SKU
       const { Markup } = require('telegraf');
-      const buttons = skus.slice(0, 8).map((sku: any, i: number) => [
-        Markup.button.callback(
-          `${sku.name?.slice(0, 25)} · ${sku.price ?? '?'} ¥`,
-          `sku_${i}_${jobId}`
-        ),
-      ]);
-      buttons.push([Markup.button.callback('📊 Посчитать диапазон цен', `sku_all_${jobId}`)]);
+      const buttons = skus.slice(0, 8).map((sku: any, i: number) => {
+        // Убираем китайские символы из названия для кнопки
+        let label = (sku.name ?? `Вариант ${i + 1}`).slice(0, 28);
+        const priceLabel = sku.price ? ` · ${sku.price} ¥` : '';
+        return [Markup.button.callback(`${label}${priceLabel}`, `sku_${i}_${jobId}`)];
+      });
+      buttons.push([Markup.button.callback('📊 Все варианты', `sku_all_${jobId}`)]);
 
       await supabase.from('jobs').update({
         status: 'sku_pending',
