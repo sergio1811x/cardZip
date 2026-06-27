@@ -1,8 +1,9 @@
 import type { AnalysisSnapshot, GeneratedArtifacts } from '../types';
 
 const WRITER_MODELS = [
-  'deepseek/deepseek-v4-flash',
-  'google/gemini-2.5-flash-lite-preview-09-2025',
+  'deepseek/deepseek-v4-pro',
+  'deepseek/deepseek-chat-v3.2',
+  'qwen/qwen3-235b-a22b',
 ];
 
 function cleanJson(raw: string): string {

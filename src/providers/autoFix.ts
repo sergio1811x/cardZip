@@ -1,6 +1,10 @@
 import type { AnalysisSnapshot, QaResult } from '../types';
 
-const FIX_MODEL = 'google/gemini-2.5-flash-lite-preview-09-2025';
+const FIX_MODELS = [
+  'google/gemini-2.5-flash-lite',
+  'zhipu-ai/glm-4.5-air',
+  'qwen/qwen3-235b-a22b',
+];
 
 function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
@@ -51,35 +55,31 @@ export async function runAutoFix(
 
   const prompt = AUTO_FIX_PROMPT + '\n\nDATA:\n' + input;
 
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: FIX_MODEL,
-        max_tokens: 3000,
-        temperature: 0.1,
-        messages: [
-          { role: 'system', content: 'Ты — автокорректор CardZip. Верни СТРОГО JSON с исправленными полями.' },
-          { role: 'user', content: prompt },
-        ],
-      }),
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!res.ok) {
-      console.log(`[auto-fix] HTTP ${res.status}`);
-      return null;
-    }
-    const data = await res.json() as { choices?: { message?: { content?: string } }[] };
-    const raw = data.choices?.[0]?.message?.content ?? '';
-    const parsed = JSON.parse(cleanJson(raw));
-    if (parsed && typeof parsed === 'object') {
-      const fixedCount = Object.keys(parsed).length;
-      console.log(`[auto-fix] fixed ${fixedCount} field(s)`);
-      return parsed as Record<string, unknown>;
-    }
-  } catch (err) {
-    console.log(`[auto-fix] error: ${err instanceof Error ? err.message : err}`);
+  for (const model of FIX_MODELS) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          max_tokens: 3000,
+          temperature: 0.1,
+          messages: [
+            { role: 'system', content: 'Ты — автокорректор CardZip. Верни СТРОГО JSON с исправленными полями.' },
+            { role: 'user', content: prompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json() as { choices?: { message?: { content?: string } }[] };
+      const raw = data.choices?.[0]?.message?.content ?? '';
+      const parsed = JSON.parse(cleanJson(raw));
+      if (parsed && typeof parsed === 'object') {
+        console.log(`[auto-fix] ${model} fixed ${Object.keys(parsed).length} field(s)`);
+        return parsed as Record<string, unknown>;
+      }
+    } catch { continue; }
   }
   return null;
 }
