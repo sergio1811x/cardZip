@@ -190,6 +190,72 @@ export interface ProductContext {
   };
 }
 
+// ─── Analysis Snapshot (step4 → step5) ─────────────────────────────────────
+
+export interface AnalysisSnapshot {
+  offerId: string;
+  sourceUrl: string;
+  productContext: ProductContext | null;
+
+  supplier: {
+    name: string;
+    type: string;
+    rating: number | null;
+    orders: number | null;
+    moq: number | null;
+  };
+
+  purchasePrice: {
+    valueCny: number | null;
+    displayLabel: string;
+    source: string;
+    needsConfirmation: boolean;
+  };
+
+  weight: {
+    valueKg: number | null;
+    source: string;
+  };
+
+  market: {
+    confirmedCount: number;
+    medianPriceRub: number | null;
+    marketConfirmed: boolean;
+    wb429: boolean;
+  };
+
+  economics: {
+    status: string;
+    costRub: number | null;
+    roiPercent: number | null;
+    canShowRoi: boolean;
+    missing: string[];
+  };
+
+  missingData: string[];
+  riskFlags: string[];
+}
+
+export interface GeneratedArtifacts {
+  userCard: string;
+  seoTitle: string;
+  seoDescription: string;
+  seoBullets: string[];
+  seoKeywords: string[];
+  seoCharacteristics: Record<string, string>;
+  buyerBrief: string;
+  supplierQuestionsRu: string[];
+  supplierQuestionsCn: string[];
+}
+
+export interface QaResult {
+  decision: 'PASS' | 'FIX_REQUIRED' | 'BLOCK';
+  qualityScore: number;
+  issues: string[];
+  fixedArtifacts?: GeneratedArtifacts;
+  safeUserSummary?: string;
+}
+
 // ─── Product Intelligence ───────────────────────────────────────────────────
 
 export interface ProductIntelligence {

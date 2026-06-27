@@ -2,25 +2,70 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { markSent } from '../src/db/queries/jobs';
 import { getStatus, consumeCredit } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
-import { buildMainMessage } from '../src/core/messageBuilder';
-import { validateReport } from '../src/core/reportValidator';
-import { findWbCategoriesByKeywords } from '../src/db/queries/wbCategories';
-import { formatSeoText } from '../src/core/seoFormatter';
-import { formatOrderBrief } from '../src/core/orderBrief';
 import { createStepProgress } from '../src/core/progress';
-import { upsertProduct } from '../src/db/queries/products';
-import { buildCacheKey } from '../src/lib/cache';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
-import { synthesizeReport } from '../src/providers/finalSynthesis';
+import { runExpertWriter } from '../src/providers/expertWriter';
 import { redis } from '../src/lib/redis';
-import type { ProductWithContent } from '../src/types';
+import type { ProductWithContent, AnalysisSnapshot } from '../src/types';
 
 export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
+
+function buildAnalysisSnapshot(product: ProductWithContent, jobUrl: string): AnalysisSnapshot {
+  const ctx = (product as any).productContext ?? null;
+  const wbf = product.wbFiltered;
+  const eco = product.economics;
+  const hasRealMedian = !!(wbf && wbf.relevantCount > 0 && wbf.medianPrice > 0 && !eco?.isSyntheticPrice);
+
+  return {
+    offerId: product.productId,
+    sourceUrl: jobUrl,
+    productContext: ctx,
+    supplier: {
+      name: product.supplierName ?? '',
+      type: product.supplierType ?? 'unknown',
+      rating: product.supplierRating ?? null,
+      orders: product.sold ?? null,
+      moq: product.moq > 1 ? product.moq : null,
+    },
+    purchasePrice: {
+      valueCny: product.priceYuan > 0 ? product.priceYuan : null,
+      displayLabel: product.priceYuan > 0 ? `${product.priceYuan} ¥` : 'не определена',
+      source: product.normalized1688?.pricing?.quoteType ?? 'unknown',
+      needsConfirmation: !!(product.normalized1688?.pricing?.quoteType === 'by_sku' && !product.skus?.length),
+    },
+    weight: {
+      valueKg: product.weightKg > 0 ? product.weightKg : null,
+      source: product.weightKg > 0 ? 'parsed' : 'unknown',
+    },
+    market: {
+      confirmedCount: hasRealMedian ? wbf!.relevantCount : 0,
+      medianPriceRub: hasRealMedian ? wbf!.medianPrice : null,
+      marketConfirmed: hasRealMedian,
+      wb429: !!(product as any).wb429,
+    },
+    economics: {
+      status: !eco ? 'not_calculated'
+        : !product.priceYuan ? 'not_calculated'
+        : eco.weightMissing ? 'preliminary'
+        : !hasRealMedian ? 'partial'
+        : 'confirmed',
+      costRub: eco?.costRub ?? null,
+      roiPercent: eco?.roiPercent ?? null,
+      canShowRoi: hasRealMedian && !eco?.weightMissing && !eco?.isSyntheticPrice,
+      missing: [
+        ...(!product.priceYuan ? ['цена'] : []),
+        ...(eco?.weightMissing ? ['вес'] : []),
+        ...(!hasRealMedian ? ['рынок WB'] : []),
+      ],
+    },
+    missingData: ctx?.missingCritical ?? [],
+    riskFlags: ctx?.riskTags ?? [],
+  };
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -37,99 +82,71 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await extendProcessingLock(job.user_id);
 
     const result = job.result_json as any;
-    const chatId = job.tg_chat_id;
     const product = result.product as ProductWithContent;
 
     const progress = job.tg_message_id
-      ? createStepProgress(bot, chatId, job.tg_message_id, 'send')
+      ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'send')
       : null;
 
-    const safeRiskFlags = product.riskFlags ?? { hasBrand: false, isElectrical: false, isChildren: false, isCosmetic: false, isFood: false, isMedical: false, supplierOrdersLow: false, supplierTypeUnknown: false, weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: false };
+    // ─── Step 4A: Build AnalysisSnapshot ─────────────────────────────────
+    const snapshot = buildAnalysisSnapshot(product, job.input_url);
 
-    const [seoText, briefText, freshStatus] = await Promise.all([
-      Promise.resolve(formatSeoText(product, product.seoContent, safeRiskFlags)),
-      Promise.resolve(formatOrderBrief(product, product.seoContent, product.economics, safeRiskFlags, job.input_url, product.budgets, product.conclusion)),
-      getStatus(job.user_id),
-    ]);
+    // ─── Step 4B: Expert Writer (LLM) ──────────────────────────────────
+    const writerResult = await runExpertWriter(snapshot).catch(() => null);
+    if (writerResult) {
+      // Update seoContent from writer
+      product.seoContent = {
+        ...product.seoContent,
+        titleRu: writerResult.seoTitle || product.seoContent?.titleRu,
+        description: writerResult.seoDescription || product.seoContent?.description || '',
+        bullets: writerResult.seoBullets?.length ? writerResult.seoBullets : product.seoContent?.bullets ?? [],
+        keywords: writerResult.seoKeywords?.length ? writerResult.seoKeywords : product.seoContent?.keywords ?? [],
+        characteristics: writerResult.seoCharacteristics ?? product.seoContent?.characteristics ?? {},
+      };
+    }
 
-    // Сохраняем тексты файлов в result_json для отложенной отправки по кнопке
-    await supabase.from('jobs').update({
-      result_json: {
-        ...result,
-        generatedFiles: { seoText, briefText },
-      },
-    }).eq('id', jobId);
-
+    // ─── Consume credit ──────────────────────────────────────────────────
     await track(job.user_id, 'generation_done', { url: job.input_url });
     await consumeCredit(job.user_id);
+    const freshStatus = await getStatus(job.user_id);
 
     progress?.stop();
     if (job.tg_message_id) {
-      await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+      await bot.telegram.deleteMessage(job.tg_chat_id, job.tg_message_id).catch(() => {});
     }
 
-    // ─── Final Synthesis: regenerate SEO with market context ─────────────────────
-    const ctx = (product as any).productContext;
-    if (ctx) {
-      const marketForSynth = buildMarketDecisionForSynth(product);
-      const synthSeo = await synthesizeReport(ctx, {
-        confirmedCount: marketForSynth.confirmedCount,
-        medianPrice: marketForSynth.medianPrice || null,
-        hasMarket: marketForSynth.canShowMedianPrice,
-        wb429: !!(product as any).wb429,
-      }, {
-        costRub: product.economics?.costRub ?? 0,
-        roiPercent: product.economics?.roiPercent ?? null,
-        weightMissing: product.economics?.weightMissing ?? true,
-        platformMode: product.economics?.platformMode ?? 'full',
-      }).catch(() => null);
+    // ─── Save snapshot + artifacts, chain to step5 ───────────────────────
+    await supabase.from('jobs').update({
+      result_json: {
+        ...result,
+        product: { ...product, seoContent: product.seoContent },
+        analysisSnapshot: snapshot,
+        writerResult,
+        freshStatus: {
+          creditsRemaining: freshStatus.creditsRemaining,
+          plan: freshStatus.plan,
+          isTrial: freshStatus.isTrial,
+        },
+      },
+    }).eq('id', jobId);
 
-      if (synthSeo && !synthSeo.isFallback) {
-        Object.assign(product.seoContent, synthSeo);
-        await supabase.from('jobs').update({
-          result_json: { ...result, product: { ...product, seoContent: { ...product.seoContent, ...synthSeo } } },
-        }).eq('id', jobId).catch(() => {});
-      }
+    // Chain → step5-qa
+    const host = req.headers.host || 'card-zip.vercel.app';
+    for (let i = 0; i < 2; i++) {
+      try {
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 4000);
+        await fetch(`https://${host}/api/step5-qa`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+          signal: ac.signal,
+        });
+        break;
+      } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
     }
 
-    // ─── WB-категория (fallback если аналоги не найдены) ────────────────────────
-    const keywords = (product.seoContent?.keywords ?? []).slice(0, 3);
-    if (!keywords.length && product.titleRu) keywords.push(product.titleRu.split(' ').slice(0, 2).join(' '));
-    const wbCats = keywords.length ? await findWbCategoriesByKeywords(keywords).catch(() => []) : [];
-    const wbCategory = wbCats[0] ?? null;
-
-    // ─── Одно сообщение: выжимка + остаток + кнопки ───────────────────────────
-    const { text: mainText, keyboard: mainKb } = buildMainMessage(product, job.id, freshStatus, wbCategory);
-
-    // Validate report text
-    const validation = validateReport(mainText, (product as any).categoryType ?? 'other', {
-      hasPrice: product.priceYuan > 0,
-      hasWeight: product.weightKg > 0,
-      hasDirectAnalogs: !!(product.similarityData?.directCount && product.similarityData.directCount > 0),
-      wb429: !!(product as any).wb429,
-      intelligence: (product as any).intelligence ?? null,
-    });
-    if (!validation.ok) {
-      console.warn(`[step4] Validator found ${validation.errors.length} issues:`, validation.errors.join(', '));
-    }
-    const finalText = validation.ok ? mainText : validation.fixedText;
-
-    await bot.telegram.sendMessage(chatId, finalText, {
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-      ...mainKb,
-    });
-
-    await markSent(job.id);
-    if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
-
-    const cacheKey = buildCacheKey(product.productId, product.titleCn, product.mainImageUrl);
-    upsertProduct(job.user_id, { ...product, cacheKey }).catch((e) =>
-      console.warn('[step4] Cache save failed:', e instanceof Error ? e.message : e)
-    );
-
-    console.log(`[step4] Job ${job.id} sent`);
-
+    console.log(`[step4] Job ${jobId} snapshot built, chaining step5`);
     res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step4]', e.message);
@@ -137,17 +154,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await handleStepError(jobId, e.message, bot);
     res.status(200).json({ ok: false });
   }
-}
-
-function buildMarketDecisionForSynth(product: any) {
-  const wbf = product.wbFiltered;
-  const eco = product.economics;
-  const hasRealMedian = !!(wbf?.relevantCount > 0 && wbf?.medianPrice > 0);
-  const isSynthetic = eco?.isSyntheticPrice ?? false;
-  const confirmedCount = hasRealMedian && !isSynthetic ? wbf.relevantCount : 0;
-  return {
-    confirmedCount,
-    medianPrice: confirmedCount > 0 ? wbf.medianPrice : 0,
-    canShowMedianPrice: confirmedCount > 0,
-  };
 }
