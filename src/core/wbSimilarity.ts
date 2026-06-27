@@ -32,11 +32,13 @@ function norm(text: string): string {
   return text.toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function hasAny(text: string, terms: string[]): boolean {
+function hasAny(text: string, terms: string[] | undefined): boolean {
+  if (!terms?.length) return false;
   return terms.some(t => t.length > 1 && text.includes(t.toLowerCase()));
 }
 
-function findMatches(text: string, terms: string[]): string[] {
+function findMatches(text: string, terms: string[] | undefined): string[] {
+  if (!terms?.length) return [];
   return terms.filter(t => t.length > 1 && text.includes(t.toLowerCase()));
 }
 
@@ -53,7 +55,7 @@ function scoreCandidate(
   const missing: string[] = [];
 
   // ─── HARD FILTERS ──────────────────────────────────────────────────────
-  const hardFound = findMatches(text, [...structure.hardConflicts, ...lexicon.hardNegativeTerms]);
+  const hardFound = findMatches(text, [...(structure.hardConflicts ?? []), ...(lexicon.hardNegativeTerms ?? [])]);
   if (hardFound.length > 0) {
     return { score: 0, matchLevel: 'wrong', matched, missing, hardFound, softFound: [] };
   }
@@ -67,7 +69,7 @@ function scoreCandidate(
   }
 
   // Soft conflicts
-  const softFound = findMatches(text, [...structure.softConflicts, ...lexicon.softNegativeTerms]);
+  const softFound = findMatches(text, [...(structure.softConflicts ?? []), ...(lexicon.softNegativeTerms ?? [])]);
 
   // ─── SCORING ───────────────────────────────────────────────────────────
   let score = 0;
@@ -84,7 +86,7 @@ function scoreCandidate(
   }
 
   // Required attributes (+15 each)
-  for (const attr of structure.requiredAttributes) {
+  for (const attr of (structure.requiredAttributes ?? [])) {
     const terms = attr.split('/').map(t => t.trim().toLowerCase());
     if (terms.some(t => text.includes(t))) {
       matched.push(attr);
@@ -96,7 +98,7 @@ function scoreCandidate(
 
   // Important attributes (+8 each, max 24)
   let impScore = 0;
-  for (const attr of structure.importantAttributes) {
+  for (const attr of (structure.importantAttributes ?? [])) {
     const terms = attr.split('/').map(t => t.trim().toLowerCase());
     if (terms.some(t => text.includes(t))) {
       matched.push(attr);
@@ -109,10 +111,10 @@ function scoreCandidate(
   if (hasAny(text, structure.compatibleAlternatives)) score += 10;
 
   // Material match (+5)
-  if (hasAny(text, [...structure.material, ...lexicon.materialAliases])) score += 5;
+  if (hasAny(text, [...(structure.material ?? []), ...(lexicon.materialAliases ?? [])])) score += 5;
 
   // FormFactor match (+10) or conflict (-15)
-  if (structure.formFactor.length > 0) {
+  if ((structure.formFactor ?? []).length > 0) {
     if (hasAny(text, structure.formFactor)) {
       score += 10;
     }
@@ -168,7 +170,7 @@ function scoreCandidate(
   score = Math.max(0, Math.min(100, score));
 
   // ─── MATCH LEVEL ───────────────────────────────────────────────────────
-  const requiredMet = missing.length === 0 || (structure.requiredAttributes.length > 0 && missing.length < structure.requiredAttributes.length);
+  const requiredMet = missing.length === 0 || ((structure.requiredAttributes ?? []).length > 0 && missing.length < (structure.requiredAttributes ?? []).length);
   let matchLevel: MatchLevel;
 
   if (score >= 60 && requiredMet && softFound.length === 0 && !hasSubTypeConflict) {
