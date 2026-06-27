@@ -319,7 +319,8 @@ export function buildMainMessage(
   const L: string[] = [];
 
   // ─── Товар ──────────────────────────────────────────────────────────────────
-  const displayTitle = intel?.cleanTitles?.titleForReport || intel?.productIdentity?.shortNameRu || intel?.productIdentity?.marketNameRu || product.titleRu;
+  const ctx = (product as any).productContext;
+  const displayTitle = ctx?.titles?.shortRu || ctx?.titles?.cleanRu || intel?.cleanTitles?.titleForReport || intel?.productIdentity?.shortNameRu || intel?.productIdentity?.marketNameRu || product.titleRu;
   L.push(`📦 <b>${esc(displayTitle)}</b>`);
   L.push('');
   L.push(`Источник: ${PLATFORM_LABELS[product.platform] ?? product.platform}`);

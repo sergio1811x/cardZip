@@ -2,11 +2,9 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { aiContentGenerator } from '../src/providers/aiContentGenerator';
-import { analyzeProduct, generateProductIntelligence } from '../src/providers/productUnderstanding';
+import { canonicalizeProduct } from '../src/providers/productCanonicalizer';
 import { createStepProgress } from '../src/core/progress';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
-import type { AiContentResult } from '../src/types';
 
 export const config = { maxDuration: 60 };
 
@@ -32,70 +30,74 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'ai')
       : null;
 
-    const seoContent = await aiContentGenerator.generate({
+    // Single LLM call: Product Canonicalizer (replaces SEO + Understanding + Intelligence)
+    const productContext = await canonicalizeProduct({
+      offerId: raw.productId,
       titleCn: raw.titleCn,
-      titleEn: raw.titleEn,
-      description: raw.description,
-      priceYuan: raw.priceYuan,
-      moq: raw.moq,
-      weightKg: raw.weightKg,
-      supplierName: raw.supplierName,
-      supplierRating: raw.supplierRating,
-      categoryName: raw.categoryName,
-      attributes: raw.attributes,
-    }).catch((): AiContentResult => ({
-      titleRu: raw.titleEn || raw.titleCn,
-      description: '', bullets: [], keywords: [],
-      characteristics: {}, isFallback: true,
-    }));
-
-    // Product Analysis: Understanding + Lexicon + Queries (один LLM вызов)
-    const analysisPromise = analyzeProduct({
-      titleCn: raw.titleCn,
-      titleEn: raw.titleEn,
-      categoryName: raw.categoryName,
-      attributes: raw.attributes,
-      description: raw.description,
-      skus: raw.skus,
-    }).catch(() => null);
-
-    // Product Intelligence — параллельно с analyzeProduct
-    const intelligencePromise = generateProductIntelligence({
-      titleCn: raw.titleCn,
-      titleRu: seoContent?.titleRu,
+      titleRu: raw.titleEn,
       titleEn: raw.titleEn,
       categoryName: raw.categoryName,
       attributes: raw.attributes,
       skus: raw.skus,
       price: raw.priceYuan,
+      priceRange: raw.priceRange,
+      weightKg: raw.weightKg,
       mainImageUrl: raw.mainImageUrl,
+      sold: raw.sold,
+      stock: raw.stock,
     }).catch(() => null);
 
-    const [analysis, intelligence] = await Promise.all([analysisPromise, intelligencePromise]);
+    // Backward-compatible fields from productContext
+    const wbCoreQuery = productContext?.wbSearch?.coreQuery ?? '';
+    const categoryType = productContext?.identity?.categoryType ?? 'other';
+    const validatedQueries = productContext?.wbSearch?.queryLadder ?? [];
 
-    const productStructure = analysis?.structure ?? null;
-    const productLexicon = analysis?.lexicon ?? null;
-    const queryPlan = analysis?.queryPlan ?? null;
-    const validatedQueries = analysis?.validatedQueries ?? [];
-    const wbCoreQuery = intelligence?.wbSearch?.wbCoreQuery || analysis?.wbCoreQuery || productStructure?.coreObject || '';
-    const categoryType = analysis?.categoryType ?? 'other';
+    // Temporary SEO (will be regenerated in step4 with market data)
+    const seoContent = {
+      titleRu: productContext?.titles?.cleanRu ?? raw.titleEn ?? raw.titleCn,
+      description: '',
+      bullets: [] as string[],
+      keywords: productContext?.wbSearch?.queryLadder ?? [],
+      characteristics: productContext?.facts ?? {},
+    };
 
     progress?.stop();
 
-    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | category: ${categoryType} | structure: ${productStructure?.productType ?? 'null'} | queries: ${validatedQueries.length} | wbCoreQuery: ${wbCoreQuery}`);
+    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | cat: ${categoryType} | wbCore: ${wbCoreQuery}`);
 
     await supabase.from('jobs').update({
       status: 'ai_done',
       result_json: {
         ...(job.result_json as any),
         seoContent,
-        productStructure,
-        productLexicon,
-        queryPlan,
-        validatedQueries,
+        productContext,
         wbCoreQuery,
         categoryType,
-        intelligence,
+        validatedQueries,
+        // backward compat for step3
+        productStructure: productContext ? {
+          coreObject: productContext.identity.coreObject,
+          productType: productContext.identity.productType,
+          material: Object.entries(productContext.facts).filter(([k]) => k.includes('материал')).map(([,v]) => v),
+          hardConflicts: productContext.conflicts.filter(c => c.severity === 'high').map(c => c.field),
+          softConflicts: productContext.conflicts.filter(c => c.severity !== 'high').map(c => c.field),
+          directAnalogBlockers: productContext.wbSearch.rejectRules,
+          marketSynonyms: productContext.wbSearch.queryLadder,
+          mustKeep: productContext.wbSearch.mustInclude,
+          doNotSearch: productContext.wbSearch.mustExclude,
+          audience: productContext.identity.audience,
+        } : null,
+        queryPlan: productContext ? {
+          L1_exact: productContext.wbSearch.queryLadder.slice(0, 2),
+          L2_commercial: productContext.wbSearch.queryLadder.slice(2, 4),
+          L3_subtype: [],
+          L4_core: [productContext.identity.coreObject],
+          L5_category: [],
+        } : null,
+        productLexicon: productContext ? {
+          mainTerms: [productContext.identity.coreObject],
+          hardNegativeTerms: productContext.wbSearch.mustExclude,
+        } : null,
       },
     }).eq('id', jobId);
 

@@ -14,6 +14,7 @@ import { createStepProgress } from '../src/core/progress';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
+import { synthesizeReport } from '../src/providers/finalSynthesis';
 import { redis } from '../src/lib/redis';
 import type { ProductWithContent } from '../src/types';
 
@@ -67,6 +68,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
 
+    // ─── Final Synthesis: regenerate SEO with market context ─────────────────────
+    const ctx = (product as any).productContext;
+    if (ctx) {
+      const marketForSynth = buildMarketDecisionForSynth(product);
+      const synthSeo = await synthesizeReport(ctx, {
+        confirmedCount: marketForSynth.confirmedCount,
+        medianPrice: marketForSynth.medianPrice || null,
+        hasMarket: marketForSynth.canShowMedianPrice,
+        wb429: !!(product as any).wb429,
+      }, {
+        costRub: product.economics?.costRub ?? 0,
+        roiPercent: product.economics?.roiPercent ?? null,
+        weightMissing: product.economics?.weightMissing ?? true,
+        platformMode: product.economics?.platformMode ?? 'full',
+      }).catch(() => null);
+
+      if (synthSeo && !synthSeo.isFallback) {
+        Object.assign(product.seoContent, synthSeo);
+        await supabase.from('jobs').update({
+          result_json: { ...result, product: { ...product, seoContent: { ...product.seoContent, ...synthSeo } } },
+        }).eq('id', jobId).catch(() => {});
+      }
+    }
+
     // ─── WB-категория (fallback если аналоги не найдены) ────────────────────────
     const keywords = (product.seoContent?.keywords ?? []).slice(0, 3);
     if (!keywords.length && product.titleRu) keywords.push(product.titleRu.split(' ').slice(0, 2).join(' '));
@@ -112,4 +137,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await handleStepError(jobId, e.message, bot);
     res.status(200).json({ ok: false });
   }
+}
+
+function buildMarketDecisionForSynth(product: any) {
+  const wbf = product.wbFiltered;
+  const eco = product.economics;
+  const hasRealMedian = !!(wbf?.relevantCount > 0 && wbf?.medianPrice > 0);
+  const isSynthetic = eco?.isSyntheticPrice ?? false;
+  const confirmedCount = hasRealMedian && !isSynthetic ? wbf.relevantCount : 0;
+  return {
+    confirmedCount,
+    medianPrice: confirmedCount > 0 ? wbf.medianPrice : 0,
+    canShowMedianPrice: confirmedCount > 0,
+  };
 }

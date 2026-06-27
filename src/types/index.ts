@@ -113,6 +113,83 @@ export interface RawProduct1688 {
   normalized1688: Normalized1688Data;
 }
 
+// ─── Product Context (Canonicalizer output) ────────────────────────────────
+
+export interface ProductContext {
+  offerId: string;
+
+  identity: {
+    productType: string;
+    coreObject: string;
+    categoryType: string;
+    useCases: string[];
+    notThis: string[];
+    audience: string;
+    season: string;
+    gender: string;
+  };
+
+  titles: {
+    titleCn: string;
+    cleanRu: string;
+    shortRu: string;
+    wbTitleDraft: string;
+  };
+
+  facts: Record<string, string>;
+
+  sku: {
+    hasMultipleSku: boolean;
+    skuCount: number;
+    knownOptions: string[];
+    needsSelection: boolean;
+  };
+
+  price: {
+    visiblePriceCny: number | null;
+    minPriceCny: number | null;
+    maxPriceCny: number | null;
+    source: string;
+    needsConfirmation: boolean;
+  };
+
+  conflicts: Array<{
+    field: string;
+    problem: string;
+    severity: string;
+    action: string;
+  }>;
+
+  missingCritical: string[];
+
+  wbSearch: {
+    coreQuery: string;
+    queryLadder: string[];
+    mustInclude: string[];
+    mustExclude: string[];
+    directMatchRules: string[];
+    rejectRules: string[];
+  };
+
+  seoPolicy: {
+    allowedClaims: string[];
+    forbiddenClaims: string[];
+  };
+
+  supplierQuestions: {
+    ru: string[];
+    cn: string[];
+  };
+
+  riskTags: string[];
+
+  dataQuality: {
+    score: number;
+    status: string;
+    explanation: string;
+  };
+}
+
 // ─── Product Intelligence ───────────────────────────────────────────────────
 
 export interface ProductIntelligence {
@@ -223,6 +300,7 @@ export interface ProductWithContent extends RawProduct1688 {
   };
   evidence?: FieldEvidence[];
   intelligence?: ProductIntelligence;
+  productContext?: ProductContext;
   cachedAt?: Date;
 }
 
@@ -316,6 +394,7 @@ export interface AiContentRequest {
   platform?: Platform;
   categoryType?: string;
   intelligence?: ProductIntelligence;
+  productContext?: ProductContext;
 }
 
 export interface AiContentResult {
