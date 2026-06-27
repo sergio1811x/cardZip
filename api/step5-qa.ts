@@ -53,7 +53,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    if (!await acquireStepLock('step5', jobId)) return res.status(200).json({ ok: true, skip: true });
+    console.log(`[step5] Start: ${jobId}`);
+    if (!await acquireStepLock('step5', jobId)) {
+      console.log(`[step5] Duplicate blocked for job ${jobId}`);
+      return res.status(200).json({ ok: true, skip: true });
+    }
 
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
     if (!job || job.sent_to_telegram) return res.status(200).json({ ok: true, skip: true });

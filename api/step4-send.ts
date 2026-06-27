@@ -111,9 +111,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const freshStatus = await getStatus(job.user_id);
 
     progress?.stop();
-    if (job.tg_message_id) {
-      await bot.telegram.deleteMessage(job.tg_chat_id, job.tg_message_id).catch(() => {});
-    }
+    // Progress message will be deleted by step5
 
     // ─── Save snapshot + artifacts, chain to step5 ───────────────────────
     await supabase.from('jobs').update({
