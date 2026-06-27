@@ -117,10 +117,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       normalized1688: rawProduct.normalized1688,
     };
 
-    // SKU выбор: 2+ SKU с разными ценами
+    // SKU выбор: 2+ SKU с разными ценами ИЛИ много вариантов без цен
     const skus = rawProduct.skus ?? [];
     const uniquePrices = new Set(skus.filter(s => s.price).map(s => s.price));
-    const needSkuChoice = skus.length >= 2 && uniquePrices.size >= 2;
+    const needSkuChoice = skus.length >= 2 && (uniquePrices.size >= 2 || (skus.length >= 4 && uniquePrices.size === 0));
 
     if (needSkuChoice && job.tg_message_id) {
       // Показываем кнопки выбора SKU
