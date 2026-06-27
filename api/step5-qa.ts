@@ -154,12 +154,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log(`[step5] QA: ${qaResult.decision} | score: ${qaResult.qualityScore} | issues: ${qaResult.issues.length}`);
 
         if (qaResult.decision === 'BLOCK') {
-          const safe = qaResult.safeUserSummary ?? '⚠️ Анализ требует уточнения.';
-          if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-          await bot.telegram.sendMessage(chatId, typeof safe === 'string' ? safe : '⚠️ Анализ требует уточнения.\nКредит не списан.');
-          await markSent(job.id);
-          if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
-          return res.status(200).json({ ok: true, blocked: true });
+          // Не блокируем — показываем отчёт с предупреждением
+          console.warn(`[step5] QA wanted BLOCK but showing with disclaimer`);
+          finalText = finalText + '\n\n⚠️ <i>Данные требуют дополнительной проверки.</i>';
         }
 
         if (qaResult.decision === 'FIX_REQUIRED' && qaResult.issues.length > 0) {
