@@ -78,14 +78,22 @@ export async function handleSkuSelect(ctx: Context) {
 
     const host = process.env.PUBLIC_APP_HOST || process.env.VERCEL_URL || 'card-zip.vercel.app';
     const url = host.startsWith('http') ? `${host}/api/step2-ai` : `https://${host}/api/step2-ai`;
-    const ac = new AbortController();
-    setTimeout(() => ac.abort(), 4000);
-    fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId }),
-      signal: ac.signal,
-    }).catch(() => {});
+    for (let i = 0; i < 2; i++) {
+      try {
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 4000);
+        await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+          signal: ac.signal,
+        });
+        break;
+      } catch {
+        if (i === 0) await new Promise(r => setTimeout(r, 500));
+        else console.error(`[skuSelect] Failed to trigger step2 for job ${jobId}`);
+      }
+    }
   } catch (e) {
     console.error('[skuSelect]', e);
     await ctx.answerCbQuery('Ошибка').catch(() => {});
