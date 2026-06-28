@@ -9,7 +9,7 @@ async function findLastJob(userId: string) {
     .from('jobs')
     .select('result_json')
     .eq('user_id', userId)
-    .in('status', ['done', 'sent'])
+    .in('status', ['done', 'sent', 'qa_pending'])
     .order('created_at', { ascending: false })
     .limit(1)
     .single();

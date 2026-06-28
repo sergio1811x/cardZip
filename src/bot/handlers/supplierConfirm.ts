@@ -40,7 +40,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
     .from('jobs')
     .select('id')
     .eq('user_id', userId)
-    .in('status', ['done', 'sent'])
+    .in('status', ['done', 'sent', 'qa_pending'])
     .order('created_at', { ascending: false })
     .limit(1)
     .single();

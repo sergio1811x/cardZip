@@ -16,7 +16,7 @@ export async function handleLast(ctx: Context): Promise<void> {
     .from('jobs')
     .select('id, result_json, created_at')
     .eq('user_id', userId)
-    .in('status', ['done', 'sent'])
+    .in('status', ['done', 'sent', 'qa_pending'])
     .order('created_at', { ascending: false })
     .limit(1)
     .single();
