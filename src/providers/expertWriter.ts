@@ -566,7 +566,7 @@ export async function runExpertWriter(snapshot: AnalysisSnapshot): Promise<Exper
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) {
         console.log(`[expert-writer] ${model} HTTP ${res.status}`);
