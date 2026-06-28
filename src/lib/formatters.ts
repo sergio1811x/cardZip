@@ -1,41 +1,59 @@
 // ─── Centralized UI formatters ──────────────────────────────────────────────
 // All user-facing number/price/weight output MUST go through these.
-// Never show 0 ¥, 0 кг, NaN, undefined, null, or raw floats to users.
+// Never show 0 ¥, 0 кг, NaN, undefined, null, Infinity, or raw floats to users.
 
-export function formatCnyPrice(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value) || value <= 0) return '—';
+type NumericInput = number | null | undefined;
+
+function isPositiveFinite(value: NumericInput): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+export function formatCnyPrice(value: NumericInput): string {
+  if (!isPositiveFinite(value)) return '—';
   return `${Math.round(value)} ¥`;
 }
 
-export function formatCnyRange(min: number | undefined, max: number | undefined): string {
-  if (!min || min <= 0) return '—';
-  if (!max || max <= 0 || min === max) return `${Math.round(min)} ¥`;
-  return `${Math.round(min)}–${Math.round(max)} ¥`;
+export function formatCnyRange(min: NumericInput, max: NumericInput): string {
+  if (!isPositiveFinite(min)) return '—';
+
+  if (!isPositiveFinite(max)) return formatCnyPrice(min);
+
+  const a = Math.round(Math.min(min, max));
+  const b = Math.round(Math.max(min, max));
+  if (a <= 0) return '—';
+  if (a === b) return `${a} ¥`;
+  return `${a}–${b} ¥`;
 }
 
-export function formatRubPrice(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value) || value <= 0) return '—';
+export function formatRubPrice(value: NumericInput): string {
+  if (!isPositiveFinite(value)) return '—';
   return `${Math.round(value).toLocaleString('ru-RU')} ₽`;
 }
 
-export function formatWeightKg(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value) || value <= 0) return '—';
+export function formatWeightKg(value: NumericInput): string {
+  if (!isPositiveFinite(value)) return '—';
   return `${value.toFixed(2)} кг`;
 }
 
-export function formatPercent(value: number | null | undefined): string {
+export function formatPercent(value: NumericInput): string {
   if (value == null || !Number.isFinite(value)) return '—';
   return `${value.toFixed(1)}%`;
 }
 
-export function formatCount(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value) || value <= 0) return '—';
-  return value.toLocaleString('ru-RU');
+export function formatCount(value: NumericInput): string {
+  if (!isPositiveFinite(value)) return '—';
+  return Math.round(value).toLocaleString('ru-RU');
 }
 
 export function safeDisplay(value: unknown, fallback = '—'): string {
   if (value == null || value === '' || value === 0) return fallback;
-  const s = String(value);
-  if (s === 'undefined' || s === 'null' || s === 'NaN') return fallback;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value === 0) return fallback;
+    return String(value);
+  }
+
+  const s = String(value).trim();
+  if (!s) return fallback;
+  if (/^(undefined|null|nan|infinity|-infinity)$/i.test(s)) return fallback;
   return s;
 }

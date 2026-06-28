@@ -5,8 +5,6 @@ import { supabase } from '../src/db/supabase';
 import { productImporter } from '../src/providers/productImporter';
 import { normalizeCnText } from '../src/core/cnNormalize';
 import { createStepProgress } from '../src/core/progress';
-import { findProductByKey } from '../src/db/queries/products';
-import { buildCacheKey } from '../src/lib/cache';
 import { acquireStepLock } from '../src/lib/stepLock';
 
 export const config = { maxDuration: 60 };
@@ -60,38 +58,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`[step1] Elim: ${rawProduct.titleCn?.slice(0, 30)} | imgs:${rawProduct.images.length} | skus:${rawProduct.skus?.length ?? 0}`);
 
-    // Кэш отключён — всегда полный pipeline
-    const cacheValid = false;
-    if (cacheValid) {
-      console.log(`[step1] Cache hit: ${cacheKey.slice(0, 12)}`);
-      await supabase.from('jobs').update({
-        status: 'done',
-        result_json: {
-          rawProduct: cachedProduct,
-          imageUrls: rawProduct.images,
-          product: cachedProduct,
-        },
-        finished_at: new Date().toISOString(),
-      }).eq('id', jobId);
-
-      // Сразу в step4-send
-      const host = req.headers.host || 'card-zip.vercel.app';
-      for (let i = 0; i < 2; i++) {
-        try {
-          const ac = new AbortController();
-          setTimeout(() => ac.abort(), 4000);
-          await fetch(`https://${host}/api/step4-send`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jobId }),
-            signal: ac.signal,
-          });
-          break;
-        } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
-      }
-      res.status(200).json({ ok: true, cached: true });
-      return;
-    }
+    // Кэш намеренно не используется: каждый анализ проходит полный pipeline.
 
     const rawForJob = {
       productId: rawProduct.productId,
@@ -125,9 +92,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (needSkuChoice && job.tg_message_id) {
       const { Markup } = require('telegraf');
       const buttons = skus.slice(0, 8).map((sku: any, i: number) => {
-        // Убираем китайские символы из названия для кнопки
-        let label = (sku.name ?? `Вариант ${i + 1}`).slice(0, 28);
-        const priceLabel = sku.price ? ` · ${sku.price} ¥` : '';
+        const rawLabel = String(sku.name ?? sku.label ?? `Вариант ${i + 1}`);
+        let label = normalizeCnText(rawLabel).replace(/[一-鿿]/g, '').replace(/\s+/g, ' ').trim();
+        if (!label) label = `Вариант ${i + 1}`;
+        label = label.slice(0, 28);
+        const priceLabel = sku.price && Number(sku.price) > 0 ? ` · ${sku.price} ¥` : '';
         return [Markup.button.callback(`${label}${priceLabel}`, `sku_${i}_${jobId}`)];
       });
       buttons.push([Markup.button.callback('📊 Все варианты', `sku_all_${jobId}`)]);
@@ -160,12 +129,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step2-ai`, {
+        const response = await fetch(`https://${host}/api/step2-ai`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }),
           signal: ac.signal,
         });
+        if (!response.ok) throw new Error(`step2 HTTP ${response.status}`);
         step2Sent = true;
       } catch {
         if (i === 0) await new Promise(r => setTimeout(r, 500));

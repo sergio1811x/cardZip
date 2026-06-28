@@ -5,7 +5,9 @@ const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
 function createRedis(): Redis | null {
   if (!url || !token) {
-    console.warn('⚠️  UPSTASH_REDIS не настроен — rate limit отключён');
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('⚠️  UPSTASH_REDIS не настроен — rate limit/locks отключены');
+    }
     return null;
   }
   return new Redis({ url, token });

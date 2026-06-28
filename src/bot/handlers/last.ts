@@ -2,7 +2,7 @@ import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { supabase } from '../../db/supabase';
 import { track } from '../../services/analyticsService';
-import { formatCnyRange, formatWeightKg, formatRubPrice } from '../../lib/formatters';
+import { formatWeightKg, formatRubPrice } from '../../lib/formatters';
 import { resolvePurchasePrice } from '../../core/priceResolver';
 
 export async function handleLast(ctx: Context): Promise<void> {
@@ -43,6 +43,7 @@ export async function handleLast(ctx: Context): Promise<void> {
   // WB market data from the saved analysis (same source as main card)
   const wbFiltered = product?.wbFiltered;
   const wbMedian = wbFiltered?.medianPrice;
+  const marketConfirmed = wbFiltered?.marketConfirmed !== false && wbFiltered?.canUseForEconomics !== false;
 
   const title = product?.titleRu || raw.titleCn || raw.productId;
   const date = new Date(lastJob.created_at).toLocaleDateString('ru-RU');
@@ -54,8 +55,10 @@ export async function handleLast(ctx: Context): Promise<void> {
   lines.push('');
   lines.push(`Цена: ${priceLabel}`);
   lines.push(`Вес: ${weightLabel}`);
-  if (wbMedian && wbMedian > 0) {
+  if (marketConfirmed && wbMedian && wbMedian > 0) {
     lines.push(`Медиана WB: ${formatRubPrice(wbMedian)}`);
+  } else if (wbMedian && wbMedian > 0) {
+    lines.push('WB-цена: не подтверждена прямыми аналогами');
   }
 
   // Economics summary from saved data
@@ -63,7 +66,7 @@ export async function handleLast(ctx: Context): Promise<void> {
   if (economics?.costRub > 0) {
     const prefix = economics.weightMissing ? '~' : '';
     lines.push(`Себестоимость: ${prefix}${formatRubPrice(economics.costRub)}`);
-    if (economics.roiPercent && !economics.isSyntheticPrice && !economics.weightMissing) {
+    if (marketConfirmed && economics.roiPercent && !economics.isSyntheticPrice && !economics.weightMissing && economics.canShowRoi !== false) {
       lines.push(`ROI: ${economics.roiPercent}%`);
     }
   }
@@ -92,6 +95,6 @@ export async function handleLast(ctx: Context): Promise<void> {
   });
 }
 
-function escHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function escHtml(str: unknown): string {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

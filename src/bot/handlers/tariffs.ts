@@ -96,9 +96,11 @@ export async function handleEditTariff(ctx: Context) {
   if (!chatId) return;
 
   // Сохраняем в Redis что ожидаем ввод
-  if (redis) {
-    await redis.set(pendingKey(chatId), JSON.stringify({ field: fieldKey, userId }), { ex: 120 });
+  if (!redis) {
+    await ctx.reply('❌ Временное сохранение недоступно. Попробуйте позже.');
+    return;
   }
+  await redis.set(pendingKey(chatId), JSON.stringify({ field: fieldKey, userId }), { ex: 120 });
 
   // Редактируем текущее сообщение с тарифами → prompt ввода
   if (ctx.callbackQuery) {
@@ -116,13 +118,30 @@ export async function handleEditTariff(ctx: Context) {
 
 export async function getPendingEdit(chatId: number): Promise<{ field: keyof UserTariffs; userId: string } | null> {
   if (!redis) return null;
-  const raw = await redis.get(pendingKey(chatId));
+  const raw = await redis.get(pendingKey(chatId)).catch(() => null);
   if (!raw) return null;
   try {
     return typeof raw === 'string' ? JSON.parse(raw) : raw as any;
   } catch {
     return null;
   }
+}
+
+function parseTariffValue(field: keyof UserTariffs, text: string): number | null {
+  const normalized = text.trim().replace(',', '.');
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null;
+  const value = Number(normalized);
+  if (!Number.isFinite(value) || value <= 0) return null;
+
+  const maxByField: Partial<Record<keyof UserTariffs, number>> = {
+    cargoPerKgUsd: 30,
+    fulfillmentRub: 1000,
+    taxPercent: 30,
+    targetMarginPercent: 90,
+    drrPercent: 80,
+  };
+  const max = maxByField[field] ?? 1000;
+  return value <= max ? value : null;
 }
 
 export async function handleTariffInput(ctx: Context, text: string): Promise<boolean> {
@@ -132,9 +151,9 @@ export async function handleTariffInput(ctx: Context, text: string): Promise<boo
   const pending = await getPendingEdit(chatId);
   if (!pending) return false;
 
-  const value = parseFloat(text.replace(',', '.').replace(/[^0-9.]/g, ''));
-  if (isNaN(value) || value <= 0 || value > 1000) {
-    await ctx.reply('❌ Введите корректное число. Попробуйте ещё раз.');
+  const value = parseTariffValue(pending.field, text);
+  if (value == null) {
+    await ctx.reply('❌ Введите корректное число в допустимом диапазоне. Попробуйте ещё раз.');
     return true;
   }
 
@@ -143,7 +162,7 @@ export async function handleTariffInput(ctx: Context, text: string): Promise<boo
   await saveUserTariffs(pending.userId, tariffs);
 
   // Очищаем pending
-  if (redis) await redis.del(pendingKey(chatId));
+  if (redis) await redis.del(pendingKey(chatId)).catch(() => {});
 
   const field = TARIFF_FIELDS.find((f) => f.key === pending.field);
 

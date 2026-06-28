@@ -1,5 +1,12 @@
 import { createHash } from 'crypto';
 
+function normalizeCachePart(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 2_000);
+}
+
 /**
  * cache_key = sha256(productId:titleCn:mainImageUrl)
  * Включаем titleCn, чтобы сбрасывать кэш при редактировании листинга.
@@ -9,7 +16,6 @@ export function buildCacheKey(
   titleCn: string,
   mainImageUrl: string
 ): string {
-  return createHash('sha256')
-    .update(`${productId}:${titleCn}:${mainImageUrl}`)
-    .digest('hex');
+  const payload = [productId, titleCn, mainImageUrl].map(normalizeCachePart).join(':');
+  return createHash('sha256').update(payload).digest('hex');
 }

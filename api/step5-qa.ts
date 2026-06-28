@@ -3,9 +3,10 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { markSent } from '../src/db/queries/jobs';
-import { getStatus } from '../src/services/subscriptionService';
+import { getStatus, consumeCredit } from '../src/services/subscriptionService';
+import { track } from '../src/services/analyticsService';
 import { buildMainMessage } from '../src/core/messageBuilder';
-import { validateReport } from '../src/core/reportValidator';
+import { validateReport, runHardValidator, type HardValidatorSafeSummary } from '../src/core/reportValidator';
 import { findWbCategoriesByKeywords } from '../src/db/queries/wbCategories';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
@@ -21,29 +22,46 @@ export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
-// ─── Hard Validator (code, no LLM) ──────────────────────────────────────────
-function runHardValidator(product: ProductWithContent, mainText: string): { ok: boolean; issues: string[]; block: boolean } {
-  const issues: string[] = [];
-  let block = false;
 
-  // No 0 prices shown
-  if (/\b0\s*[¥₽]/.test(mainText) && product.priceYuan <= 0) {
-    issues.push('0 ¥/₽ в тексте');
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function formatSafeSummary(summary: HardValidatorSafeSummary, reason?: string): string {
+  const lines = [
+    '⚠️ <b>Анализ требует уточнения</b>',
+    '',
+    `<b>Статус:</b> ${escapeHtml(summary.status)}`,
+    `<b>Вердикт:</b> ${escapeHtml(summary.verdict)}`,
+    `<b>Главный риск:</b> ${escapeHtml(summary.mainRisk)}`,
+    `<b>Следующий шаг:</b> ${escapeHtml(summary.nextStep)}`,
+    `<b>Не делать:</b> ${escapeHtml(summary.doNotDo)}`,
+  ];
+  if (reason) lines.push('', `<i>${escapeHtml(reason)}</i>`);
+  lines.push('', 'Кредит не списан.');
+  return lines.join('\n');
+}
+
+function isQaUnavailable(qaResult: { decision: string; issues?: string[] } | null): boolean {
+  if (!qaResult) return true;
+  return (qaResult.issues ?? []).some((issue) => /QA\s+(?:skipped|fallback)|no API key|all models failed/i.test(String(issue)));
+}
+
+function getArtifactUserCard(value: unknown, fallback: string): string {
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const direct = obj.userCard ?? obj.UserCard;
+    if (typeof direct === 'string' && direct.trim()) return direct;
+    const nested = obj.artifacts;
+    if (nested && typeof nested === 'object') {
+      const nestedCard = (nested as Record<string, unknown>).userCard;
+      if (typeof nestedCard === 'string' && nestedCard.trim()) return nestedCard;
+    }
   }
-
-  // No Chinese in user text
-  if (/[一-鿿]/.test(mainText)) {
-    issues.push('Китайские символы в тексте');
-  }
-
-  // ROI without market
-  const snapshot = (product as any).analysisSnapshot;
-  if (snapshot && !snapshot.market?.marketConfirmed && /ROI\s*[:=]\s*\d/.test(mainText)) {
-    issues.push('ROI без подтверждённого рынка');
-    block = true;
-  }
-
-  return { ok: issues.length === 0, issues, block };
+  return fallback;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -64,7 +82,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const result = job.result_json as any;
     const chatId = job.tg_chat_id;
-    const product = result.product as ProductWithContent;
+    const product = result?.product as ProductWithContent | undefined;
+    if (!product) {
+      console.warn('[step5] BLOCKED: missing product payload');
+      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+      await bot.telegram.sendMessage(chatId,
+        '⚠️ <b>Анализ требует уточнения</b>\n\nНе удалось собрать карточку товара. Кредит не списан.',
+        { parse_mode: 'HTML' },
+      );
+      await markSent(job.id);
+      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      return res.status(200).json({ ok: true, blocked: true, reason: 'missing_product' });
+    }
 
     // ─── Backward compat: if step4 didn't save freshStatus, fetch it ─────
     let freshStatus = result.freshStatus;
@@ -105,7 +134,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ─── Build main message ──────────────────────────────────────────────
     const status = {
       plan: freshStatus.plan ?? 'free',
-      creditsRemaining: freshStatus.creditsRemaining ?? 0,
+      creditsRemaining: Math.max(0, (freshStatus.creditsRemaining ?? 0) - 1),
       creditsTotal: 0,
       canGenerate: true,
       isTrial: freshStatus.isTrial ?? false,
@@ -113,27 +142,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const { text: mainText, keyboard: mainKb } = buildMainMessage(
       product, job.id, status as any, wbCategory,
     );
-
-    // ─── Hard Validator ──────────────────────────────────────────────────
-    const hardResult = runHardValidator(product, mainText);
-
-    if (hardResult.block) {
-      console.warn(`[step5] BLOCKED: ${hardResult.issues.join(', ')}`);
-      // Delete progress message if still there
-      if (job.tg_message_id) {
-        await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-      }
-      await bot.telegram.sendMessage(chatId,
-        '⚠️ Анализ требует уточнения.\n\n' +
-        'Не удалось подготовить надёжный отчёт.\n' +
-        `Причина: ${hardResult.issues.join('; ')}\n\n` +
-        'Попробуйте другой товар или уточните данные у поставщика.\n' +
-        'Кредит не списан.',
-      );
-      await markSent(job.id);
-      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
-      return res.status(200).json({ ok: true, blocked: true });
-    }
 
     // ─── Step 4C: Soft validation (code) ────────────────────────────────
     const validation = validateReport(mainText, (product as any).categoryType ?? 'other', {
@@ -149,29 +157,85 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.warn(`[step5] Code validator: ${validation.errors.join(', ')}`);
     }
 
-    // ─── Step 4D: Expert QA Gate (LLM) ───────────────────────────────────
+    // ─── Step 4D: Hard Validator (code, always) ───────────────────────
     const snapshot = result.analysisSnapshot;
-    if (snapshot) {
-      const qaResult = await runQaGate(snapshot, { userCard: finalText }).catch(() => null);
+    const artifacts = {
+      userCard: finalText,
+      seoText,
+      buyerBrief: briefText,
+      lastMessage: result.writerResult?.lastMessage ?? '',
+    };
 
-      if (qaResult) {
-        console.log(`[step5] QA: ${qaResult.decision} | score: ${qaResult.qualityScore} | issues: ${qaResult.issues.length}`);
+    if (!snapshot) {
+      console.warn('[step5] BLOCKED: missing AnalysisSnapshot');
+      const fallbackSummary: HardValidatorSafeSummary = {
+        status: 'черновик',
+        verdict: 'Полный отчёт заблокирован: не собран единый AnalysisSnapshot.',
+        mainRisk: 'Нет единого источника правды для цены, рынка и экономики.',
+        nextStep: 'Повторить анализ или проверить pipeline step4.',
+        doNotDo: 'Не считать ROI/маржу и не закупать партию по этому отчёту.',
+      };
+      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+      await bot.telegram.sendMessage(chatId, formatSafeSummary(fallbackSummary), { parse_mode: 'HTML' });
+      await markSent(job.id);
+      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      return res.status(200).json({ ok: true, blocked: true, reason: 'missing_snapshot' });
+    }
 
-        if (qaResult.decision === 'BLOCK') {
-          // Не блокируем — показываем отчёт с предупреждением
-          console.warn(`[step5] QA wanted BLOCK but showing with disclaimer`);
-          finalText = finalText + '\n\n⚠️ <i>Данные требуют дополнительной проверки.</i>';
-        }
+    let hardResult = runHardValidator({ analysisSnapshot: snapshot, artifacts });
+    if (hardResult.fixedArtifacts?.userCard && !hardResult.block) {
+      finalText = String(hardResult.fixedArtifacts.userCard);
+    }
 
-        if (qaResult.decision === 'FIX_REQUIRED' && qaResult.issues.length > 0) {
-          const fixed = await runAutoFix(snapshot, { userCard: finalText }, qaResult).catch(() => null);
-          if (fixed?.userCard) {
-            finalText = fixed.userCard;
-            console.log(`[step5] Auto-fix applied`);
-          }
-        }
+    if (hardResult.block || !hardResult.canShowFullReport) {
+      console.warn(`[step5] HARD BLOCKED: ${hardResult.issues.map(i => i.problem).join('; ')}`);
+      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+      await bot.telegram.sendMessage(chatId, formatSafeSummary(hardResult.safeUserSummary, 'Полный отчёт не показан: сработал кодовый валидатор.'), { parse_mode: 'HTML' });
+      await markSent(job.id);
+      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      return res.status(200).json({ ok: true, blocked: true, reason: 'hard_validator' });
+    }
+
+    // ─── Step 4E: Expert QA Gate (LLM) ───────────────────────────────────
+    const qaResult = await runQaGate(snapshot, { ...artifacts, userCard: finalText }).catch(() => null);
+
+    if (isQaUnavailable(qaResult)) {
+      console.warn('[step5] QA unavailable — blocking full report');
+      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+      await bot.telegram.sendMessage(chatId, formatSafeSummary(hardResult.safeUserSummary, 'QA Gate недоступен, поэтому полный отчёт не отправлен.'), { parse_mode: 'HTML' });
+      await markSent(job.id);
+      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      return res.status(200).json({ ok: true, blocked: true, reason: 'qa_unavailable' });
+    }
+
+    console.log(`[step5] QA: ${qaResult!.decision} | score: ${qaResult!.qualityScore} | issues: ${qaResult!.issues.length}`);
+
+    if (qaResult!.decision === 'BLOCK') {
+      console.warn('[step5] QA BLOCKED full report');
+      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+      await bot.telegram.sendMessage(chatId, formatSafeSummary(hardResult.safeUserSummary, 'Полный отчёт не показан: QA Gate заблокировал результат.'), { parse_mode: 'HTML' });
+      await markSent(job.id);
+      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      return res.status(200).json({ ok: true, blocked: true, reason: 'qa_block' });
+    }
+
+    if (qaResult!.decision === 'FIX_REQUIRED' && qaResult!.issues.length > 0) {
+      const fixed = await runAutoFix(snapshot, { ...artifacts, userCard: finalText }, qaResult!).catch(() => null);
+      finalText = getArtifactUserCard(fixed, finalText);
+      hardResult = runHardValidator({ analysisSnapshot: snapshot, artifacts: { ...artifacts, userCard: finalText } });
+      if (hardResult.block || !hardResult.canShowFullReport) {
+        console.warn('[step5] BLOCKED after auto-fix');
+        if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+        await bot.telegram.sendMessage(chatId, formatSafeSummary(hardResult.safeUserSummary, 'После Auto-Fix остались критичные проблемы.'), { parse_mode: 'HTML' });
+        await markSent(job.id);
+        if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+        return res.status(200).json({ ok: true, blocked: true, reason: 'autofix_hard_validator' });
       }
     }
+
+    // Кредит списывается только после Hard Validator + QA Gate PASS/FIX_REQUIRED и перед отправкой.
+    await consumeCredit(job.user_id);
+    await track(job.user_id, 'generation_done', { url: job.input_url });
 
     // ─── Send ────────────────────────────────────────────────────────────
     if (job.tg_message_id) {

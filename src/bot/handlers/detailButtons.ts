@@ -7,6 +7,11 @@ import { formatOrderBrief } from '../../core/orderBrief';
 import { zipBuilder } from '../../core/zipBuilder';
 import type { ProductWithContent } from '../../types';
 
+function isBlockedResult(result: any): boolean {
+  const decision = result?.qaResult?.decision ?? result?.expertQa?.decision ?? result?.qa?.decision;
+  return decision === 'BLOCK' || result?.hardValidation?.block === true || result?.blocked === true;
+}
+
 async function getJobData(ctx: Context, jobId: string): Promise<any | null> {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) return null;
@@ -112,12 +117,20 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
   await ctx.answerCbQuery();
 
   const chatId = ctx.chat!.id;
+  const result = job.result_json as any;
+  if (isBlockedResult(result)) {
+    await ctx.telegram.sendMessage(chatId,
+      '⚠️ <b>Полные материалы недоступны</b>\n\nQA заблокировал полный отчёт. Можно использовать только безопасный краткий вывод из анализа.',
+      { parse_mode: 'HTML' }
+    );
+    return;
+  }
+
   await ctx.telegram.sendMessage(chatId,
     '📎 <b>Файлы готовы</b>\n\n• SEO-карточка для WB\n• ТЗ байеру / карго\n• Фото товара',
     { parse_mode: 'HTML' }
   );
 
-  const result = job.result_json as any;
   const product = result?.product as ProductWithContent | undefined;
   const generatedFiles = result?.generatedFiles;
   const offerId = product?.productId?.slice(-8) ?? Date.now().toString().slice(-8);

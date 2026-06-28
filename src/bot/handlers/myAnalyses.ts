@@ -26,7 +26,8 @@ export async function handleMyAnalyses(ctx: Context, page = 0): Promise<void> {
     const product = (a.result_json as any)?.product as ProductWithContent | undefined;
     const title = product?.titleRu || extractDomain(a.input_url);
     const date = new Date(a.created_at).toLocaleDateString('ru-RU');
-    const price = product?.priceYuan ? `${product.priceYuan} ¥` : '';
+    const priceValue = Number(product?.priceYuan);
+    const price = Number.isFinite(priceValue) && priceValue > 0 ? `${priceValue} ¥` : '';
     const platform = product?.platform?.toUpperCase() ?? '';
 
     return `${num}. <b>${escHtml(truncate(title, 40))}</b>\n` +
@@ -120,11 +121,12 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
 }
 
 
-function escHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function escHtml(str: unknown): string {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function truncate(str: string, max: number): string {
+function truncate(str: string | undefined, max: number): string {
+  str = String(str ?? '');
   return str.length > max ? str.slice(0, max - 1) + '…' : str;
 }
 
@@ -133,5 +135,5 @@ function extractDomain(url: string): string {
 }
 
 function fP(n: number): string {
-  return Math.round(n).toLocaleString('ru-RU') + ' ₽';
+  return Math.round(Number(n) || 0).toLocaleString('ru-RU') + ' ₽';
 }

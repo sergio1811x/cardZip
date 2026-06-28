@@ -10,6 +10,16 @@ export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
+function safeString(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
+  return fallback;
+}
+
+function makeFallbackQuery(raw: any): string {
+  return safeString(raw?.titleEn) || safeString(raw?.categoryName) || safeString(raw?.titleCn);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -48,16 +58,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }).catch(() => null);
 
     // Backward-compatible fields from productContext
-    const wbCoreQuery = productContext?.wbSearch?.coreQuery ?? '';
+    const fallbackQuery = makeFallbackQuery(raw);
+    const wbCoreQuery = productContext?.wbSearch?.coreQuery || fallbackQuery;
     const categoryType = productContext?.identity?.categoryType ?? 'other';
-    const validatedQueries = productContext?.wbSearch?.queryLadder ?? [];
+    const validatedQueries = productContext?.wbSearch?.queryLadder?.length ? productContext.wbSearch.queryLadder : [fallbackQuery].filter(Boolean);
 
     // Temporary SEO (will be regenerated in step4 with market data)
     const seoContent = {
       titleRu: productContext?.titles?.cleanRu ?? raw.titleEn ?? raw.titleCn,
       description: '',
       bullets: [] as string[],
-      keywords: productContext?.wbSearch?.queryLadder ?? [],
+      keywords: validatedQueries,
       characteristics: productContext?.facts ?? {},
     };
 
@@ -76,8 +87,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         validatedQueries,
         // backward compat for step3
         productStructure: productContext ? {
-          coreObject: productContext.identity.coreObject,
-          productType: productContext.identity.productType,
+          coreObject: productContext.identity.coreObject || fallbackQuery,
+          productType: productContext.identity.productType || fallbackQuery,
           material: Object.entries(productContext.facts).filter(([k]) => k.includes('материал')).map(([,v]) => v),
           hardConflicts: productContext.conflicts.filter(c => c.severity === 'high').map(c => c.field),
           softConflicts: productContext.conflicts.filter(c => c.severity !== 'high').map(c => c.field),
@@ -86,18 +97,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           mustKeep: productContext.wbSearch.mustInclude,
           doNotSearch: productContext.wbSearch.mustExclude,
           audience: productContext.identity.audience,
-        } : null,
+        } : {
+          coreObject: fallbackQuery,
+          productType: fallbackQuery,
+          material: [],
+          hardConflicts: [],
+          softConflicts: [],
+          directAnalogBlockers: [],
+          marketSynonyms: validatedQueries,
+          mustKeep: [],
+          doNotSearch: [],
+          audience: '',
+        },
         queryPlan: productContext ? {
           L1_exact: productContext.wbSearch.queryLadder.slice(0, 2),
           L2_commercial: productContext.wbSearch.queryLadder.slice(2, 4),
           L3_subtype: [],
           L4_core: [productContext.identity.coreObject],
           L5_category: [],
-        } : null,
+        } : {
+          L1_exact: validatedQueries.slice(0, 1),
+          L2_commercial: validatedQueries.slice(1, 2),
+          L3_subtype: [],
+          L4_core: [fallbackQuery].filter(Boolean),
+          L5_category: [],
+        },
         productLexicon: productContext ? {
           mainTerms: [productContext.identity.coreObject],
           hardNegativeTerms: productContext.wbSearch.mustExclude,
-        } : null,
+        } : {
+          mainTerms: [fallbackQuery].filter(Boolean),
+          hardNegativeTerms: [],
+        },
       },
     }).eq('id', jobId);
 
@@ -108,12 +139,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step3-market`, {
+        const response = await fetch(`https://${host}/api/step3-market`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }),
           signal: ac.signal,
         });
+        if (!response.ok) throw new Error(`step3 HTTP ${response.status}`);
         sent = true;
       } catch {
         if (i === 0) await new Promise(r => setTimeout(r, 500));

@@ -31,25 +31,31 @@ function parseCards(products: any[]): WbCard[] {
       : time1 !== null && time1 <= 5 ? 'local_wb_market' as const
       : 'unknown_market' as const;
     return {
+      id: p.id,
+      nmId: p.id,
       title: p.name || '', price: p.price,
       url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
       rating: p.rating || 0, feedbacks: p.feedbacks || 0,
       wh: p.wh, time1, time2: p.time2, dist: p.dist,
       seller: p.seller || '', supplierId: p.supplierId,
       brand: p.brand || '', marketType,
-    };
+      sourceHits: p.sourceHits ?? [],
+      queryHits: p.queryHits ?? [],
+    } as WbCard;
   }).filter((c: WbCard) => c.price > 0);
 }
 
 async function searchWb(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string>; is429?: boolean }> {
+  const safeQueries = queries.map((q) => String(q || '').trim()).filter(Boolean).slice(0, MAX_WB_QUERIES);
   const seenUrls = new Set<string>();
   const cards: WbCard[] = [];
+  if (!safeQueries.length) return { cards, seenUrls };
 
   try {
     const res = await fetch(`${WB_PARSER_URL}/search-batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ secret: WB_PARSER_SECRET, queries, limit: 100 }),
+      body: JSON.stringify({ secret: WB_PARSER_SECRET, queries: safeQueries, limit: 100 }),
       signal: AbortSignal.timeout(25_000),
     });
     if (!res.ok) {
@@ -162,13 +168,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let ranked = rankCandidates(allCards, structure, lexicon, allQueries);
 
       // 6. Repair (max 1 query, only if direct=0, within hard cap)
-      if (ranked.buckets.directLocalAnalogs.length === 0 && structure && wbSearchCount < 5) {
+      if (ranked.buckets.directLocalAnalogs.length === 0 && structure && wbSearchCount < MAX_WB_QUERIES) {
         const rejected = ranked.buckets.wrong.slice(0, 5).map((c: any) => c.title);
         const found = ranked.buckets.similarLocalProducts.slice(0, 5).map((c: any) => c.title);
         const repair = await repairSearch(structure, allQueries, found, rejected, { tokens: [], bigrams: [] }).catch(() => ({ newQueries: [] as string[], reason: '' }));
 
         if (repair.newQueries.length) {
-          const repairQ = repair.newQueries.slice(0, 1); // max 1
+          const repairQ = repair.newQueries.slice(0, Math.max(0, MAX_WB_QUERIES - wbSearchCount));
           console.log(`[step3] Repair: "${repairQ[0]}" (${repair.reason})`);
           const { cards: repairCards } = await searchWb(repairQ);
           for (const c of repairCards) {
@@ -199,13 +205,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (judgments.length === borderline.length) {
             borderline.forEach((card: any, i: number) => {
               if (judgments[i]?.matchLevel) {
-                card.matchLevel = judgments[i].matchLevel;
+                const proposed = judgments[i].matchLevel;
+                // LLM может уточнять borderline, но не имеет права поднимать <85 до direct.
+                card.matchLevel = proposed === 'direct_analog' && (card.similarity ?? 0) < 85 ? 'similar' : proposed;
                 card.matchedTerms = judgments[i].matchedAttributes ?? card.matchedTerms;
                 card.missingTerms = judgments[i].missingAttributes ?? card.missingTerms;
               }
             });
             const all = [...similarity.buckets.directLocalAnalogs, ...similarity.buckets.similarLocalProducts, ...similarity.buckets.categoryOnly];
-            similarity.buckets.directLocalAnalogs = all.filter((c: any) => c.matchLevel === 'direct_analog' && c.marketType !== 'crossborder_market').sort((a: any, b: any) => b.similarity - a.similarity);
+            similarity.buckets.directLocalAnalogs = all.filter((c: any) => c.matchLevel === 'direct_analog' && (c.similarity ?? 0) >= 85 && c.marketType !== 'crossborder_market').sort((a: any, b: any) => b.similarity - a.similarity);
             similarity.buckets.similarLocalProducts = all.filter((c: any) => c.matchLevel === 'similar' && c.marketType !== 'crossborder_market').sort((a: any, b: any) => b.similarity - a.similarity);
             similarity.buckets.categoryOnly = all.filter((c: any) => c.matchLevel === 'category_only');
           }
@@ -222,15 +230,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // ─── Build WbData for economics (only LOCAL direct analogs) ─────────
-    const directCards = similarity.buckets.directLocalAnalogs;
-    const wbData: WbSearchResult | null = directCards.length > 0 ? {
-      avgPrice: Math.round(directCards.reduce((s: number, c: any) => s + c.price, 0) / directCards.length),
-      minPrice: Math.min(...directCards.map((c: any) => c.price)),
-      maxPrice: Math.max(...directCards.map((c: any) => c.price)),
+    // ─── Build WbData for economics (only confirmed LOCAL direct analogs) ─
+    const directCards = (similarity.buckets.directLocalAnalogs ?? [])
+      .filter((c: any) => c.marketType !== 'crossborder_market' && (c.similarity ?? 0) >= 85 && c.price > 0);
+    const economyDirectCards = directCards.slice(0, 20);
+    const marketConfirmedForEconomy = economyDirectCards.length >= 3;
+    const wbData: WbSearchResult | null = marketConfirmedForEconomy ? {
+      avgPrice: Math.round(economyDirectCards.reduce((s: number, c: any) => s + c.price, 0) / economyDirectCards.length),
+      minPrice: Math.min(...economyDirectCards.map((c: any) => c.price)),
+      maxPrice: Math.max(...economyDirectCards.map((c: any) => c.price)),
       totalCards: allCards.length,
-      topExamples: directCards.slice(0, 3),
-      allCards: directCards,
+      topExamples: economyDirectCards.slice(0, 3),
+      allCards: economyDirectCards,
       photoSearchConfirmed: false,
     } : null;
 
@@ -308,8 +319,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ...raw,
           titleRu: seoContent?.titleRu ?? raw.titleEn ?? raw.titleCn,
           seoContent, wbData, wbFiltered, riskFlags,
+          productContext: resultJson.productContext ?? null,
           economics, budgets, maxPurchasePrice, conclusion,
           similarityData,
+          marketEvidence: {
+            directAnalogs: directCards.slice(0, 10),
+            marketConfirmedForEconomy,
+            minDirectAnalogsForEconomy: 3,
+          },
           wbTrends,
           wbCoreQuery,
           categoryType,
@@ -323,19 +340,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ─── Chain → step4 ──────────────────────────────────────────────────
     const host = req.headers.host || 'card-zip.vercel.app';
-    for (let i = 0; i < 2; i++) {
+    let step4Sent = false;
+    for (let i = 0; i < 2 && !step4Sent; i++) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step4-send`, {
+        const response = await fetch(`https://${host}/api/step4-send`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }), signal: ac.signal,
         });
-        break;
+        if (!response.ok) throw new Error(`step4 HTTP ${response.status}`);
+        step4Sent = true;
       } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
     }
 
-    res.status(200).json({ ok: true });
+    if (!step4Sent) {
+      const { handleStepError } = require('../src/lib/stepError');
+      await handleStepError(jobId, 'step4_trigger_failed', bot);
+    }
+
+    res.status(200).json({ ok: true, step4Sent });
   } catch (e: any) {
     console.error('[step3]', e.message);
     const { handleStepError } = require('../src/lib/stepError');

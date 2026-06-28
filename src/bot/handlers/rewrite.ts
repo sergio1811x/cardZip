@@ -2,23 +2,55 @@ import type { Context } from 'telegraf';
 import { supabase } from '../../db/supabase';
 
 const STYLE_PROMPTS: Record<string, string> = {
-  short: 'Перепиши этот SEO-текст КОРОЧЕ: максимум 600 символов, только суть, без воды. Сохрани ключевые слова и структуру (название, описание, буллеты). Ответь ТОЛЬКО текстом, без JSON.',
-  aggressive: 'Перепиши этот SEO-текст в стиле АГРЕССИВНЫХ ПРОДАЖ: создай ощущение срочности и дефицита, подчеркни выгоду, используй триггеры "последние штуки", "хит продаж", "не упусти". Сохрани ключевые слова. Ответь ТОЛЬКО текстом.',
-  premium: 'Перепиши этот SEO-текст в ПРЕМИУМ стиле: элегантный, сдержанный тон, акцент на качестве материалов и эксклюзивности. Без восклицательных знаков. Сохрани ключевые слова. Ответь ТОЛЬКО текстом.',
+  short: 'Перепиши этот SEO-текст короче: максимум 600 символов, только суть, без воды. Сохрани подтверждённые факты, ключевые слова и структуру (название, описание, буллеты). Не добавляй claims, которых нет в исходных данных. Ответь только текстом, без JSON.',
+  aggressive: 'Перепиши этот SEO-текст в более продающем стиле, но без неподтверждённых claims вроде "хит продаж", "последние штуки", "лучший", "премиум", "безопасный", "сертифицированный", "водонепроницаемый". Сохрани ключевые слова и подтверждённые факты. Ответь только текстом.',
+  premium: 'Перепиши этот SEO-текст в премиальном стиле: сдержанный тон, аккуратная подача, без восклицательных знаков. Не добавляй claims про качество, безопасность, сертификацию, водонепроницаемость или эксклюзивность, если их нет в исходном тексте. Сохрани ключевые слова. Ответь только текстом.',
 };
+
+const BANNED_REWRITE_CLAIMS = [
+  /последн(?:ие|яя|ий)\s+штук[аи]?/gi,
+  /хит\s+продаж/gi,
+  /лучши[йея]/gi,
+  /топ\s*продаж/gi,
+  /сертифицированн\w*/gi,
+  /водонепроницаем\w*/gi,
+  /ip\s*\d{2}/gi,
+  /безопасн\w*/gi,
+  /лечебн\w*/gi,
+];
+
+function escHtml(str: unknown): string {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function cleanRewriteText(text: string): string {
+  let out = text
+    .replace(/^```(?:\w+)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .replace(/\b(undefined|null|NaN)\b/gi, '')
+    .trim();
+  for (const re of BANNED_REWRITE_CLAIMS) out = out.replace(re, '');
+  return out.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
 
 export function buildRewriteKeyboard(jobId: string) {
   const { Markup } = require('telegraf');
   return Markup.inlineKeyboard([
     [
       Markup.button.callback('🔄 Короче', `rw_short_${jobId}`),
-      Markup.button.callback('🔥 Агрессивно', `rw_aggressive_${jobId}`),
+      Markup.button.callback('🔥 Продающе', `rw_aggressive_${jobId}`),
       Markup.button.callback('💎 Премиум', `rw_premium_${jobId}`),
     ],
   ]);
 }
 
 export async function handleRewrite(ctx: Context) {
+  const userId = (ctx as any).dbUserId as string | undefined;
+  if (!userId) return;
+
   const match = (ctx as any).match as RegExpMatchArray | undefined;
   if (!match) return;
 
@@ -27,7 +59,13 @@ export async function handleRewrite(ctx: Context) {
   const prompt = STYLE_PROMPTS[style];
   if (!prompt) return;
 
-  const { data: job } = await supabase.from('jobs').select('result_json').eq('id', jobId).single();
+  const { data: job } = await supabase
+    .from('jobs')
+    .select('result_json')
+    .eq('id', jobId)
+    .eq('user_id', userId)
+    .single();
+
   if (!job?.result_json) {
     await ctx.answerCbQuery('Товар не найден');
     return;
@@ -41,8 +79,8 @@ export async function handleRewrite(ctx: Context) {
   }
 
   const originalText = [
-    `НАЗВАНИЕ: ${seo.titleRu}`,
-    `ОПИСАНИЕ: ${seo.description}`,
+    `НАЗВАНИЕ: ${seo.titleRu ?? ''}`,
+    `ОПИСАНИЕ: ${seo.description ?? ''}`,
     `БУЛЛЕТЫ:\n${(seo.bullets || []).join('\n')}`,
     `КЛЮЧЕВЫЕ СЛОВА: ${(seo.keywords || []).join(', ')}`,
   ].join('\n\n');
@@ -68,7 +106,7 @@ export async function handleRewrite(ctx: Context) {
           body: JSON.stringify({
             model: cfg.model, max_tokens: 3000, temperature: 0.8,
             messages: [
-              { role: 'system', content: 'Ты копирайтер для Wildberries. Пиши на русском.' },
+              { role: 'system', content: 'Ты копирайтер для Wildberries. Пиши на русском. Не добавляй неподтверждённые свойства товара.' },
               { role: 'user', content: `${prompt}\n\nИСХОДНЫЙ ТЕКСТ:\n${originalText}` },
             ],
           }),
@@ -76,7 +114,7 @@ export async function handleRewrite(ctx: Context) {
         });
         if (!res.ok) continue;
         const data = await res.json() as any;
-        rewritten = data.choices?.[0]?.message?.content ?? '';
+        rewritten = cleanRewriteText(data.choices?.[0]?.message?.content ?? '');
         if (rewritten) break;
       } catch { continue; }
     }
@@ -86,12 +124,12 @@ export async function handleRewrite(ctx: Context) {
       return;
     }
 
-    const styleLabel = { short: '🔄 Короткая версия', aggressive: '🔥 Агрессивные продажи', premium: '💎 Премиум стиль' }[style] ?? style;
+    const styleLabel = { short: '🔄 Короткая версия', aggressive: '🔥 Продающая версия', premium: '💎 Премиум стиль' }[style] ?? style;
 
     await ctx.editMessageText(
-      `<b>${styleLabel}</b>\n\n${rewritten}`,
+      `<b>${escHtml(styleLabel)}</b>\n\n${escHtml(rewritten)}`,
       { parse_mode: 'HTML' }
-    );
+    ).catch(() => ctx.reply(`<b>${escHtml(styleLabel)}</b>\n\n${escHtml(rewritten)}`, { parse_mode: 'HTML' }));
   } catch (e) {
     console.error('[rewrite]', e);
     await ctx.reply('❌ Ошибка при генерации. Попробуйте ещё раз.');
