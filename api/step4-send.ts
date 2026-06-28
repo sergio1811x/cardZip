@@ -103,7 +103,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const product = result.product as ProductWithContent;
 
     const progress = job.tg_message_id
-      ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'send')
+      ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'writer')
       : null;
 
     // ─── Build AnalysisSnapshot ─────────────────────────────────────────

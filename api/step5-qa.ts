@@ -1,87 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
-import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { markSent } from '../src/db/queries/jobs';
-import { getStatus, consumeCredit } from '../src/services/subscriptionService';
-import { track } from '../src/services/analyticsService';
-import { buildMainMessage } from '../src/core/messageBuilder';
-import { validateReport, runHardValidator, type HardValidatorSafeSummary } from '../src/core/reportValidator';
-import { findWbCategoriesByKeywords } from '../src/db/queries/wbCategories';
-import { formatSeoText } from '../src/core/seoFormatter';
-import { formatOrderBrief } from '../src/core/orderBrief';
-import { upsertProduct } from '../src/db/queries/products';
-import { buildCacheKey } from '../src/lib/cache';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
-import { redis } from '../src/lib/redis';
-import { runQaGate } from '../src/providers/expertQaGate';
-import { runAutoFix } from '../src/providers/autoFix';
-import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
-
-const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function formatSafeSummary(summary: HardValidatorSafeSummary, reason?: string): string {
-  const lines = [
-    '⚠️ <b>Анализ требует уточнения</b>',
-    '',
-    `<b>Статус:</b> ${escapeHtml(summary.status)}`,
-    `<b>Вердикт:</b> ${escapeHtml(summary.verdict)}`,
-    `<b>Главный риск:</b> ${escapeHtml(summary.mainRisk)}`,
-    `<b>Следующий шаг:</b> ${escapeHtml(summary.nextStep)}`,
-    `<b>Не делать:</b> ${escapeHtml(summary.doNotDo)}`,
-  ];
-  if (reason) lines.push('', `<i>${escapeHtml(reason)}</i>`);
-  lines.push('', 'Кредит не списан.');
-  return lines.join('\n');
-}
-
-function isQaUnavailable(qaResult: { decision: string; issues?: string[] } | null): boolean {
-  if (!qaResult) return true;
-  return (qaResult.issues ?? []).some((issue) => /QA\s+(?:skipped|fallback)|no API key|all models failed/i.test(String(issue)));
-}
-
-function getArtifactUserCard(value: unknown, fallback: string): string {
-  if (value && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const direct = obj.userCard ?? obj.UserCard;
-    if (typeof direct === 'string' && direct.trim()) return direct;
-    const nested = obj.artifacts;
-    if (nested && typeof nested === 'object') {
-      const nestedCard = (nested as Record<string, unknown>).userCard;
-      if (typeof nestedCard === 'string' && nestedCard.trim()) return nestedCard;
-    }
-  }
-  return fallback;
-}
-
-async function cleanupAndBlock(job: any, chatId: number, message: string): Promise<void> {
-  if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-  await bot.telegram.sendMessage(chatId, message, { parse_mode: 'HTML' });
-  await markSent(job.id);
-  if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
-}
-
-async function waitForSnapshot(jobId: string, maxWaitMs: number): Promise<any | null> {
-  const start = Date.now();
-  const interval = 3000;
-  while (Date.now() - start < maxWaitMs) {
-    const { data: job } = await supabase.from('jobs').select('result_json, status').eq('id', jobId).single();
-    const result = job?.result_json as any;
-    if (result?.analysisSnapshot) return job;
-    if (job?.status === 'failed') return null;
-    await new Promise(r => setTimeout(r, interval));
-  }
-  return null;
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -90,168 +12,80 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    console.log(`[step5] Start: ${jobId}`);
     if (!await acquireStepLock('step5', jobId)) {
       console.log(`[step5] Duplicate blocked for job ${jobId}`);
       return res.status(200).json({ ok: true, skip: true });
     }
 
-    // Wait for step4 to save analysisSnapshot (up to 40s)
-    const freshJob = await waitForSnapshot(jobId, 40_000);
-    if (!freshJob) {
-      console.warn(`[step5] Timeout waiting for snapshot, job ${jobId}`);
+    console.log(`[step5] Waiting for snapshot: ${jobId}`);
+
+    // Poll DB until step4 saves analysisSnapshot (up to 55s)
+    let snapshotFound = false;
+    const start = Date.now();
+    while (Date.now() - start < 55_000) {
+      const { data: job } = await supabase
+        .from('jobs')
+        .select('status, result_json')
+        .eq('id', jobId)
+        .single();
+
+      if (!job || job.status === 'failed') {
+        console.warn(`[step5] Job ${jobId} failed or missing while waiting`);
+        return res.status(200).json({ ok: false, reason: 'job_failed' });
+      }
+
+      const result = job.result_json as any;
+      if (result?.analysisSnapshot) {
+        snapshotFound = true;
+        break;
+      }
+
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
+    if (!snapshotFound) {
+      console.error(`[step5] Timeout 55s waiting for snapshot, job ${jobId}`);
       const { handleStepError } = require('../src/lib/stepError');
+      const { Telegraf } = require('telegraf');
+      const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
       await handleStepError(jobId, 'step5_snapshot_timeout', bot);
       return res.status(200).json({ ok: false, reason: 'snapshot_timeout' });
     }
 
-    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (!job || job.sent_to_telegram) return res.status(200).json({ ok: true, skip: true });
+    // Extend processing lock before triggering step6
+    const { data: job } = await supabase.from('jobs').select('user_id').eq('id', jobId).single();
+    if (job?.user_id) await extendProcessingLock(job.user_id);
 
-    await extendProcessingLock(job.user_id);
-
-    const result = job.result_json as any;
-    const chatId = job.tg_chat_id;
-    const product = result?.product as ProductWithContent | undefined;
-    if (!product) {
-      console.warn('[step5] BLOCKED: missing product payload');
-      await cleanupAndBlock(job, chatId, '⚠️ <b>Анализ требует уточнения</b>\n\nНе удалось собрать карточку товара. Кредит не списан.');
-      return res.status(200).json({ ok: true, blocked: true, reason: 'missing_product' });
-    }
-
-    let freshStatus = result.freshStatus;
-    if (!freshStatus) {
-      const s = await getStatus(job.user_id);
-      freshStatus = { creditsRemaining: s.creditsRemaining, plan: s.plan, isTrial: s.isTrial };
-    }
-
-    const safeRiskFlags = product.riskFlags ?? {
-      hasBrand: false, isElectrical: false, isChildren: false,
-      isCosmetic: false, isFood: false, isMedical: false,
-      supplierOrdersLow: false, supplierTypeUnknown: false,
-      weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: false,
-    };
-
-    const seoText = formatSeoText(product, product.seoContent, safeRiskFlags);
-    const briefText = formatOrderBrief(
-      product, product.seoContent, product.economics,
-      safeRiskFlags, job.input_url, product.budgets, product.conclusion,
-    );
-
-    const keywords = (product.seoContent?.keywords ?? []).slice(0, 3);
-    if (!keywords.length && product.titleRu) {
-      keywords.push(product.titleRu.split(' ').slice(0, 2).join(' '));
-    }
-    const wbCats = keywords.length
-      ? await findWbCategoriesByKeywords(keywords).catch(() => [])
-      : [];
-    const wbCategory = wbCats[0] ?? null;
-
-    const status = {
-      plan: freshStatus.plan ?? 'free',
-      creditsRemaining: Math.max(0, (freshStatus.creditsRemaining ?? 0) - 1),
-      creditsTotal: 0,
-      canGenerate: true,
-      isTrial: freshStatus.isTrial ?? false,
-    };
-    const { text: mainText, keyboard: mainKb } = buildMainMessage(
-      product, job.id, status as any, wbCategory,
-    );
-
-    // ─── Soft validation (code) ─────────────────────────────────────────
-    const validation = validateReport(mainText, (product as any).categoryType ?? 'other', {
-      hasPrice: product.priceYuan > 0,
-      hasWeight: product.weightKg > 0,
-      hasDirectAnalogs: !!(product.similarityData?.directCount && product.similarityData.directCount > 0),
-      wb429: !!(product as any).wb429,
-      intelligence: (product as any).intelligence ?? null,
-    });
-    let finalText = validation.ok ? mainText : validation.fixedText;
-
-    if (!validation.ok) {
-      console.warn(`[step5] Code validator: ${validation.errors.join(', ')}`);
-    }
-
-    // ─── Hard Validator (code, always) ──────────────────────────────────
-    const snapshot = result.analysisSnapshot;
-    const artifacts = {
-      userCard: finalText,
-      seoText,
-      buyerBrief: briefText,
-      lastMessage: result.writerResult?.lastMessage ?? '',
-    };
-
-    let hardResult = runHardValidator({ analysisSnapshot: snapshot, artifacts });
-    if (hardResult.fixedArtifacts?.userCard && !hardResult.block) {
-      finalText = String(hardResult.fixedArtifacts.userCard);
-    }
-
-    if (hardResult.block || !hardResult.canShowFullReport) {
-      console.warn(`[step5] HARD BLOCKED: ${hardResult.issues.map(i => i.problem).join('; ')}`);
-      await cleanupAndBlock(job, chatId, formatSafeSummary(hardResult.safeUserSummary, 'Полный отчёт не показан: сработал кодовый валидатор.'));
-      return res.status(200).json({ ok: true, blocked: true, reason: 'hard_validator' });
-    }
-
-    // ─── Expert QA Gate (LLM, 18с per model) ────────────────────────────
-    const qaResult = await runQaGate(snapshot, { ...artifacts, userCard: finalText }).catch(() => null);
-
-    if (isQaUnavailable(qaResult)) {
-      console.warn('[step5] QA unavailable — blocking full report');
-      await cleanupAndBlock(job, chatId, formatSafeSummary(hardResult.safeUserSummary, 'QA Gate недоступен, поэтому полный отчёт не отправлен.'));
-      return res.status(200).json({ ok: true, blocked: true, reason: 'qa_unavailable' });
-    }
-
-    console.log(`[step5] QA: ${qaResult!.decision} | score: ${qaResult!.qualityScore} | issues: ${qaResult!.issues.length}`);
-
-    if (qaResult!.decision === 'BLOCK') {
-      console.warn('[step5] QA BLOCKED full report');
-      await cleanupAndBlock(job, chatId, formatSafeSummary(hardResult.safeUserSummary, 'Полный отчёт не показан: QA Gate заблокировал результат.'));
-      return res.status(200).json({ ok: true, blocked: true, reason: 'qa_block' });
-    }
-
-    // ─── Auto-Fix (LLM, 10с per model, only if FIX_REQUIRED) ───────────
-    if (qaResult!.decision === 'FIX_REQUIRED' && qaResult!.issues.length > 0) {
-      const fixed = await runAutoFix(snapshot, { ...artifacts, userCard: finalText }, qaResult!).catch(() => null);
-      finalText = getArtifactUserCard(fixed, finalText);
-      hardResult = runHardValidator({ analysisSnapshot: snapshot, artifacts: { ...artifacts, userCard: finalText } });
-      if (hardResult.block || !hardResult.canShowFullReport) {
-        console.warn('[step5] BLOCKED after auto-fix');
-        await cleanupAndBlock(job, chatId, formatSafeSummary(hardResult.safeUserSummary, 'После Auto-Fix остались критичные проблемы.'));
-        return res.status(200).json({ ok: true, blocked: true, reason: 'autofix_hard_validator' });
+    // Trigger step6 — explicit external URL (avoids Vercel 508 loop detection)
+    console.log(`[step5] Snapshot found, triggering step6 for ${jobId}`);
+    let step6Sent = false;
+    for (let i = 0; i < 2 && !step6Sent; i++) {
+      try {
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 4000);
+        const r = await fetch('https://card-zip.vercel.app/api/step6-send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }),
+          signal: ac.signal,
+        });
+        if (r.ok) step6Sent = true;
+      } catch {
+        if (i === 0) await new Promise(r => setTimeout(r, 500));
       }
     }
 
-    // ─── Send ───────────────────────────────────────────────────────────
-    await consumeCredit(job.user_id);
-    await track(job.user_id, 'generation_done', { url: job.input_url });
-
-    if (job.tg_message_id) {
-      await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+    if (!step6Sent) {
+      console.error(`[step5] Failed to trigger step6 for job ${jobId}`);
+      const { handleStepError } = require('../src/lib/stepError');
+      const { Telegraf } = require('telegraf');
+      const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
+      await handleStepError(jobId, 'step6_trigger_failed', bot);
     }
-    await bot.telegram.sendMessage(chatId, finalText, {
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-      ...mainKb,
-    });
 
-    await markSent(job.id);
-    if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
-
-    await supabase.from('jobs').update({
-      result_json: { ...result, generatedFiles: { seoText, briefText } },
-    }).eq('id', jobId);
-
-    const cacheKey = buildCacheKey(product.productId, product.titleCn, product.mainImageUrl);
-    upsertProduct(job.user_id, { ...product, cacheKey }).catch((e) =>
-      console.warn('[step5] Cache save failed:', e instanceof Error ? e.message : e),
-    );
-
-    console.log(`[step5] Job ${job.id} sent | hard: ${hardResult.ok ? 'PASS' : hardResult.issues.length + ' issues'} | qa: ${qaResult!.decision}`);
-    res.status(200).json({ ok: true });
+    res.status(200).json({ ok: true, step6Sent });
   } catch (e: any) {
     console.error('[step5]', e.message);
-    const { handleStepError } = require('../src/lib/stepError');
-    await handleStepError(jobId, e.message, bot);
     res.status(200).json({ ok: false });
   }
 }

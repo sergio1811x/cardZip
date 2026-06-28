@@ -81,11 +81,8 @@ export async function cleanupStuckJobs(userId: string, chatId: number, botOrTele
       buildStepLockKey('step2', String(j.id)),
       buildStepLockKey('step3', String(j.id)),
       buildStepLockKey('step4', String(j.id)),
-      // Backward compatibility with older lock prefix used in previous cleanup code.
-      `step:step1:${j.id}`,
-      `step:step2:${j.id}`,
-      `step:step3:${j.id}`,
-      `step:step4:${j.id}`,
+      buildStepLockKey('step5', String(j.id)),
+      buildStepLockKey('step6', String(j.id)),
     ]);
     for (const k of keys) await redis.del(k).catch(() => {});
   }
