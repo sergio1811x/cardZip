@@ -1,5 +1,6 @@
 import { AppError } from '../lib/errors';
 import { translateSkuNamesViaLlm } from '../core/cnTranslate';
+import { fetchFromRapidApi } from './rapidApiProvider';
 import type {
   Normalized1688Data,
   ParsedUrl,
@@ -42,21 +43,16 @@ async function resolveShortLink(url: string): Promise<string> {
       signal: AbortSignal.timeout(8_000),
     });
 
-    // Если редирект сработал — используем финальный URL
     if (res.url !== url) return res.url;
 
-    // qr.1688.com отдаёт 200 с URL в теле (deep link формат)
     const body = await res.text();
 
-    // Ищем m.1688.com/offer/XXX.html или detail.1688.com/offer/XXX.html
     const offerMatch = body.match(/(?:m|detail)\.1688\.com\/offer\/(\d+)\.html/);
     if (offerMatch) return `https://detail.1688.com/offer/${offerMatch[1]}.html`;
 
-    // Ищем offerId=XXX
     const offerIdMatch = body.match(/offerId[=%]3D(\d+)/);
     if (offerIdMatch) return `https://detail.1688.com/offer/${offerIdMatch[1]}.html`;
 
-    // Ищем taobao id=XXX
     const taobaoMatch = body.match(/(?:item\.taobao|detail\.tmall)\.com.*?id[=%]3D(\d+)/);
     if (taobaoMatch) return `https://item.taobao.com/item.htm?id=${taobaoMatch[1]}`;
 
@@ -71,6 +67,7 @@ function parseUrl(url: string): ParsedUrl | null {
     const match = url.match(regex);
     if (match?.[1]) return { productId: match[1], platform };
   }
+
   return null;
 }
 
@@ -89,9 +86,9 @@ interface ElimResponse {
   title?: string;
   titleEn?: string;
   description?: string;
-  price?: number;
-  price_range?: Array<{ min_quantity?: number; max_quantity?: number; price?: number }>;
-  promotion_price?: number;
+  price?: number | string;
+  price_range?: Array<{ min_quantity?: number; max_quantity?: number; price?: number | string }>;
+  promotion_price?: number | string;
   quantity?: number;
   moq?: number;
   shop_name?: string;
@@ -102,7 +99,7 @@ interface ElimResponse {
   sold?: number;
   category_name?: string;
   attributes?: Array<{ name?: string; value?: string }>;
-  skus?: Array<{ name?: string; price?: number; quantity?: number; pic_url?: string }>;
+  skus?: Array<{ name?: string; price?: number | string; quantity?: number; pic_url?: string }>;
   shipping_info?: Array<{ weight?: number }>;
   extra_info?: Array<Record<string, unknown>>;
   quote_type?: string;
@@ -111,14 +108,58 @@ interface ElimResponse {
   message?: string;
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function cleanText(value: unknown): string {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function hasChinese(text: string): boolean {
+  return /[一-鿿]/.test(text);
+}
+
 function normalizeNumber(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
+
   if (typeof value === 'string') {
-    const cleaned = value.replace(',', '.').replace(/[^\d.]+/g, '');
-    const parsed = Number(cleaned);
+    const normalized = value.replace(',', '.');
+    const match = normalized.match(/\d+(?:\.\d+)?/);
+    if (!match) return undefined;
+
+    const parsed = Number(match[0]);
     return Number.isFinite(parsed) ? parsed : undefined;
   }
+
   return undefined;
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  const n = normalizeNumber(value);
+  return n != null && n > 0 ? n : undefined;
+}
+
+function uniqueNumbers(values: Array<number | undefined>): number[] {
+  return Array.from(
+      new Set(values.filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0)),
+  ).sort((a, b) => a - b);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values) {
+    const v = cleanText(value);
+    if (!v) continue;
+
+    const key = v.toLowerCase();
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(v);
+  }
+
+  return result;
 }
 
 function mapQuoteType(value: unknown, hasSkus: boolean, hasRanges: boolean): QuoteType {
@@ -128,82 +169,192 @@ function mapQuoteType(value: unknown, hasSkus: boolean, hasRanges: boolean): Quo
   return 'direct';
 }
 
-function parseWeightKg(attributes: Array<{ name?: string; value?: string }>, shippingInfo?: Array<{ weight?: number }>): number {
+function isRawSkuCode(name: string): boolean {
+  return /^\d+:\d+(;\d+:\d+)*$/.test(name.trim());
+}
+
+function splitAttrValues(value: string): string[] {
+  return value
+      .split(/[,，、;；/|]+/)
+      .map((s) => cleanText(s))
+      .filter(Boolean);
+}
+
+function extractAttrValues(
+    attributes: ElimResponse['attributes'] | undefined,
+    nameRegex: RegExp,
+): string[] {
+  const values: string[] = [];
+
+  for (const a of attributes ?? []) {
+    const name = cleanText(a.name);
+    const value = cleanText(a.value);
+
+    if (!name || !value) continue;
+    if (!nameRegex.test(name)) continue;
+
+    values.push(...splitAttrValues(value));
+  }
+
+  return uniqueStrings(values);
+}
+
+// ─── Weight / price / attributes / SKU ──────────────────────────────────────
+
+function parseWeightKg(
+    attributes: Array<{ name?: string; value?: string }>,
+    shippingInfo?: Array<{ weight?: number }>,
+): number {
   const weightAttrs = attributes.filter((a) => a.name && /重量|净重|毛重|weight|вес/i.test(a.name));
   let weightKg = 0;
 
   if (weightAttrs.length) {
     const raw = weightAttrs[0].value ?? '';
-    const kgMatch = raw.match(/([\d.]+)\s*(kg|千克|公斤)/i);
-    const gMatch = raw.match(/([\d.]+)\s*(g|克)/i);
-    const numOnly = raw.match(/^([\d.]+)$/);
+    const normalized = raw.replace(',', '.');
+
+    const kgMatch = normalized.match(/([\d.]+)\s*(kg|千克|公斤)/i);
+    const gMatch = normalized.match(/([\d.]+)\s*(g|克)/i);
+    const numOnly = normalized.match(/^([\d.]+)$/);
+
     if (kgMatch) weightKg = parseFloat(kgMatch[1]);
     else if (gMatch) weightKg = parseFloat(gMatch[1]) / 1000;
     else if (numOnly) {
       const val = parseFloat(numOnly[1]);
       weightKg = val >= 100 ? val / 1000 : val;
     }
+
     console.log(`[import] Вес из атрибутов: "${raw}" → ${weightKg}кг`);
   }
 
   if (!weightKg) weightKg = shippingInfo?.[0]?.weight ?? 0;
+
   return weightKg;
 }
 
 function buildPriceRanges(ranges: ElimResponse['price_range']): PriceRange[] {
-  return (ranges ?? [])
-    .filter((r) => r.price != null)
-    .map((r) => ({
+  const result: PriceRange[] = [];
+
+  for (const r of ranges ?? []) {
+    const price = positiveNumber(r.price);
+    if (!price) continue;
+
+    result.push({
       minQty: r.min_quantity ?? 0,
       maxQty: r.max_quantity ?? 0,
-      price: r.price!,
-    }));
-}
-
-function buildAttributes(attributes: ElimResponse['attributes']): ProductAttribute[] {
-  return (attributes ?? [])
-    .filter((a) => a.name && a.value)
-    .map((a) => ({ name: a.name!, value: a.value! }));
-}
-
-function buildSkus(skus: ElimResponse['skus'], attributes?: ElimResponse['attributes']): ProductSku[] {
-  const result = (skus ?? [])
-    .filter((s) => s.name)
-    .map((s) => ({
-      name: s.name!,
-      price: s.price,
-      stock: s.quantity,
-      image: s.pic_url,
-    }));
-
-  // If all SKU names are raw codes (e.g. "0:5"), try to replace with color names from attributes
-  const allRawCodes = result.length > 0 && result.every(s => /^\d+:\d+(;\d+:\d+)*$/.test(s.name));
-  if (allRawCodes && attributes?.length) {
-    const colorAttr = attributes.find(a => a.name && /颜色|color|цвет/i.test(a.name));
-    const colorValues = colorAttr?.value?.split(/[,，、;；\s/]+/).map(s => s.trim()).filter(Boolean) ?? [];
-    if (colorValues.length > 0) {
-      result.forEach((sku, i) => {
-        if (i < colorValues.length) sku.name = colorValues[i];
-      });
-    }
+      price,
+    });
   }
 
   return result;
 }
 
-function pickKeyAttributes(categoryName: string | undefined, attributes: ProductAttribute[]): Array<{ label: string; value: string }> {
+function buildAttributes(attributes: ElimResponse['attributes']): ProductAttribute[] {
+  const seen = new Set<string>();
+  const result: ProductAttribute[] = [];
+
+  for (const a of attributes ?? []) {
+    const name = cleanText(a.name);
+    const value = cleanText(a.value);
+
+    if (!name || !value) continue;
+    if (value === '/' || value === '-' || value === '无' || value.toLowerCase() === 'null') continue;
+
+    const key = `${name.toLowerCase()}::${value.toLowerCase()}`;
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push({ name, value });
+  }
+
+  return result;
+}
+
+function buildHumanSkuNames(count: number, attributes?: ElimResponse['attributes']): string[] {
+  const colors = extractAttrValues(attributes, /颜色|color|цвет/i);
+  const sizes = extractAttrValues(attributes, /尺码|size|размер/i);
+  const specs = extractAttrValues(attributes, /规格|型号|款式|model|модель|вариант/i);
+
+  const names: string[] = [];
+
+  if (colors.length && sizes.length) {
+    for (const color of colors) {
+      for (const size of sizes) {
+        names.push(`${color} / ${size}`);
+        if (names.length >= count) return names;
+      }
+    }
+  }
+
+  if (colors.length >= count) return colors.slice(0, count);
+  if (sizes.length >= count) return sizes.slice(0, count);
+  if (specs.length >= count) return specs.slice(0, count);
+
+  const mixed = uniqueStrings([...colors, ...sizes, ...specs]);
+
+  if (mixed.length) {
+    for (let i = 0; i < count; i++) {
+      names.push(mixed[i] ? `Вариант ${i + 1}: ${mixed[i]}` : `Вариант ${i + 1}`);
+    }
+
+    return names;
+  }
+
+  return Array.from({ length: count }, (_, i) => `Вариант ${i + 1}`);
+}
+
+function buildSkus(skus: ElimResponse['skus'], attributes?: ElimResponse['attributes']): ProductSku[] {
+  const raw = (skus ?? []).filter((s) => cleanText(s.name));
+  if (!raw.length) return [];
+
+  const allRawCodes = raw.every((s) => isRawSkuCode(cleanText(s.name)));
+  const humanNames = allRawCodes ? buildHumanSkuNames(raw.length, attributes) : [];
+
+  return raw.map((s, i) => {
+    const rawName = cleanText(s.name);
+
+    const name = allRawCodes
+        ? humanNames[i] ?? `Вариант ${i + 1}`
+        : isRawSkuCode(rawName)
+            ? `Вариант ${i + 1}`
+            : rawName;
+
+    return {
+      name,
+      price: positiveNumber(s.price),
+      stock: s.quantity,
+      image: s.pic_url,
+    };
+  });
+}
+
+// ─── Normalization helpers ──────────────────────────────────────────────────
+
+function pickKeyAttributes(
+    categoryName: string | undefined,
+    attributes: ProductAttribute[],
+): Array<{ label: string; value: string }> {
   const category = (categoryName ?? '').toLowerCase();
+
   const groups = {
-    tech: ['功率', '电压', '分辨率', '亮度', '认证', '证书', '接口', '配置', '套装', '配件', 'power', 'voltage', 'resolution', 'brightness', 'certificate', 'certification', 'package', 'accessories'],
-    clothing: ['材质', '面料', '季节', '尺码', '颜色', '版型', '厚薄', '弹力', 'material', 'fabric', 'season', 'size', 'color', 'fit'],
-    accessories: ['材质', '尺寸', '颜色', '闭合', '拉链', '隔层', '肩带', 'material', 'size', 'color', 'closure', 'zipper', 'compartment'],
+    tech: [
+      '功率', '电压', '分辨率', '亮度', '认证', '证书', '接口', '配置', '套装', '配件',
+      'power', 'voltage', 'resolution', 'brightness', 'certificate', 'certification', 'package', 'accessories',
+    ],
+    clothing: [
+      '材质', '面料', '季节', '尺码', '颜色', '版型', '厚薄', '弹力',
+      'material', 'fabric', 'season', 'size', 'color', 'fit',
+    ],
+    accessories: [
+      '材质', '尺寸', '颜色', '闭合', '拉链', '隔层', '肩带',
+      'material', 'size', 'color', 'closure', 'zipper', 'compartment',
+    ],
   };
 
   const type = /服|衣|裤|鞋|dress|shirt|jacket|pants|clothing|apparel/.test(category)
-    ? 'clothing'
-    : /包|箱|belt|wallet|bag|backpack|accessor/.test(category)
-      ? 'accessories'
-      : 'tech';
+      ? 'clothing'
+      : /包|箱|belt|wallet|bag|backpack|accessor/.test(category)
+          ? 'accessories'
+          : 'tech';
 
   const keywords = groups[type];
   const selected: Array<{ label: string; value: string }> = [];
@@ -212,48 +363,140 @@ function pickKeyAttributes(categoryName: string | undefined, attributes: Product
   for (const attr of attributes) {
     const hay = `${attr.name} ${attr.value}`.toLowerCase();
     if (!keywords.some((kw) => hay.includes(kw.toLowerCase()))) continue;
-    if (seen.has(attr.name)) continue;
+
+    const key = `${attr.name.toLowerCase()}::${attr.value.toLowerCase()}`;
+    if (seen.has(key)) continue;
+
     selected.push({ label: attr.name, value: attr.value });
-    seen.add(attr.name);
-    if (selected.length >= 5) break;
+    seen.add(key);
+
+    if (selected.length >= 6) break;
   }
 
   if (selected.length < 3) {
     for (const attr of attributes) {
-      if (seen.has(attr.name)) continue;
+      const key = `${attr.name.toLowerCase()}::${attr.value.toLowerCase()}`;
+      if (seen.has(key)) continue;
+
       selected.push({ label: attr.name, value: attr.value });
-      seen.add(attr.name);
-      if (selected.length >= 5) break;
+      seen.add(key);
+
+      if (selected.length >= 6) break;
     }
   }
 
   return selected;
 }
 
+function flattenExtraInfo(extraInfo: ElimResponse['extra_info']): Record<string, unknown> {
+  const extraInfoFlat: Record<string, unknown> = {};
+
+  for (const item of extraInfo ?? []) {
+    if (!item || typeof item !== 'object') continue;
+
+    if ('key' in item && 'value' in item) {
+      extraInfoFlat[String(item.key)] = item.value;
+    } else {
+      Object.assign(extraInfoFlat, item);
+    }
+  }
+
+  return extraInfoFlat;
+}
+
+function buildSupplierExtra(extraInfo: ElimResponse['extra_info']) {
+  if (!extraInfo) return undefined;
+
+  return {
+    dropshipping: (extraInfo as any[]).some((e: any) => e.isOnePsale),
+    mixOrder: (extraInfo as any[]).some((e: any) => e.isSupportMix),
+    freeReturn7d: (extraInfo as any[]).some((e: any) => e.noReason7DReturn),
+    selectedSource: (extraInfo as any[]).some((e: any) => e['1688_yx']),
+  };
+}
+
+async function safeTranslateSkuNames(product: RawProduct1688): Promise<RawProduct1688> {
+  if (!product.skus?.length) return product;
+
+  try {
+    const names = product.skus.map((s) => s.name);
+    const shouldTranslate = names.some((name) => hasChinese(name));
+
+    if (!shouldTranslate) return product;
+
+    const translated = await translateSkuNamesViaLlm(names);
+
+    product.skus.forEach((s, i) => {
+      if (translated[i]) s.name = translated[i];
+    });
+
+    if (product.normalized1688?.skuVariants) {
+      product.normalized1688.skuVariants.forEach((s, i) => {
+        if (translated[i]) s.name = translated[i];
+      });
+    }
+  } catch (e) {
+    console.warn(`[import] SKU translation failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  return product;
+}
+
+function sanitizeRawProduct(product: RawProduct1688): RawProduct1688 {
+  if (product.skus?.length) {
+    product.skus.forEach((sku, i) => {
+      if (!sku.name || isRawSkuCode(sku.name)) {
+        sku.name = `Вариант ${i + 1}`;
+      }
+    });
+  }
+
+  if (product.normalized1688?.skuVariants?.length) {
+    product.normalized1688.skuVariants.forEach((sku, i) => {
+      if (!sku.name || isRawSkuCode(sku.name)) {
+        sku.name = `Вариант ${i + 1}`;
+      }
+    });
+  }
+
+  if (product.attributes?.length) {
+    product.attributes = buildAttributes(product.attributes);
+  }
+
+  if (product.normalized1688?.attributes?.length) {
+    product.normalized1688.attributes = buildAttributes(product.normalized1688.attributes);
+  }
+
+  return product;
+}
+
+// ─── Elim normalization ─────────────────────────────────────────────────────
+
 function buildNormalizedProduct(json: ElimResponse, platform: Platform, productId: string): RawProduct1688 {
-  const images = (json.img_urls ?? []).slice(0, 15);
+  const images = (json.img_urls ?? []).filter(Boolean).slice(0, 15);
   const attributes = buildAttributes(json.attributes);
   const skus = buildSkus(json.skus, json.attributes);
   const priceRange = buildPriceRanges(json.price_range);
+
+  const skuPrices = uniqueNumbers(skus.map((s) => s.price));
+  const directPrice = positiveNumber(json.price);
+  const promotionPrice = positiveNumber(json.promotion_price);
+  const volumePrices = uniqueNumbers(priceRange.map((r) => r.price));
+
   const quoteType = mapQuoteType(json.quote_type, skus.length > 0, priceRange.length > 0);
+
   const rawPriceFields = [
-    json.price != null ? 'price' : null,
-    json.promotion_price != null ? 'promotion_price' : null,
+    directPrice != null ? 'price' : null,
+    promotionPrice != null ? 'promotion_price' : null,
     priceRange.length > 0 ? 'price_range' : null,
-    skus.some((sku) => typeof sku.price === 'number' && sku.price > 0) ? 'skus.price' : null,
+    skuPrices.length > 0 ? 'skus.price' : null,
   ].filter((v): v is string => !!v);
 
-  const skuPrices = skus
-    .map((s) => s.price)
-    .filter((p): p is number => p != null && p > 0)
-    .sort((a, b) => a - b);
-
-  const directPrice = normalizeNumber(json.price);
-  const promotionPrice = normalizeNumber(json.promotion_price);
-  const volumePrices = priceRange.map((r) => r.price).filter((price) => price > 0);
   const rawWeightKg = parseWeightKg(json.attributes ?? [], json.shipping_info);
   const sanityPrice = promotionPrice ?? directPrice ?? skuPrices[0] ?? volumePrices[0] ?? 0;
+
   let weightKg = rawWeightKg;
+
   if (weightKg > 50 || (weightKg > 5 && sanityPrice < 200)) {
     console.warn(`[import] Подозрительный вес ${weightKg}кг при цене ${sanityPrice}¥, сбрасываем`);
     weightKg = 0;
@@ -264,63 +507,44 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
   let selectedSkuPriceYuan: number | undefined;
 
   if (quoteType === 'by_sku' && skuPrices.length > 0) {
-    if (skuPrices.length >= 3) {
-      const mid = Math.floor(skuPrices.length / 2);
-      displayPriceYuan = skuPrices.length % 2 ? skuPrices[mid] : (skuPrices[mid - 1] + skuPrices[mid]) / 2;
-    } else {
-      displayPriceYuan = skuPrices[0];
-    }
+    displayPriceYuan = skuPrices[0];
+
     const selected = skus.find((sku) => sku.price === displayPriceYuan) ?? skus.find((sku) => sku.price != null);
     selectedSkuName = selected?.name;
     selectedSkuPriceYuan = selected?.price;
   } else if (quoteType === 'by_volume' && volumePrices.length > 0) {
-    displayPriceYuan = volumePrices[0];
+    displayPriceYuan = Math.min(...volumePrices);
   } else {
     displayPriceYuan = promotionPrice ?? directPrice ?? 0;
   }
 
-  // Fallback: если displayPrice всё ещё 0, пробуем все источники
-  let isEstimatedPrice = false;
-  let estimateSource: 'min_tiered' | 'min_sku' | 'promo' | 'direct' | undefined;
   if (displayPriceYuan <= 0) {
     if (volumePrices.length > 0) {
       displayPriceYuan = Math.min(...volumePrices);
-      isEstimatedPrice = true;
-      estimateSource = 'min_tiered';
+      rawPriceFields.push('estimated:min_tiered');
     } else if (skuPrices.length > 0) {
       displayPriceYuan = skuPrices[0];
-      isEstimatedPrice = true;
-      estimateSource = 'min_sku';
+      rawPriceFields.push('estimated:min_sku');
     } else if (promotionPrice) {
       displayPriceYuan = promotionPrice;
-      isEstimatedPrice = true;
-      estimateSource = 'promo';
+      rawPriceFields.push('estimated:promo');
     } else if (directPrice) {
       displayPriceYuan = directPrice;
-      isEstimatedPrice = true;
-      estimateSource = 'direct';
+      rawPriceFields.push('estimated:direct');
     }
-    if (isEstimatedPrice) {
-      console.log(`[import] Estimated price: ${displayPriceYuan}¥ from ${estimateSource}`);
+
+    if (displayPriceYuan > 0) {
+      console.log(`[import] Fallback price: ${displayPriceYuan}¥ from ${rawPriceFields[rawPriceFields.length - 1]}`);
     }
   }
 
-  // extra_info: может быть [{key, value}, ...] или [{field1: val1}, ...]
-  const extraInfoFlat: Record<string, unknown> = {};
-  for (const item of (json.extra_info ?? [])) {
-    if (item && typeof item === 'object') {
-      if ('key' in item && 'value' in item) {
-        extraInfoFlat[String(item.key)] = item.value;
-      } else {
-        Object.assign(extraInfoFlat, item);
-      }
-    }
-  }
+  const extraInfoFlat = flattenExtraInfo(json.extra_info);
+
   const repurchaseRate = json.repurchase_rate != null
-    ? String(json.repurchase_rate)
-    : typeof extraInfoFlat.repurchaseRate !== 'undefined'
-      ? String(extraInfoFlat.repurchaseRate)
-      : undefined;
+      ? String(json.repurchase_rate)
+      : typeof extraInfoFlat.repurchaseRate !== 'undefined'
+          ? String(extraInfoFlat.repurchaseRate)
+          : undefined;
 
   const normalized1688: Normalized1688Data = {
     pricing: {
@@ -336,8 +560,6 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
       selectedSkuPriceYuan,
       priceRanges: priceRange.length > 0 ? priceRange : undefined,
       rawPriceFields,
-      isEstimatedPrice,
-      estimateSource,
     },
     moq: json.moq ?? priceRange.find((r) => r.minQty > 0)?.minQty,
     skuCount: skus.length,
@@ -369,7 +591,9 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
     },
   };
 
-  console.log(`[import] Elim success: ${platform}/${productId} | quote:${quoteType} attrs:${attributes.length} skus:${skus.length} sold:${json.sold ?? '?'} images:${images.length}`);
+  console.log(
+      `[import] Elim success: ${platform}/${productId} | quote:${quoteType} price:${displayPriceYuan || '?'} attrs:${attributes.length} skus:${skus.length} sold:${json.sold ?? '?'} images:${images.length}`,
+  );
 
   return {
     productId: String(json.id ?? json.mp_id ?? productId),
@@ -379,7 +603,9 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
     description: json.description,
     priceYuan: normalized1688.pricing.displayPriceYuan,
     priceRange: priceRange.length > 0 ? priceRange : undefined,
-    priceIsRange: (skuPrices.length > 1 && skuPrices[0] !== skuPrices[skuPrices.length - 1]) || priceRange.length > 1,
+    priceIsRange:
+        (skuPrices.length > 1 && skuPrices[0] !== skuPrices[skuPrices.length - 1]) ||
+        priceRange.length > 1,
     moq: json.moq ?? priceRange.find((r) => r.minQty > 0)?.minQty ?? 1,
     weightKg: normalized1688.weightKg ?? 0,
     images,
@@ -392,40 +618,23 @@ function buildNormalizedProduct(json: ElimResponse, platform: Platform, productI
     categoryName: json.category_name,
     attributes: attributes.length > 0 ? attributes : undefined,
     skus: skus.length > 0 ? skus : undefined,
-    supplierExtra: json.extra_info ? {
-      dropshipping: (json.extra_info as any[]).some((e: any) => e.isOnePsale),
-      mixOrder: (json.extra_info as any[]).some((e: any) => e.isSupportMix),
-      freeReturn7d: (json.extra_info as any[]).some((e: any) => e.noReason7DReturn),
-      selectedSource: (json.extra_info as any[]).some((e: any) => e['1688_yx']),
-    } : undefined,
-    selectedSkuName,
+    supplierExtra: buildSupplierExtra(json.extra_info),
     normalized1688,
   };
 }
 
-import { fetchFromRapidApi } from './rapidApiProvider';
+// ─── Providers ──────────────────────────────────────────────────────────────
 
-async function fetchProduct(url: string): Promise<RawProduct1688> {
-  // Резолвим короткие ссылки из мобильного приложения
-  let resolvedUrl = url;
-  if (isShortLink(url)) {
-    console.log(`[import] Resolving short link: ${url}`);
-    resolvedUrl = await resolveShortLink(url);
-    console.log(`[import] Resolved to: ${resolvedUrl}`);
-  }
+async function fetchFromElim(productId: string, platform: Platform): Promise<RawProduct1688> {
+  const apiKey = process.env.ELIM_API_KEY;
 
-  const parsed = parseUrl(resolvedUrl);
-  if (!parsed) {
+  if (!apiKey) {
     throw new AppError(
-      'INVALID_URL',
-      `Не удалось распознать URL: ${resolvedUrl} (original: ${url})`,
-      '❌ Не удалось распознать ссылку.\n\nПоддерживаемые форматы:\n• https://detail.1688.com/offer/XXX.html\n• https://item.taobao.com/item.htm?id=XXX\n• Короткие ссылки из приложения 1688'
+        'PROVIDER_DOWN',
+        'ELIM_API_KEY не задан',
+        '⏱ Не удалось получить данные товара. Попробуйте через 1–2 минуты.',
     );
   }
-
-  const { productId, platform } = parsed;
-  const apiKey = process.env.ELIM_API_KEY;
-  if (!apiKey) throw new Error('ELIM_API_KEY не задан');
 
   const doFetch = () => fetch('https://openapi.elim.asia/v1/products/find', {
     method: 'POST',
@@ -441,24 +650,12 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
     signal: AbortSignal.timeout(15_000),
   });
 
-  // RapidAPI (основной для 1688) → Elim (fallback)
-  if (platform === '1688') {
-    try {
-      const rapidResult = await fetchFromRapidApi(productId);
-      if (rapidResult) {
-        console.log(`[import] RapidAPI success for ${productId}`);
-        return rapidResult;
-      }
-    } catch (e) {
-      console.warn(`[import] RapidAPI failed: ${(e as Error).message}`);
-    }
-  }
-
-  // Elim fallback
   let elimError: string | null = null;
+
   try {
     const MAX_RETRIES = 2;
     let res: Response | undefined;
+
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         res = await doFetch();
@@ -466,25 +663,21 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.warn(`[elim] Попытка ${attempt}/${MAX_RETRIES}: ${msg}`);
-        if (attempt === MAX_RETRIES) elimError = msg;
+
+        if (attempt === MAX_RETRIES) {
+          elimError = msg;
+        }
       }
     }
 
     if (res?.ok) {
       const json = (await res.json()) as ElimResponse;
+
       if (json.success && json.title) {
         const product = buildNormalizedProduct(json, platform, productId);
-        // Translate Chinese SKU names
-        if (product.skus?.length) {
-          const names = product.skus.map(s => s.name);
-          const translated = await translateSkuNamesViaLlm(names);
-          product.skus.forEach((s, i) => { s.name = translated[i] ?? s.name; });
-          if (product.normalized1688?.skuVariants) {
-            product.normalized1688.skuVariants.forEach((s, i) => { if (translated[i]) s.name = translated[i]; });
-          }
-        }
-        return product;
+        return sanitizeRawProduct(await safeTranslateSkuNames(product));
       }
+
       elimError = `Elim: ${json.message ?? 'no title'}`;
     } else if (res) {
       elimError = `Elim HTTP ${res.status}`;
@@ -494,10 +687,68 @@ async function fetchProduct(url: string): Promise<RawProduct1688> {
   }
 
   throw new AppError(
-    'PROVIDER_DOWN',
-    `Все провайдеры недоступны: ${elimError}`,
-    '⏱ Не удалось получить данные товара. Попробуйте через 1–2 минуты.'
+      'PROVIDER_DOWN',
+      `Elim недоступен: ${elimError}`,
+      '⏱ Не удалось получить данные товара. Попробуйте через 1–2 минуты.',
   );
+}
+
+// ─── Main importer ──────────────────────────────────────────────────────────
+
+async function fetchProduct(url: string): Promise<RawProduct1688> {
+  let resolvedUrl = url;
+
+  if (isShortLink(url)) {
+    console.log(`[import] Resolving short link: ${url}`);
+    resolvedUrl = await resolveShortLink(url);
+    console.log(`[import] Resolved to: ${resolvedUrl}`);
+  }
+
+  const parsed = parseUrl(resolvedUrl);
+
+  if (!parsed) {
+    throw new AppError(
+        'INVALID_URL',
+        `Не удалось распознать URL: ${resolvedUrl} (original: ${url})`,
+        '❌ Не удалось распознать ссылку.\n\nПоддерживаемые форматы:\n• https://detail.1688.com/offer/XXX.html\n• https://item.taobao.com/item.htm?id=XXX\n• Короткие ссылки из приложения 1688',
+    );
+  }
+
+  const { productId, platform } = parsed;
+
+  // 1688: RapidAPI основной
+  if (platform === '1688') {
+    try {
+      const rapidResult = await fetchFromRapidApi(productId);
+
+      if (rapidResult) {
+        console.log(`[import] RapidAPI success for 1688/${productId}`);
+        return sanitizeRawProduct(await safeTranslateSkuNames(rapidResult));
+      }
+
+      console.warn(`[import] RapidAPI returned empty result for 1688/${productId}`);
+    } catch (e) {
+      console.warn(`[import] RapidAPI failed for 1688/${productId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // 1688 fallback: Elim
+    try {
+      const elimResult = await fetchFromElim(productId, platform);
+      console.log(`[import] Elim fallback success for 1688/${productId}`);
+      return elimResult;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+
+      throw new AppError(
+          'PROVIDER_DOWN',
+          `RapidAPI и Elim недоступны для 1688/${productId}: ${msg}`,
+          '⏱ Не удалось получить данные товара. Попробуйте через 1–2 минуты.',
+      );
+    }
+  }
+
+  // Taobao / Tmall: Elim основной
+  return fetchFromElim(productId, platform);
 }
 
 export const productImporter: ProductImporter = { fetchProduct, parseUrl };
