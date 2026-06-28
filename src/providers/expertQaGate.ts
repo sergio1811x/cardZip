@@ -1,4 +1,5 @@
-import type { AnalysisSnapshot, QaResult, GeneratedArtifacts } from '../types';
+import type { AnalysisSnapshot, QaResult } from '../types';
+import { runHardValidator, type HardValidatorResult } from '../core/reportValidator';
 
 const QA_MODELS = [
   'deepseek/deepseek-v4-pro',
@@ -258,16 +259,153 @@ DATA:
 {{QA_REVIEW_PACKAGE}}
 `;
 
+
+type QaDecision = 'PASS' | 'FIX_REQUIRED' | 'BLOCK';
+
+type QaInputArtifacts = Record<string, unknown>;
+
+type QaGateFullResult = {
+  decision: QaDecision;
+  canShowToUser: boolean;
+  qualityScore: number;
+  confidence: 'low' | 'medium' | 'high';
+  summary: string;
+  criticalIssues: string[];
+  warnings: string[];
+  requiredEdits: string[];
+  issues: string[];
+  safeUserSummary: {
+    status: 'черновик' | 'рабочая гипотеза' | 'надёжный расчёт' | 'отклонить';
+    verdict: string;
+    mainRisk: string;
+    nextStep: string;
+    doNotDo: string;
+  };
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asStringArray(value: unknown, limit = 30): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function cleanQaDecision(value: unknown): QaDecision {
+  return value === 'BLOCK' ? 'BLOCK' : value === 'FIX_REQUIRED' ? 'FIX_REQUIRED' : 'PASS';
+}
+
+function fallbackSafeSummary(snapshot: AnalysisSnapshot, hardValidation?: HardValidatorResult): QaGateFullResult['safeUserSummary'] {
+  if (hardValidation?.safeUserSummary) return hardValidation.safeUserSummary;
+
+  const s = asRecord(snapshot);
+  const pc = asRecord(s.productContext);
+  const titles = asRecord(pc.titles);
+  const identity = asRecord(pc.identity);
+  const name = String(titles.shortRu || titles.cleanRu || identity.productType || 'товар');
+
+  return {
+    status: 'черновик',
+    verdict: `${name}: данных недостаточно для безопасного финального решения.`,
+    mainRisk: 'QA Gate не смог подтвердить качество отчёта.',
+    nextStep: 'Проверить SKU, цену партии, вес с упаковкой и прямые аналоги вручную.',
+    doNotDo: 'Не закупать партию и не считать ROI до подтверждения ключевых данных.',
+  };
+}
+
+function normalizeQaResult(raw: unknown, snapshot: AnalysisSnapshot, hardValidation?: HardValidatorResult): QaGateFullResult {
+  const obj = asRecord(raw);
+  const criticalIssues = [
+    ...asStringArray(obj.criticalIssues),
+    ...asStringArray(obj.issues).filter((issue) => /critical|критич|block|нельзя|roi|0\s*[¥₽]|0\s*кг/i.test(issue)),
+  ];
+  const warnings = asStringArray(obj.warnings);
+  const requiredEdits = asStringArray(obj.requiredEdits);
+  const allIssues = [
+    ...asStringArray(obj.issues),
+    ...criticalIssues,
+    ...warnings,
+    ...requiredEdits,
+  ].filter((value, index, arr) => arr.indexOf(value) === index);
+
+  let decision = cleanQaDecision(obj.decision);
+
+  if (hardValidation?.block) decision = 'BLOCK';
+  else if (hardValidation && !hardValidation.canShowFullReport && decision === 'PASS') decision = 'FIX_REQUIRED';
+  else if (criticalIssues.length && decision === 'PASS') decision = 'FIX_REQUIRED';
+
+  const scoreRaw = Number(obj.qualityScore);
+  const qualityScore = Number.isFinite(scoreRaw) ? Math.max(1, Math.min(10, Math.round(scoreRaw))) : (decision === 'PASS' ? 7 : decision === 'FIX_REQUIRED' ? 5 : 2);
+  const confidence = obj.confidence === 'high' || obj.confidence === 'medium' || obj.confidence === 'low'
+    ? obj.confidence
+    : qualityScore >= 8 ? 'high' : qualityScore >= 5 ? 'medium' : 'low';
+
+  return {
+    decision,
+    canShowToUser: decision !== 'BLOCK',
+    qualityScore,
+    confidence,
+    summary: String(obj.summary || (decision === 'PASS' ? 'QA пройден.' : decision === 'FIX_REQUIRED' ? 'Нужны правки перед показом.' : 'Полный отчёт заблокирован.')),
+    criticalIssues,
+    warnings,
+    requiredEdits,
+    issues: allIssues,
+    safeUserSummary: asRecord(obj.safeUserSummary).status
+      ? obj.safeUserSummary as QaGateFullResult['safeUserSummary']
+      : fallbackSafeSummary(snapshot, hardValidation),
+  };
+}
+
+function buildLocalQaResult(snapshot: AnalysisSnapshot, hardValidation: HardValidatorResult, reason: string): QaGateFullResult {
+  const decision: QaDecision = hardValidation.block ? 'BLOCK' : hardValidation.canShowFullReport ? 'PASS' : 'FIX_REQUIRED';
+  const criticalIssues = hardValidation.issues
+    .filter((issue: { severity: string }) => issue.severity === 'critical' || issue.severity === 'high')
+    .map((issue: { field: string; problem: string }) => `${issue.field}: ${issue.problem}`);
+  const warnings = [
+    ...hardValidation.issues.filter((issue: { severity: string }) => issue.severity === 'medium' || issue.severity === 'low').map((issue: { field: string; problem: string }) => `${issue.field}: ${issue.problem}`),
+    ...hardValidation.warnings.map((issue: { field: string; problem: string }) => `${issue.field}: ${issue.problem}`),
+  ];
+  const requiredEdits = hardValidation.issues.map((issue: { action: string }) => issue.action);
+
+  return {
+    decision,
+    canShowToUser: decision !== 'BLOCK',
+    qualityScore: decision === 'PASS' ? 7 : decision === 'FIX_REQUIRED' ? 5 : 2,
+    confidence: decision === 'PASS' ? 'medium' : 'high',
+    summary: reason,
+    criticalIssues,
+    warnings,
+    requiredEdits,
+    issues: [...criticalIssues, ...warnings],
+    safeUserSummary: fallbackSafeSummary(snapshot, hardValidation),
+  };
+}
+
 export async function runQaGate(
   snapshot: AnalysisSnapshot,
-  artifacts: Record<string, unknown>,
+  artifacts: QaInputArtifacts,
+  hardValidatorResult?: HardValidatorResult,
 ): Promise<QaResult> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    return { decision: 'PASS', qualityScore: 5, issues: ['QA skipped: no API key'] };
+  const hardValidation = hardValidatorResult ?? runHardValidator({ analysisSnapshot: snapshot, artifacts });
+
+  if (hardValidation.block) {
+    return buildLocalQaResult(snapshot, hardValidation, 'Hard Validator заблокировал полный отчёт до LLM QA.') as unknown as QaResult;
   }
 
-  const input = JSON.stringify({ snapshot, artifacts }, null, 0).slice(0, 8000);
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    return buildLocalQaResult(snapshot, hardValidation, 'QA Gate выполнен в локальном режиме: OPENROUTER_API_KEY не задан.') as unknown as QaResult;
+  }
+
+  const input = JSON.stringify({
+    analysisSnapshot: snapshot,
+    generatedArtifacts: artifacts,
+    hardValidatorResult: hardValidation,
+  }, null, 0).slice(0, 9000);
   const prompt = QA_GATE_PROMPT + '\n\nDATA:\n' + input;
 
   for (const model of QA_MODELS) {
@@ -277,7 +415,7 @@ export async function runQaGate(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 2000,
+          max_tokens: 2200,
           temperature: 0.1,
           messages: [
             { role: 'system', content: 'Ты — QA-ревьюер CardZip. Верни СТРОГО JSON.' },
@@ -293,20 +431,14 @@ export async function runQaGate(
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };
       const raw = data.choices?.[0]?.message?.content ?? '';
       const parsed = JSON.parse(cleanJson(raw));
-      if (parsed?.decision) {
-        console.log(`[qa-gate] ${model} | ${parsed.decision} | score: ${parsed.qualityScore}/10 | issues: ${parsed.issues?.length ?? 0}`);
-        return {
-          decision: parsed.decision === 'BLOCK' ? 'BLOCK' : parsed.decision === 'FIX_REQUIRED' ? 'FIX_REQUIRED' : 'PASS',
-          qualityScore: parsed.qualityScore ?? 5,
-          issues: parsed.issues ?? [],
-        };
-      }
+      const qa = normalizeQaResult(parsed, snapshot, hardValidation);
+      console.log(`[qa-gate] ${model} | ${qa.decision} | score: ${qa.qualityScore}/10 | issues: ${qa.issues.length}`);
+      return qa as unknown as QaResult;
     } catch (err) {
       console.log(`[qa-gate] ${model} error: ${err instanceof Error ? err.message : err}`);
       continue;
     }
   }
 
-  // Fallback: pass through if all models fail
-  return { decision: 'PASS', qualityScore: 5, issues: ['QA fallback: all models failed'] };
+  return buildLocalQaResult(snapshot, hardValidation, 'QA fallback: все LLM-модели QA Gate не ответили валидно.') as unknown as QaResult;
 }

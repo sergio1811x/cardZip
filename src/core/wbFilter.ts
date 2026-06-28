@@ -23,43 +23,80 @@ function removeOutliers(prices: number[]): number[] {
   const p25 = calcPercentile(sorted, 25);
   const p75 = calcPercentile(sorted, 75);
   const iqr = p75 - p25;
+  if (iqr <= 0) return sorted;
   const lower = p25 - 1.5 * iqr;
   const upper = p75 + 1.5 * iqr;
-  return sorted.filter((p) => p >= lower && p <= upper);
+  const filtered = sorted.filter((p) => p >= lower && p <= upper);
+  return filtered.length ? filtered : sorted;
 }
 
 // ─── Keyword filtering ──────────────────────────────────────────────────────
 
+const STOPWORDS = new Set(['для', 'или', 'под', 'над', 'без', 'при', 'товар', 'набор', 'комплект', 'новый', 'топ', 'подарок']);
+
 function normalizeText(text: string): string {
-  return text.toLowerCase().replace(/[^а-яёa-z0-9\s]/g, ' ');
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[‐‑‒–—]/g, '-')
+    .replace(/[^а-яa-z0-9+\-\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function phraseMatches(text: string, phrase: string): boolean {
-  const words = phrase.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return false;
-  // Фраза считается совпавшей если хотя бы одно значимое слово (>3 букв) найдено
-  const significantWords = words.filter((w) => w.length > 3);
-  if (significantWords.length === 0) return words.some((w) => text.includes(w));
-  return significantWords.some((w) => text.includes(w));
+function splitAlternatives(phrase: string): string[] {
+  return normalizeText(phrase)
+    .split(/\s*(?:\/|\\|,|;|\|| или | либо | and | or )\s*/i)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function significantWords(phrase: string): string[] {
+  return normalizeText(phrase)
+    .split(/\s+/)
+    .filter((w) => w.length > 1 && !STOPWORDS.has(w));
+}
+
+function wordMatches(text: string, word: string): boolean {
+  if (word.length <= 3) return new RegExp(`(?:^|\\s)${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`).test(text);
+  return text.includes(word);
+}
+
+export function phraseMatches(textRaw: string, phraseRaw: string): boolean {
+  const text = normalizeText(textRaw);
+  const alternatives = splitAlternatives(phraseRaw);
+  if (!alternatives.length) return false;
+
+  return alternatives.some((phrase) => {
+    const words = significantWords(phrase);
+    if (!words.length) return false;
+    if (words.length === 1) return wordMatches(text, words[0]);
+
+    const hits = words.filter((w) => wordMatches(text, w)).length;
+    // Direct-фильтр должен быть строгим: 2 слова — оба; 3+ — можно потерять одно SEO/морфологическое слово.
+    return hits === words.length || (words.length >= 3 && hits >= words.length - 1);
+  });
+}
+
+function matchesAny(text: string, phrases: string[]): boolean {
+  return phrases.some((kw) => phraseMatches(text, kw));
+}
+
+function matchesRequiredGroups(text: string, required: string[]): boolean {
+  if (!required.length) return true;
+  return required.every((group) => phraseMatches(text, group));
 }
 
 function matchesKeywords(title: string, keywords: WbFilterKeywords): boolean {
   const text = normalizeText(title);
 
-  for (const exc of keywords.exclude) {
-    if (phraseMatches(text, exc)) return false;
-  }
+  if (matchesAny(text, keywords.exclude ?? [])) return false;
+  if (!matchesRequiredGroups(text, keywords.required ?? [])) return false;
 
-  const hasRequired = keywords.required.length === 0 ||
-    keywords.required.some((kw) => phraseMatches(text, kw));
-  if (!hasRequired) return false;
+  const optional = keywords.optional ?? [];
+  if (!optional.length) return true;
 
-  if (keywords.optional.length === 0) return true;
-
-  const optionalMatches = keywords.optional.filter((kw) =>
-    phraseMatches(text, kw)
-  ).length;
-
+  const optionalMatches = optional.filter((kw) => phraseMatches(text, kw)).length;
   return optionalMatches >= 1;
 }
 
@@ -70,14 +107,14 @@ export function filterCards(cards: WbCard[], keywords: WbFilterKeywords): WbCard
 // ─── Quality assessment ─────────────────────────────────────────────────────
 
 function assessQuality(relevantCount: number, prices: number[]): WbDataQuality {
-  if (relevantCount === 0) return 'unavailable';
+  if (relevantCount === 0 || prices.length === 0) return 'unavailable';
 
   const sorted = [...prices].sort((a, b) => a - b);
   const ratio = sorted.length >= 2 ? sorted[sorted.length - 1] / sorted[0] : 1;
-  const hasHugeSpread = ratio > 10;
+  const hasHugeSpread = ratio > 6;
 
-  if (relevantCount >= 20 && !hasHugeSpread) return 'reliable';
-  if (relevantCount >= 8) return 'limited';
+  if (relevantCount >= 15 && !hasHugeSpread) return 'reliable';
+  if (relevantCount >= 5 && !hasHugeSpread) return 'limited';
   return 'unreliable';
 }
 
@@ -86,7 +123,7 @@ function assessQuality(relevantCount: number, prices: number[]): WbDataQuality {
 export function filterWbData(
   raw: WbSearchResult | null,
   keywords: WbFilterKeywords,
-  searchQueries: string[]
+  searchQueries: string[],
 ): WbFilteredResult | null {
   if (!raw || !raw.allCards.length) {
     return {
@@ -107,7 +144,7 @@ export function filterWbData(
   }
 
   const relevant = filterCards(raw.allCards, keywords);
-  const relevantPrices = relevant.map((c) => c.price).filter((p) => p > 0);
+  const relevantPrices = relevant.map((c) => c.price).filter((p) => Number.isFinite(p) && p > 0);
   const quality = assessQuality(relevant.length, relevantPrices);
 
   if (relevantPrices.length === 0) {
@@ -137,14 +174,15 @@ export function filterWbData(
 
   const topExamples = relevant
     .filter((c) => c.price >= p25Price && c.price <= p75Price)
-    .slice(0, 3);
+    .sort((a, b) => Math.abs(a.price - medianPrice) - Math.abs(b.price - medianPrice))
+    .slice(0, 5);
 
-  if (topExamples.length < 3) {
+  if (topExamples.length < 5) {
     const remaining = relevant
       .filter((c) => !topExamples.includes(c))
       .sort((a, b) => Math.abs(a.price - medianPrice) - Math.abs(b.price - medianPrice));
     for (const card of remaining) {
-      if (topExamples.length >= 3) break;
+      if (topExamples.length >= 5) break;
       topExamples.push(card);
     }
   }

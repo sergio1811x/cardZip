@@ -161,12 +161,30 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
     };
   }
 
-  // 1688: полный расчёт
+  // 1688: полный расчёт разрешён только от подтверждённой WB-цены.
+  // Если прямые аналоги не найдены, не синтезируем цену продажи: это давало псевдо-ROI.
   const salePrice = wbMedianPrice ?? wbAvgPrice;
   const isSyntheticPrice = !salePrice;
-  const avgSaleRub = salePrice
-    ? Math.round(salePrice)
-    : Math.round(costRub / (1 - DEFAULTS.wbCommissionPercent / 100 - targetMargin / 100));
+
+  if (!salePrice || salePrice <= 0) {
+    const breakdown: EconomicsBreakdown = {
+      purchaseYuan: priceYuan, purchaseRub, bankMarkupRub, cargoRub,
+      internalLogisticsRub, wbCommissionRub: 0, wbLogisticsRub: 0, taxRub: 0, drrRub: 0, drrPercent: 0,
+    };
+
+    let disclaimer = 'Рыночная цена WB не подтверждена прямыми аналогами. ROI, маржу и цену продажи считать нельзя; показана только ориентировочная себестоимость.';
+    if (isCustom) disclaimer = 'Расчёт по вашим тарифам. ' + disclaimer;
+
+    return {
+      yuanToRub, platformMode, breakdown, costRub,
+      avgSaleRub: 0, grossProfitRub: 0, grossMarginPercent: 0, roiPercent: 0,
+      weightMissing, weightSource, categoryDefaultWeightKg,
+      isCustomTariffs: isCustom, isSyntheticPrice: true,
+      disclaimer,
+    };
+  }
+
+  const avgSaleRub = Math.round(salePrice);
 
   const wbCommissionRub = Math.round(avgSaleRub * DEFAULTS.wbCommissionPercent / 100);
   const taxRub = Math.round(avgSaleRub * taxPercent / 100);
@@ -181,11 +199,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
     taxRub, drrRub, drrPercent,
   };
 
-  let disclaimer = 'Расчёт ориентировочный. Комиссии, логистика, реклама, возвраты и фактическая цена продажи могут отличаться.';
-  if (isSyntheticPrice) {
-    disclaimer = `Цена продажи рассчитана при целевой марже ${targetMargin}%, а не взята с рынка. ` + disclaimer;
-  }
-  // Не дублируем про вес — это показывается в messageBuilder
+  let disclaimer = 'Расчёт ориентировочный и основан только на подтверждённой цене прямых локальных аналогов WB. Комиссии, логистика, реклама, возвраты и фактическая цена продажи могут отличаться.';
   if (isCustom) {
     disclaimer = 'Расчёт по вашим тарифам. ' + disclaimer;
   }

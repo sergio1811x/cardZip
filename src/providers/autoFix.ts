@@ -1,4 +1,5 @@
 import type { AnalysisSnapshot, QaResult } from '../types';
+import { runHardValidator } from '../core/reportValidator';
 
 const FIX_MODELS = [
   'google/gemini-2.5-flash-lite',
@@ -148,29 +149,183 @@ DATA:
 {{AUTO_FIX_PACKAGE}}
 `;
 
+
+type AutoFixResult = {
+  fixed: boolean;
+  summary: string;
+  artifacts: Record<string, unknown>;
+  remainingRisks: string[];
+  needsSecondQa: boolean;
+};
+
+const GARBAGE_RE = /\b(?:NaN|undefined|null)\b/gi;
+const ROI_LINE_RE = /\b(?:ROI|марж[аиу]|прибыль|рентабельность)\b[^\n\r]*(?:\d|%|₽)/i;
+const POSITIVE_BUY_RE = /\b(?:можно\s+(?:закупать|брать|тестировать)|заказать\s+тест\s*\d|закупка\s+целесообразна)\b/gi;
+const PUBLIC_CHINESE_RE = /[\u3400-\u9FFF]/;
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(',', '.').replace(/[^\d.-]/g, ''));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function collectIssues(qaResult: QaResult): string[] {
+  const obj = qaResult as unknown as Record<string, unknown>;
+  return [
+    ...asArray(obj.issues),
+    ...asArray(obj.criticalIssues),
+    ...asArray(obj.warnings),
+    ...asArray(obj.requiredEdits),
+  ].map((issue) => String(issue ?? '').trim()).filter(Boolean);
+}
+
+function cleanPublicText(text: string, snapshot: AnalysisSnapshot): string {
+  const market = asRecord((snapshot as unknown as Record<string, unknown>).market);
+  const economics = asRecord((snapshot as unknown as Record<string, unknown>).economics);
+  const directAnalogsCount = asNumber(market.directAnalogsCount) ?? 0;
+  const marketConfirmed = Boolean(market.marketConfirmed);
+  const canShowRoi = Boolean(economics.canShowRoi) && directAnalogsCount > 0 && marketConfirmed;
+
+  let fixed = text
+    .replace(GARBAGE_RE, '—')
+    .replace(/\b0(?:[,.]0+)?\s*[¥￥]/gi, 'цена уточняется')
+    .replace(/\b0(?:[,.]0+)?\s*₽/gi, 'цена уточняется')
+    .replace(/\b0(?:[,.]0+)?\s*(?:кг|kg)\b/gi, 'вес уточняется')
+    .replace(/\d+([,.]\d{4,})/g, (match) => {
+      const parsed = Number(match.replace(',', '.'));
+      return Number.isFinite(parsed) ? String(Math.round(parsed * 100) / 100).replace('.', ',') : '—';
+    })
+    .replace(/^.*(?:debug|quote_type|rawPriceFields|extraInfoKeys|object Object).*$/gim, '')
+    .replace(POSITIVE_BUY_RE, 'проверять дальше');
+
+  if (!canShowRoi) {
+    fixed = fixed
+      .split('\n')
+      .filter((line) => !ROI_LINE_RE.test(line))
+      .join('\n');
+  }
+
+  fixed = fixed
+    .replace(/\bрыночная\s+цена\s*[:—-]?\s*\d[^\n]*/gi, marketConfirmed ? '$&' : 'рыночная цена не подтверждена')
+    .replace(/\bможно\s+считать\s+ROI\b/gi, canShowRoi ? 'можно считать ROI' : 'ROI считать нельзя')
+    .replace(/\bможно\s+считать\s+марж[уи]\b/gi, canShowRoi ? 'можно считать маржу' : 'маржу считать нельзя');
+
+  if (PUBLIC_CHINESE_RE.test(fixed)) {
+    fixed = fixed
+      .split('\n')
+      .filter((line) => !PUBLIC_CHINESE_RE.test(line))
+      .join('\n');
+  }
+
+  return fixed.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function deterministicSanitize(value: unknown, snapshot: AnalysisSnapshot): unknown {
+  if (typeof value === 'string') return cleanPublicText(value, snapshot);
+  if (Array.isArray(value)) return value.map((item) => deterministicSanitize(item, snapshot)).filter((item) => item !== '' && item !== null && item !== undefined);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const cleanKey = cleanPublicText(key, snapshot);
+      if (!cleanKey) continue;
+      const cleanValue = deterministicSanitize(child, snapshot);
+      if (cleanValue === '' || cleanValue === null || cleanValue === undefined) continue;
+      out[cleanKey] = cleanValue;
+    }
+    return out;
+  }
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
+  return value;
+}
+
+function buildDeterministicFix(snapshot: AnalysisSnapshot, artifacts: Record<string, unknown>, qaResult: QaResult, summary: string): AutoFixResult {
+  const fixedArtifacts = deterministicSanitize(artifacts, snapshot) as Record<string, unknown>;
+  const hardValidation = runHardValidator({ analysisSnapshot: snapshot, artifacts: fixedArtifacts });
+  const issues = collectIssues(qaResult);
+  const hasHighSeverity = issues.some((issue) => /critical|high|критич|0\s*[¥₽]|0\s*кг|roi|закуп|рын/i.test(issue));
+
+  return {
+    fixed: true,
+    summary,
+    artifacts: fixedArtifacts,
+    remainingRisks: [
+      ...hardValidation.issues.map((issue: { field: string; problem: string }) => `${issue.field}: ${issue.problem}`),
+      ...hardValidation.warnings.map((issue: { field: string; problem: string }) => `${issue.field}: ${issue.problem}`),
+    ].slice(0, 30),
+    needsSecondQa: hasHighSeverity || hardValidation.issues.some((issue: { severity: string }) => issue.severity === 'critical' || issue.severity === 'high'),
+  };
+}
+
+function safeJsonParse(raw: string): Record<string, unknown> | null {
+  const cleaned = cleanJson(raw);
+  const first = cleaned.indexOf('{');
+  const last = cleaned.lastIndexOf('}');
+  const candidate = first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned;
+  try {
+    const parsed = JSON.parse(candidate);
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAutoFixResult(parsed: Record<string, unknown>, snapshot: AnalysisSnapshot, fallbackArtifacts: Record<string, unknown>, qaResult: QaResult): AutoFixResult {
+  const rawArtifacts = asRecord(parsed.artifacts);
+  const artifacts = Object.keys(rawArtifacts).length ? rawArtifacts : fallbackArtifacts;
+  const fixedArtifacts = deterministicSanitize(artifacts, snapshot) as Record<string, unknown>;
+  const hardValidation = runHardValidator({ analysisSnapshot: snapshot, artifacts: fixedArtifacts });
+  const issues = collectIssues(qaResult);
+
+  return {
+    fixed: parsed.fixed !== false,
+    summary: String(parsed.summary || 'Материалы исправлены и дополнительно очищены deterministic sanitizer.'),
+    artifacts: fixedArtifacts,
+    remainingRisks: [
+      ...asArray(parsed.remainingRisks).map((risk) => String(risk ?? '').trim()).filter(Boolean),
+      ...hardValidation.issues.map((issue: { field: string; problem: string }) => `${issue.field}: ${issue.problem}`),
+      ...hardValidation.warnings.map((issue: { field: string; problem: string }) => `${issue.field}: ${issue.problem}`),
+    ].filter((value, index, arr) => value && arr.indexOf(value) === index).slice(0, 30),
+    needsSecondQa: Boolean(parsed.needsSecondQa) || issues.some((issue: string) => /critical|high|критич|0\s*[¥₽]|0\s*кг|roi|закуп|рын/i.test(issue)),
+  };
+}
+
 export async function runAutoFix(
   snapshot: AnalysisSnapshot,
   artifacts: Record<string, unknown>,
   qaResult: QaResult,
 ): Promise<Record<string, unknown> | null> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) return null;
+  if (qaResult.decision !== 'FIX_REQUIRED') {
+    return null;
+  }
 
-  if (qaResult.decision === 'PASS' || qaResult.issues.length === 0) {
-    return null; // nothing to fix
+  const issues = collectIssues(qaResult);
+  if (issues.length === 0) {
+    return buildDeterministicFix(snapshot, artifacts, qaResult, 'QA не передал список правок, применена безопасная deterministic-очистка.');
+  }
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    return buildDeterministicFix(snapshot, artifacts, qaResult, 'OPENROUTER_API_KEY не задан, применена deterministic-очистка без LLM.');
   }
 
   const input = JSON.stringify({
-    artifacts,
-    issues: qaResult.issues,
-    snapshot: {
-      purchasePrice: snapshot.purchasePrice,
-      weight: snapshot.weight,
-      market: snapshot.market,
-      economics: snapshot.economics,
-      riskFlags: snapshot.riskFlags,
-    },
-  }, null, 0).slice(0, 6000);
+    analysisSnapshot: snapshot,
+    generatedArtifacts: artifacts,
+    qaResult,
+    issues,
+    hardValidatorBeforeFix: runHardValidator({ analysisSnapshot: snapshot, artifacts }),
+  }, null, 0).slice(0, 8500);
 
   const prompt = AUTO_FIX_PROMPT + '\n\nDATA:\n' + input;
 
@@ -181,7 +336,7 @@ export async function runAutoFix(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 3000,
+          max_tokens: 3200,
           temperature: 0.1,
           messages: [
             { role: 'system', content: 'Ты — автокорректор CardZip. Верни СТРОГО JSON с исправленными полями.' },
@@ -193,12 +348,14 @@ export async function runAutoFix(
       if (!res.ok) continue;
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };
       const raw = data.choices?.[0]?.message?.content ?? '';
-      const parsed = JSON.parse(cleanJson(raw));
-      if (parsed && typeof parsed === 'object') {
-        console.log(`[auto-fix] ${model} fixed ${Object.keys(parsed).length} field(s)`);
-        return parsed as Record<string, unknown>;
+      const parsed = safeJsonParse(raw);
+      if (parsed) {
+        const normalized = normalizeAutoFixResult(parsed, snapshot, artifacts, qaResult);
+        console.log(`[auto-fix] ${model} fixed ${Object.keys(normalized.artifacts).length} artifact field(s)`);
+        return normalized as Record<string, unknown>;
       }
     } catch { continue; }
   }
-  return null;
+
+  return buildDeterministicFix(snapshot, artifacts, qaResult, 'LLM Auto-Fix не вернул валидный JSON, применена deterministic-очистка.');
 }
