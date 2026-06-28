@@ -9,13 +9,20 @@ function positiveNumber(v: unknown): number | null {
 
 export async function handleSkuSelect(ctx: Context) {
   const userId = (ctx as any).dbUserId as string | undefined;
-  if (!userId) return;
+  if (!userId) {
+    console.warn('[skuSelect] No dbUserId');
+    return;
+  }
 
   const match = (ctx as any).match as RegExpMatchArray | undefined;
-  if (!match) return;
+  if (!match) {
+    console.warn('[skuSelect] No match');
+    return;
+  }
 
   const skuIndex = match[1]; // number or 'all'
   const jobId = match[2];
+  console.log(`[skuSelect] sku=${skuIndex} job=${jobId}`);
 
   try {
     const { data: job } = await supabase
@@ -76,24 +83,28 @@ export async function handleSkuSelect(ctx: Context) {
     await ctx.answerCbQuery(skuIndex === 'all' ? 'Считаем по диапазону' : 'Вариант выбран');
     await ctx.editMessageText('🔄 Обрабатываем выбранный вариант...', { parse_mode: 'HTML' }).catch(() => {});
 
-    const host = process.env.PUBLIC_APP_HOST || process.env.VERCEL_URL || 'card-zip.vercel.app';
-    const url = host.startsWith('http') ? `${host}/api/step2-ai` : `https://${host}/api/step2-ai`;
-    for (let i = 0; i < 2; i++) {
+    const host = 'card-zip.vercel.app';
+    const url = `https://${host}/api/step2-ai`;
+    console.log(`[skuSelect] Triggering step2: ${url}`);
+    let step2Sent = false;
+    for (let i = 0; i < 2 && !step2Sent; i++) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
-        await fetch(url, {
+        const r = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }),
           signal: ac.signal,
         });
-        break;
-      } catch {
+        console.log(`[skuSelect] step2 response: ${r.status}`);
+        step2Sent = true;
+      } catch (fetchErr) {
+        console.warn(`[skuSelect] step2 attempt ${i + 1} failed: ${fetchErr instanceof Error ? fetchErr.message : fetchErr}`);
         if (i === 0) await new Promise(r => setTimeout(r, 500));
-        else console.error(`[skuSelect] Failed to trigger step2 for job ${jobId}`);
       }
     }
+    if (!step2Sent) console.error(`[skuSelect] Failed to trigger step2 for job ${jobId}`);
   } catch (e) {
     console.error('[skuSelect]', e);
     await ctx.answerCbQuery('Ошибка').catch(() => {});
