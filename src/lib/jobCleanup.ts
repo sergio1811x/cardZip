@@ -12,6 +12,8 @@ const ACTIVE_JOB_STATUSES = [
   'ai_processing',
   'ai_done',
   'market_processing',
+  'done',
+  'qa_pending',
 ] as const;
 
 function getTelegramClient(botOrTelegram: any): any | null {

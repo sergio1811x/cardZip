@@ -12,7 +12,7 @@ import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
-import { acquireStepLock } from '../src/lib/stepLock';
+import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import { redis } from '../src/lib/redis';
 import { runQaGate } from '../src/providers/expertQaGate';
 import { runAutoFix } from '../src/providers/autoFix';
@@ -21,7 +21,6 @@ import type { ProductWithContent } from '../src/types';
 export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-
 
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
@@ -64,6 +63,26 @@ function getArtifactUserCard(value: unknown, fallback: string): string {
   return fallback;
 }
 
+async function cleanupAndBlock(job: any, chatId: number, message: string): Promise<void> {
+  if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+  await bot.telegram.sendMessage(chatId, message, { parse_mode: 'HTML' });
+  await markSent(job.id);
+  if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+}
+
+async function waitForSnapshot(jobId: string, maxWaitMs: number): Promise<any | null> {
+  const start = Date.now();
+  const interval = 3000;
+  while (Date.now() - start < maxWaitMs) {
+    const { data: job } = await supabase.from('jobs').select('result_json, status').eq('id', jobId).single();
+    const result = job?.result_json as any;
+    if (result?.analysisSnapshot) return job;
+    if (job?.status === 'failed') return null;
+    await new Promise(r => setTimeout(r, interval));
+  }
+  return null;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -77,25 +96,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ ok: true, skip: true });
     }
 
+    // Wait for step4 to save analysisSnapshot (up to 40s)
+    const freshJob = await waitForSnapshot(jobId, 40_000);
+    if (!freshJob) {
+      console.warn(`[step5] Timeout waiting for snapshot, job ${jobId}`);
+      const { handleStepError } = require('../src/lib/stepError');
+      await handleStepError(jobId, 'step5_snapshot_timeout', bot);
+      return res.status(200).json({ ok: false, reason: 'snapshot_timeout' });
+    }
+
     const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
     if (!job || job.sent_to_telegram) return res.status(200).json({ ok: true, skip: true });
+
+    await extendProcessingLock(job.user_id);
 
     const result = job.result_json as any;
     const chatId = job.tg_chat_id;
     const product = result?.product as ProductWithContent | undefined;
     if (!product) {
       console.warn('[step5] BLOCKED: missing product payload');
-      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-      await bot.telegram.sendMessage(chatId,
-        '⚠️ <b>Анализ требует уточнения</b>\n\nНе удалось собрать карточку товара. Кредит не списан.',
-        { parse_mode: 'HTML' },
-      );
-      await markSent(job.id);
-      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      await cleanupAndBlock(job, chatId, '⚠️ <b>Анализ требует уточнения</b>\n\nНе удалось собрать карточку товара. Кредит не списан.');
       return res.status(200).json({ ok: true, blocked: true, reason: 'missing_product' });
     }
 
-    // ─── Backward compat: if step4 didn't save freshStatus, fetch it ─────
     let freshStatus = result.freshStatus;
     if (!freshStatus) {
       const s = await getStatus(job.user_id);
@@ -109,19 +132,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: false,
     };
 
-    // ─── Generate file texts ─────────────────────────────────────────────
     const seoText = formatSeoText(product, product.seoContent, safeRiskFlags);
     const briefText = formatOrderBrief(
       product, product.seoContent, product.economics,
       safeRiskFlags, job.input_url, product.budgets, product.conclusion,
     );
 
-    // Save generated files
-    await supabase.from('jobs').update({
-      result_json: { ...result, generatedFiles: { seoText, briefText } },
-    }).eq('id', jobId);
-
-    // ─── WB category fallback ────────────────────────────────────────────
     const keywords = (product.seoContent?.keywords ?? []).slice(0, 3);
     if (!keywords.length && product.titleRu) {
       keywords.push(product.titleRu.split(' ').slice(0, 2).join(' '));
@@ -131,7 +147,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       : [];
     const wbCategory = wbCats[0] ?? null;
 
-    // ─── Build main message ──────────────────────────────────────────────
     const status = {
       plan: freshStatus.plan ?? 'free',
       creditsRemaining: Math.max(0, (freshStatus.creditsRemaining ?? 0) - 1),
@@ -143,7 +158,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       product, job.id, status as any, wbCategory,
     );
 
-    // ─── Step 4C: Soft validation (code) ────────────────────────────────
+    // ─── Soft validation (code) ─────────────────────────────────────────
     const validation = validateReport(mainText, (product as any).categoryType ?? 'other', {
       hasPrice: product.priceYuan > 0,
       hasWeight: product.weightKg > 0,
@@ -157,7 +172,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.warn(`[step5] Code validator: ${validation.errors.join(', ')}`);
     }
 
-    // ─── Step 4D: Hard Validator (code, always) ───────────────────────
+    // ─── Hard Validator (code, always) ──────────────────────────────────
     const snapshot = result.analysisSnapshot;
     const artifacts = {
       userCard: finalText,
@@ -166,22 +181,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       lastMessage: result.writerResult?.lastMessage ?? '',
     };
 
-    if (!snapshot) {
-      console.warn('[step5] BLOCKED: missing AnalysisSnapshot');
-      const fallbackSummary: HardValidatorSafeSummary = {
-        status: 'черновик',
-        verdict: 'Полный отчёт заблокирован: не собран единый AnalysisSnapshot.',
-        mainRisk: 'Нет единого источника правды для цены, рынка и экономики.',
-        nextStep: 'Повторить анализ или проверить pipeline step4.',
-        doNotDo: 'Не считать ROI/маржу и не закупать партию по этому отчёту.',
-      };
-      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-      await bot.telegram.sendMessage(chatId, formatSafeSummary(fallbackSummary), { parse_mode: 'HTML' });
-      await markSent(job.id);
-      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
-      return res.status(200).json({ ok: true, blocked: true, reason: 'missing_snapshot' });
-    }
-
     let hardResult = runHardValidator({ analysisSnapshot: snapshot, artifacts });
     if (hardResult.fixedArtifacts?.userCard && !hardResult.block) {
       finalText = String(hardResult.fixedArtifacts.userCard);
@@ -189,22 +188,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (hardResult.block || !hardResult.canShowFullReport) {
       console.warn(`[step5] HARD BLOCKED: ${hardResult.issues.map(i => i.problem).join('; ')}`);
-      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-      await bot.telegram.sendMessage(chatId, formatSafeSummary(hardResult.safeUserSummary, 'Полный отчёт не показан: сработал кодовый валидатор.'), { parse_mode: 'HTML' });
-      await markSent(job.id);
-      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      await cleanupAndBlock(job, chatId, formatSafeSummary(hardResult.safeUserSummary, 'Полный отчёт не показан: сработал кодовый валидатор.'));
       return res.status(200).json({ ok: true, blocked: true, reason: 'hard_validator' });
     }
 
-    // ─── Step 4E: Expert QA Gate (LLM) ───────────────────────────────────
+    // ─── Expert QA Gate (LLM, 18с per model) ────────────────────────────
     const qaResult = await runQaGate(snapshot, { ...artifacts, userCard: finalText }).catch(() => null);
 
     if (isQaUnavailable(qaResult)) {
       console.warn('[step5] QA unavailable — blocking full report');
-      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-      await bot.telegram.sendMessage(chatId, formatSafeSummary(hardResult.safeUserSummary, 'QA Gate недоступен, поэтому полный отчёт не отправлен.'), { parse_mode: 'HTML' });
-      await markSent(job.id);
-      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      await cleanupAndBlock(job, chatId, formatSafeSummary(hardResult.safeUserSummary, 'QA Gate недоступен, поэтому полный отчёт не отправлен.'));
       return res.status(200).json({ ok: true, blocked: true, reason: 'qa_unavailable' });
     }
 
@@ -212,32 +205,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (qaResult!.decision === 'BLOCK') {
       console.warn('[step5] QA BLOCKED full report');
-      if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-      await bot.telegram.sendMessage(chatId, formatSafeSummary(hardResult.safeUserSummary, 'Полный отчёт не показан: QA Gate заблокировал результат.'), { parse_mode: 'HTML' });
-      await markSent(job.id);
-      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+      await cleanupAndBlock(job, chatId, formatSafeSummary(hardResult.safeUserSummary, 'Полный отчёт не показан: QA Gate заблокировал результат.'));
       return res.status(200).json({ ok: true, blocked: true, reason: 'qa_block' });
     }
 
+    // ─── Auto-Fix (LLM, 10с per model, only if FIX_REQUIRED) ───────────
     if (qaResult!.decision === 'FIX_REQUIRED' && qaResult!.issues.length > 0) {
       const fixed = await runAutoFix(snapshot, { ...artifacts, userCard: finalText }, qaResult!).catch(() => null);
       finalText = getArtifactUserCard(fixed, finalText);
       hardResult = runHardValidator({ analysisSnapshot: snapshot, artifacts: { ...artifacts, userCard: finalText } });
       if (hardResult.block || !hardResult.canShowFullReport) {
         console.warn('[step5] BLOCKED after auto-fix');
-        if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
-        await bot.telegram.sendMessage(chatId, formatSafeSummary(hardResult.safeUserSummary, 'После Auto-Fix остались критичные проблемы.'), { parse_mode: 'HTML' });
-        await markSent(job.id);
-        if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+        await cleanupAndBlock(job, chatId, formatSafeSummary(hardResult.safeUserSummary, 'После Auto-Fix остались критичные проблемы.'));
         return res.status(200).json({ ok: true, blocked: true, reason: 'autofix_hard_validator' });
       }
     }
 
-    // Кредит списывается только после Hard Validator + QA Gate PASS/FIX_REQUIRED и перед отправкой.
+    // ─── Send ───────────────────────────────────────────────────────────
     await consumeCredit(job.user_id);
     await track(job.user_id, 'generation_done', { url: job.input_url });
 
-    // ─── Send ────────────────────────────────────────────────────────────
     if (job.tg_message_id) {
       await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
     }
@@ -250,12 +237,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await markSent(job.id);
     if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
 
+    await supabase.from('jobs').update({
+      result_json: { ...result, generatedFiles: { seoText, briefText } },
+    }).eq('id', jobId);
+
     const cacheKey = buildCacheKey(product.productId, product.titleCn, product.mainImageUrl);
     upsertProduct(job.user_id, { ...product, cacheKey }).catch((e) =>
       console.warn('[step5] Cache save failed:', e instanceof Error ? e.message : e),
     );
 
-    console.log(`[step5] Job ${job.id} sent | validator: ${validation.ok ? 'PASS' : validation.errors.length + ' issues'} | hard: ${hardResult.ok ? 'PASS' : hardResult.issues.length + ' issues'}`);
+    console.log(`[step5] Job ${job.id} sent | hard: ${hardResult.ok ? 'PASS' : hardResult.issues.length + ' issues'} | qa: ${qaResult!.decision}`);
     res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step5]', e.message);

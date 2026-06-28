@@ -338,28 +338,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       finished_at: new Date().toISOString(),
     }).eq('id', jobId);
 
-    // ─── Chain → step4 ──────────────────────────────────────────────────
-    const host = req.headers.host || 'card-zip.vercel.app';
-    let step4Sent = false;
-    for (let i = 0; i < 2 && !step4Sent; i++) {
-      try {
-        const ac = new AbortController();
-        setTimeout(() => ac.abort(), 4000);
-        const response = await fetch(`https://${host}/api/step4-send`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId }), signal: ac.signal,
-        });
-        if (!response.ok) throw new Error(`step4 HTTP ${response.status}`);
-        step4Sent = true;
-      } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
+    // ─── Chain → step4 (writer) + step5 (QA+send) параллельно ─────────
+    // step5 сам ждёт пока step4 сохранит snapshot (polling DB)
+    const host = 'card-zip.vercel.app';
+    const triggerStep = async (path: string) => {
+      for (let i = 0; i < 2; i++) {
+        try {
+          const ac = new AbortController();
+          setTimeout(() => ac.abort(), 4000);
+          const r = await fetch(`https://${host}${path}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jobId }), signal: ac.signal,
+          });
+          if (r.ok) return true;
+        } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
+      }
+      return false;
+    };
+
+    const [step4Sent, step5Sent] = await Promise.all([
+      triggerStep('/api/step4-send'),
+      triggerStep('/api/step5-qa'),
+    ]);
+
+    if (!step4Sent || !step5Sent) {
+      console.warn(`[step3] Trigger results: step4=${step4Sent} step5=${step5Sent}`);
+      if (!step4Sent) {
+        const { handleStepError } = require('../src/lib/stepError');
+        await handleStepError(jobId, 'step4_trigger_failed', bot);
+      }
     }
 
-    if (!step4Sent) {
-      const { handleStepError } = require('../src/lib/stepError');
-      await handleStepError(jobId, 'step4_trigger_failed', bot);
-    }
-
-    res.status(200).json({ ok: true, step4Sent });
+    res.status(200).json({ ok: true, step4Sent, step5Sent });
   } catch (e: any) {
     console.error('[step3]', e.message);
     const { handleStepError } = require('../src/lib/stepError');
