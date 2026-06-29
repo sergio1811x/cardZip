@@ -655,8 +655,13 @@ export interface DbUser {
 export interface DbSubscription {
   id: string;
   user_id: string;
-  plan: Plan;
-  active_until: string | null;
+  plan?: Plan | string;
+  active_until?: string | null;
+  credits_remaining?: number | null;
+  is_trial?: boolean | null;
+  unlimited_until?: string | null;
+  unlimited_used?: number | null;
+  unlimited_limit?: number | null;
   created_at: string;
   updated_at: string;
 }

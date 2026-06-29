@@ -18,8 +18,8 @@ import { fetchWbTrends, filterRelevantTrends, type WbTrend } from '../src/provid
 export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-const WB_PARSER_URL = process.env.WB_PARSER_URL || 'http://50fc4ca33bd1.vps.myjino.ru';
-const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || 'cardzip-wb-2024';
+const WB_PARSER_URL = process.env.WB_PARSER_URL || '';
+const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || '';
 const MAX_WB_QUERIES = 3;
 
 function parseCards(products: any[]): WbCard[] {
@@ -44,6 +44,11 @@ function parseCards(products: any[]): WbCard[] {
 async function searchWb(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string>; is429?: boolean }> {
   const seenUrls = new Set<string>();
   const cards: WbCard[] = [];
+
+  if (!WB_PARSER_URL || !WB_PARSER_SECRET) {
+    console.warn('[step3] WB parser disabled: WB_PARSER_URL/WB_PARSER_SECRET are not configured.');
+    return { cards, seenUrls };
+  }
 
   try {
     const res = await fetch(`${WB_PARSER_URL}/search-batch`, {

@@ -386,8 +386,9 @@ export function buildPriceDecision(product: RawProduct1688 | any, skuDecision = 
     const max = Math.max(...prices);
     const uniqueQty = new Set(validRanges.map((r) => r.minQty)).size;
     const source: PriceDecision['priceSource'] = uniqueQty > 1 ? 'price_range' : 'fallback_min';
+    const tierDetails = validRanges.slice(0, 4).map((r) => `${r.minQty}+ шт — ${cny(r.price)}`).join('; ');
     const text = uniqueQty > 1
-      ? `Оптовые цены: ${validRanges.slice(0, 4).map((r) => `${r.minQty}+ шт — ${cny(r.price)}`).join('; ')}`
+      ? `Оптовые цены: ${rangeText(min, max)} (ориентир); ${tierDetails}`
       : `Цена по вариантам: ${rangeText(min, max)}. Оптовые пороги не найдены.`;
     return {
       displayPriceText: text,
@@ -442,7 +443,7 @@ export function buildPriceDecision(product: RawProduct1688 | any, skuDecision = 
   }
 
   return {
-    displayPriceText: 'Цена: нужно уточнить. Экономика не рассчитывается.',
+    displayPriceText: '—',
     calculationPriceYuan: null,
     minPriceYuan: null,
     maxPriceYuan: null,
@@ -684,8 +685,10 @@ export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: 
   let economySummary = '';
   if (x.economy.status === 'not_calculated_no_price') economySummary = 'Экономика не рассчитана — нет цены выбранного SKU.';
   else if (x.economy.status === 'preliminary_no_weight') economySummary = `Предварительно без карго:\n• Себестоимость без карго: ${money(x.economy.costWithoutCargoRub)}\n• Карго не рассчитано: ${html(x.weight.reason)}\n• ROI не считаю.`;
+  else if (x.economy.status === 'preliminary_sku') economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• Карго: ${x.economy.cargoRub ? money(x.economy.cargoRub) : 'не рассчитано'}\n• ROI не считаю — нужно подтвердить выбранный SKU/комплектацию.`;
   else if (x.economy.status === 'cost_only_no_market' || x.economy.status === 'weak_market_data') economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• Карго: ${x.economy.cargoRub ? money(x.economy.cargoRub) : 'не рассчитано'}\n• ROI не считаю — WB-рынок не подтверждён.`;
-  else economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• Цена рынка WB: ${money(x.market.medianPriceRub)}\n• Прибыль: ${money(x.economy.profitRub)}\n• ROI: ${x.economy.roiPercent}%`;
+  else if (x.economy.canShowRoi) economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• Цена рынка WB: ${money(x.market.medianPriceRub)}\n• Прибыль: ${money(x.economy.profitRub)}\n• ROI: ${x.economy.roiPercent}%`;
+  else economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• ROI не считаю — нет полного набора подтверждённых данных.`;
 
   const questions = buildSupplierQuestions(product, x).ru.slice(0, 7);
   const actions = x.economy.canShowRoi

@@ -4,8 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/dev.ts",
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "vps": "tsx vps-server.ts",
+    "vps:prod": "node dist/vps-server.js",
+    "build": "npm run clean && tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "clean": "rm -rf dist"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",

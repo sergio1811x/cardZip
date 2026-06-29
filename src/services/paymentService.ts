@@ -1,6 +1,7 @@
 import type { Context } from 'telegraf';
 import * as subscriptionService from './subscriptionService';
 import { track } from './analyticsService';
+import { supabase } from '../db/supabase';
 
 interface PackageConfig {
   stars: number;
@@ -47,6 +48,42 @@ const PACKAGES: Record<string, PackageConfig> = {
 };
 
 const processedCharges = new Set<string>();
+
+async function claimPayment(chargeId: string, userId: string, packageId: string, stars: number): Promise<'claimed' | 'duplicate' | 'fallback_claimed'> {
+  if (!chargeId) return 'fallback_claimed';
+
+  const { error } = await supabase.from('payment_events').insert({
+    telegram_payment_charge_id: chargeId,
+    user_id: userId,
+    package_id: packageId,
+    amount_stars: stars,
+    status: 'processing',
+  });
+
+  if (!error) return 'claimed';
+  if ((error as any).code === '23505') return 'duplicate';
+
+  // Backward-compatible fallback for deployments that have not run the migration yet.
+  // This is not cold-start safe; production should run supabase/schema.sql.
+  console.warn('[payment] payment_events insert failed; falling back to in-memory idempotency:', error.message);
+  if (processedCharges.has(chargeId)) return 'duplicate';
+  processedCharges.add(chargeId);
+  return 'fallback_claimed';
+}
+
+async function markPaymentProcessed(chargeId: string): Promise<void> {
+  if (!chargeId) return;
+  await supabase.from('payment_events')
+    .update({ status: 'processed', processed_at: new Date().toISOString() })
+    .eq('telegram_payment_charge_id', chargeId);
+}
+
+async function markPaymentFailed(chargeId: string, reason: string): Promise<void> {
+  if (!chargeId) return;
+  await supabase.from('payment_events')
+    .update({ status: 'failed', error: String(reason).slice(0, 500), processed_at: new Date().toISOString() })
+    .eq('telegram_payment_charge_id', chargeId);
+}
 
 function parsePayload(raw: unknown): { packageId: string } | null {
   try {
@@ -101,16 +138,24 @@ export async function handleSuccessfulPayment(
   }
 
   const chargeId = String(payment.telegram_payment_charge_id || payment.provider_payment_charge_id || '');
-  if (chargeId && processedCharges.has(chargeId)) {
+  const claim = await claimPayment(chargeId, userId, payload.packageId, payment.total_amount);
+  if (claim === 'duplicate') {
     await ctx.reply('✅ Платёж уже был обработан. Баланс не дублирую.');
     return;
   }
-  if (chargeId) processedCharges.add(chargeId);
 
-  if (pkg.unlimitedDays > 0) {
-    await subscriptionService.activateUnlimited(userId, pkg.unlimitedDays, pkg.unlimitedLimit);
-  } else {
-    await subscriptionService.addCredits(userId, pkg.credits);
+  try {
+    if (pkg.unlimitedDays > 0) {
+      await subscriptionService.activateUnlimited(userId, pkg.unlimitedDays, pkg.unlimitedLimit);
+    } else {
+      await subscriptionService.addCredits(userId, pkg.credits);
+    }
+    await markPaymentProcessed(chargeId);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    await markPaymentFailed(chargeId, reason);
+    await ctx.reply('⚠️ Платёж получен, но баланс не удалось обновить автоматически. Напишите в поддержку — платёж зафиксирован.');
+    throw e;
   }
 
   track(userId, 'paid', { packageId: payload.packageId, stars: payment.total_amount, chargeId });

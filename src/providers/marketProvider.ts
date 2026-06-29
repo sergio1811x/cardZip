@@ -1,7 +1,7 @@
 import type { MarketProvider, WbSearchResult, WbCard } from '../types';
 
-const WB_PARSER_URL = (process.env.WB_PARSER_URL || 'http://50fc4ca33bd1.vps.myjino.ru').replace(/\/+$/, '');
-const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || 'cardzip-wb-2024';
+const WB_PARSER_URL = (process.env.WB_PARSER_URL || '').replace(/\/+$/, '');
+const WB_PARSER_SECRET = process.env.WB_PARSER_SECRET || '';
 
 const WB_PARSER_TIMEOUT_MS = Number(process.env.WB_PARSER_TIMEOUT_MS || 30_000);
 const WB_PARSER_LIMIT = Number(process.env.WB_PARSER_LIMIT || 50);
@@ -254,8 +254,9 @@ async function searchSimilar(query: string, imageUrl?: string): Promise<WbSearch
     return null;
   }
 
-  if (!process.env.WB_PARSER_SECRET) {
-    console.warn('[wb] WB_PARSER_SECRET не задан в env, используется fallback secret. Лучше вынести secret в переменные окружения.');
+  if (!WB_PARSER_URL || !WB_PARSER_SECRET) {
+    console.warn('[wb] WB parser disabled: set WB_PARSER_URL and WB_PARSER_SECRET in environment.');
+    return null;
   }
 
   return searchByImage(cleanQuery, cleanImageUrl);
