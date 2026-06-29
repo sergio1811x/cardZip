@@ -7,11 +7,9 @@ export const config = { maxDuration: 60 };
 const WBCON_URL = 'https://wbcon.ru/wp-json/services-wb/v1/get_analysis_data';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
-
   const secret = req.headers['authorization'] ?? req.query.secret;
-  const expected = process.env.WB_CATEGORIES_UPDATE_SECRET || process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (!expected || (secret !== expected && secret !== `Bearer ${expected}`)) {
+  const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (secret !== expected && secret !== `Bearer ${expected}`) {
     return res.status(401).json({ error: 'unauthorized' });
   }
 
@@ -36,28 +34,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const parseDate = data[0]?.parse_time?.slice(0, 10) ?? dateParam;
 
-    const toNumber = (value: unknown): number => {
-      const n = typeof value === 'number' ? value : Number(String(value ?? '').replace(',', '.').replace(/[^\d.-]/g, ''));
-      return Number.isFinite(n) ? n : 0;
-    };
-
     const rows: WbCategory[] = data.map((r) => ({
-      category: String(r.category ?? '').trim(),
-      item: String(r.item ?? '').trim(),
-      sellers: toNumber(r.sellers),
-      sellers_with_orders: toNumber(r.sellers_with_orders),
-      product_cards: toNumber(r.product_cards),
-      product_cards_with_orders: toNumber(r.product_cards_with_orders),
-      revenue_rub: toNumber(r.revenue_rub),
-      average_check_rub: toNumber(r.average_check_rub),
-      average_rating: toNumber(r.average_rating),
-      stock_quantity: toNumber(r.stock_quantity),
-      redemption_rate: toNumber(r.redemption_rate),
-      monopolization_percentage: toNumber(r.monopolization_percentage),
-      turnover_days_per_week: toNumber(r.turnover_days_per_week),
-      availability: String(r.availability ?? 'Не рассчитано'),
+      category: r.category ?? '',
+      item: r.item ?? '',
+      sellers: r.sellers ?? 0,
+      sellers_with_orders: r.sellers_with_orders ?? 0,
+      product_cards: r.product_cards ?? 0,
+      product_cards_with_orders: r.product_cards_with_orders ?? 0,
+      revenue_rub: r.revenue_rub ?? 0,
+      average_check_rub: r.average_check_rub ?? 0,
+      average_rating: r.average_rating ?? 0,
+      stock_quantity: r.stock_quantity ?? 0,
+      redemption_rate: r.redemption_rate ?? 0,
+      monopolization_percentage: r.monopolization_percentage ?? 0,
+      turnover_days_per_week: r.turnover_days_per_week ?? 0,
+      availability: r.availability ?? 'Не рассчитано',
       parse_date: parseDate,
-    })).filter((row) => row.category || row.item);
+    }));
 
     const result = await upsertWbCategories(rows);
 

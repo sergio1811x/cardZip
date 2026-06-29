@@ -113,6 +113,7 @@ function getPlatformMode(platform: string): PlatformMode {
 export async function calcEconomics(input: EconomicsInput): Promise<EconomicsResult> {
   const { platform, priceYuan, weightKg, wbMedianPrice, wbAvgPrice, categoryHint, tariffs } = input;
   const yuanToRub = await fetchYuanRate();
+  const safePriceYuan = Number.isFinite(Number(priceYuan)) && Number(priceYuan) > 0 ? Number(priceYuan) : 0;
   const rawWeightMissing = !weightKg || weightKg <= 0;
   const isCustom = !!(tariffs?.cargoPerKgUsd || tariffs?.fulfillmentRub || tariffs?.taxPercent || tariffs?.targetMarginPercent || tariffs?.drrPercent);
   const platformMode = getPlatformMode(platform);
@@ -136,7 +137,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   const drrPercent = tariffs?.drrPercent ?? DEFAULTS.drrPercent;
 
   // Себестоимость — при отсутствии веса используем категорийный дефолт
-  const purchaseRub = Math.round(priceYuan * yuanToRub);
+  const purchaseRub = Math.round(safePriceYuan * yuanToRub);
   const bankMarkupRub = Math.round(purchaseRub * DEFAULTS.bankMarkupPercent / 100);
   const cargoRub = Math.round(effectiveWeight * cargoPerKgUsd * USD_TO_RUB);
   const internalLogisticsRub = fulfillmentRub;
@@ -145,7 +146,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   // Для Taobao/Tmall — только себестоимость, без расчёта прибыли
   if (platformMode !== 'full') {
     const breakdown: EconomicsBreakdown = {
-      purchaseYuan: priceYuan, purchaseRub, bankMarkupRub, cargoRub,
+      purchaseYuan: safePriceYuan, purchaseRub, bankMarkupRub, cargoRub,
       internalLogisticsRub, wbCommissionRub: 0, wbLogisticsRub: 0, taxRub: 0, drrRub: 0, drrPercent: 0,
     };
     const disclaimer = platformMode === 'sample_only'
@@ -161,45 +162,35 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
     };
   }
 
-  // 1688: полный расчёт разрешён только от подтверждённой WB-цены.
-  // Если прямые аналоги не найдены, не синтезируем цену продажи: это давало псевдо-ROI.
+  // 1688: полный расчёт. не создаём синтетическую цену продажи.
+  // Если WB-рынок не подтверждён, показываем только себестоимость, без ROI/маржи.
   const salePrice = wbMedianPrice ?? wbAvgPrice;
-  const isSyntheticPrice = !salePrice;
+  // ROI is allowed only when both market price and real product/manual weight are present.
+  // Category-default weight is useful for rough cost orientation, but not for profit/ROI.
+  const canUseSalePrice = !rawWeightMissing && !!salePrice;
+  const isSyntheticPrice = !canUseSalePrice;
+  const avgSaleRub = canUseSalePrice ? Math.round(salePrice) : 0;
 
-  if (!salePrice || salePrice <= 0) {
-    const breakdown: EconomicsBreakdown = {
-      purchaseYuan: priceYuan, purchaseRub, bankMarkupRub, cargoRub,
-      internalLogisticsRub, wbCommissionRub: 0, wbLogisticsRub: 0, taxRub: 0, drrRub: 0, drrPercent: 0,
-    };
-
-    let disclaimer = 'Рыночная цена WB не подтверждена прямыми аналогами. ROI, маржу и цену продажи считать нельзя; показана только ориентировочная себестоимость.';
-    if (isCustom) disclaimer = 'Расчёт по вашим тарифам. ' + disclaimer;
-
-    return {
-      yuanToRub, platformMode, breakdown, costRub,
-      avgSaleRub: 0, grossProfitRub: 0, grossMarginPercent: 0, roiPercent: 0,
-      weightMissing, weightSource, categoryDefaultWeightKg,
-      isCustomTariffs: isCustom, isSyntheticPrice: true,
-      disclaimer,
-    };
-  }
-
-  const avgSaleRub = Math.round(salePrice);
-
-  const wbCommissionRub = Math.round(avgSaleRub * DEFAULTS.wbCommissionPercent / 100);
-  const taxRub = Math.round(avgSaleRub * taxPercent / 100);
-  const drrRub = Math.round(avgSaleRub * drrPercent / 100);
-  const grossProfitRub = avgSaleRub - costRub - wbCommissionRub - DEFAULTS.wbLogisticsRub - taxRub - drrRub;
+  const wbCommissionRub = avgSaleRub > 0 ? Math.round(avgSaleRub * DEFAULTS.wbCommissionPercent / 100) : 0;
+  const taxRub = avgSaleRub > 0 ? Math.round(avgSaleRub * taxPercent / 100) : 0;
+  const drrRub = avgSaleRub > 0 ? Math.round(avgSaleRub * drrPercent / 100) : 0;
+  const grossProfitRub = avgSaleRub > 0 ? avgSaleRub - costRub - wbCommissionRub - DEFAULTS.wbLogisticsRub - taxRub - drrRub : 0;
   const grossMarginPercent = avgSaleRub > 0 ? Math.round((grossProfitRub / avgSaleRub) * 100) : 0;
-  const roiPercent = costRub > 0 ? Math.round((grossProfitRub / costRub) * 100) : 0;
+  const roiPercent = avgSaleRub > 0 && costRub > 0 ? Math.round((grossProfitRub / costRub) * 100) : 0;
 
   const breakdown: EconomicsBreakdown = {
-    purchaseYuan: priceYuan, purchaseRub, bankMarkupRub, cargoRub,
+    purchaseYuan: safePriceYuan, purchaseRub, bankMarkupRub, cargoRub,
     internalLogisticsRub, wbCommissionRub, wbLogisticsRub: DEFAULTS.wbLogisticsRub,
     taxRub, drrRub, drrPercent,
   };
 
-  let disclaimer = 'Расчёт ориентировочный и основан только на подтверждённой цене прямых локальных аналогов WB. Комиссии, логистика, реклама, возвраты и фактическая цена продажи могут отличаться.';
+  let disclaimer = 'Расчёт ориентировочный. Комиссии, логистика, реклама, возвраты и фактическая цена продажи могут отличаться.';
+  if (isSyntheticPrice) {
+    disclaimer = rawWeightMissing
+      ? 'Вес с упаковкой не подтверждён: цена продажи, прибыль, маржа и ROI не рассчитываются. ' + disclaimer
+      : 'WB-рынок не подтверждён: цена продажи, прибыль, маржа и ROI не рассчитываются. ' + disclaimer;
+  }
+  // Не дублируем про вес — это показывается в messageBuilder
   if (isCustom) {
     disclaimer = 'Расчёт по вашим тарифам. ' + disclaimer;
   }
@@ -274,3 +265,10 @@ export function calcBudgetScenarios(
     weightMissing,
   };
 }
+
+export {
+  buildPriceDecision,
+  buildWeightDecision,
+  buildMarketDecision,
+  buildEconomyDecision,
+} from './decisionLayer';

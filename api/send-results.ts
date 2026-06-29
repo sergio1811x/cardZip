@@ -16,7 +16,7 @@ export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(_req: VercelRequest, res: VercelResponse) {
   try {
     const jobs = await getUnsentJobs();
     if (!jobs.length) return res.status(200).json({ ok: true, sent: 0 });
@@ -27,24 +27,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         const chatId = job.tg_chat_id;
         const result = job.result_json as any;
-
-        // Modern pipeline: delegate final QA/send to step5 to avoid bypassing Hard Validator and QA Gate.
-        if (result?.product && !job.sent_to_telegram) {
-          const host = req.headers.host || 'card-zip.vercel.app';
-          try {
-            const ac = new AbortController();
-            setTimeout(() => ac.abort(), 4000);
-            await fetch(`https://${host}/api/step5-qa`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ jobId: job.id }),
-              signal: ac.signal,
-            });
-            continue;
-          } catch (e) {
-            console.warn(`[send-results] step5 delegation failed for ${job.id}:`, e instanceof Error ? e.message : e);
-          }
-        }
 
         if (job.status === 'failed' || !result?.rawProduct) {
           if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
@@ -86,12 +68,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             isFallback: true,
           })),
           calcEconomics({
-            platform: raw.platform ?? '1688',
             priceYuan: raw.priceYuan,
             weightKg: raw.weightKg,
-            wbMedianPrice: wbData?.avgPrice,
             wbAvgPrice: wbData?.avgPrice,
-            categoryHint: raw.categoryName,
           }),
         ]);
 

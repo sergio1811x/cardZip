@@ -50,32 +50,8 @@ function containsChinese(text: unknown): boolean {
 
 function normalizeText(text: unknown): string {
   return String(text ?? '')
-      .replace(/\b(?:NaN|undefined|null)\b/gi, '—')
-      .replace(/\b0(?:[,.]0+)?\s*[¥￥]/gi, 'цена уточняется')
-      .replace(/\b0(?:[,.]0+)?\s*₽/gi, 'цена уточняется')
-      .replace(/\b0(?:[,.]0+)?\s*(?:кг|kg)\b/gi, 'вес уточняется')
-      .replace(/\d+([,.]\d{4,})/g, (match) => {
-        const parsed = Number(match.replace(',', '.'));
-        return Number.isFinite(parsed) ? String(Math.round(parsed * 100) / 100).replace('.', ',') : '—';
-      })
       .replace(/\s+/g, ' ')
       .trim();
-}
-
-function stripChinesePublicText(text: unknown): string {
-  return normalizeText(text).replace(/[一-鿿]+/g, '').replace(/\s{2,}/g, ' ').trim();
-}
-
-function isSuspiciousCharacteristicMapping(name: string, val: string): boolean {
-  const key = name.toLowerCase();
-  const value = val.toLowerCase();
-  const colorValue = /(?:красн|ж[её]лт|син|зел[её]н|ч[её]рн|черн|бел|розов|серый|red|yellow|blue|green|black|white|pink|红|黄|蓝|绿|黑|白)/i;
-  const numericField = /(?:мощность|напряжение|вольт|ватт|аккумулятор|батар|ёмкость|емкость|ток|частота|размер|вес|длина|ширина|высота|диаметр|power|voltage|battery|capacity)/i;
-  const colorField = /(?:цвет|color)/i;
-  const electricValue = /(?:\d+\s*(?:w|вт|v|в|mah|мач|hz|гц)|usb|type-c|аккумулятор|батар)/i;
-  if (numericField.test(key) && colorValue.test(value) && !/\d/.test(value)) return true;
-  if (colorField.test(key) && electricValue.test(value)) return true;
-  return false;
 }
 
 function uniqStrings(items: unknown[], limit = 50): string[] {
@@ -146,7 +122,6 @@ function normalizeCharacteristics(
 
       if (!name || !val) continue;
       if (containsChinese(name) || containsChinese(val)) continue;
-      if (isSuspiciousCharacteristicMapping(name, val)) continue;
 
       // Если модель пометила как небезопасное для WB — не кладём в characteristics.
       if (row.safeForWb === false) continue;
@@ -163,7 +138,6 @@ function normalizeCharacteristics(
 
       if (!name || !val) continue;
       if (containsChinese(name) || containsChinese(val)) continue;
-      if (isSuspiciousCharacteristicMapping(name, val)) continue;
 
       out[name] = val;
     }
@@ -519,17 +493,16 @@ function normalizeSeoResult(parsed: RawSeoResult, ctx: ProductContext): AiConten
   ], 30);
 
   const titleRu =
-      stripChinesePublicText(parsed.titleRu) ||
-      stripChinesePublicText(ctx.titles?.wbTitleDraft) ||
-      stripChinesePublicText(ctx.titles?.shortRu) ||
-      stripChinesePublicText(ctx.titles?.cleanRu) ||
-      'Товар для Wildberries';
+      normalizeText(parsed.titleRu) ||
+      ctx.titles?.wbTitleDraft ||
+      ctx.titles?.shortRu ||
+      ctx.titles?.cleanRu;
 
   return {
     titleRu,
-    description: stripChinesePublicText(parsed.description),
-    bullets: asStringArray(parsed.bullets, 5).map(stripChinesePublicText).filter(Boolean),
-    keywords: asStringArray(parsed.keywords, 15).map(stripChinesePublicText).filter(Boolean),
+    description: normalizeText(parsed.description),
+    bullets: asStringArray(parsed.bullets, 5),
+    keywords: asStringArray(parsed.keywords, 15),
     characteristics: normalizeCharacteristics(parsed.characteristics),
     warnings: mergedWarnings,
   };
@@ -651,9 +624,9 @@ export async function synthesizeReport(
 function fallbackSeo(ctx: ProductContext): AiContentResult {
   const safeFacts = buildSafeFacts(ctx);
   const safeTitle =
-      stripChinesePublicText(ctx.titles?.wbTitleDraft) ||
-      stripChinesePublicText(ctx.titles?.shortRu) ||
-      stripChinesePublicText(ctx.titles?.cleanRu) ||
+      normalizeText(ctx.titles?.wbTitleDraft) ||
+      normalizeText(ctx.titles?.shortRu) ||
+      normalizeText(ctx.titles?.cleanRu) ||
       'Товар для Wildberries';
 
   return {

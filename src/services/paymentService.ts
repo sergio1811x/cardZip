@@ -46,64 +46,26 @@ const PACKAGES: Record<string, PackageConfig> = {
   },
 };
 
-const processedPayments = new Set<string>();
-const MAX_PROCESSED_PAYMENTS = 1000;
+const processedCharges = new Set<string>();
 
-function rememberPayment(key: string): boolean {
-  if (!key) return true;
-  if (processedPayments.has(key)) return false;
-
-  processedPayments.add(key);
-  if (processedPayments.size > MAX_PROCESSED_PAYMENTS) {
-    const first = processedPayments.values().next().value;
-    if (first) processedPayments.delete(first);
-  }
-
-  return true;
-}
-
-function parsePackageId(rawPayload: unknown): string | null {
-  if (typeof rawPayload !== 'string' || !rawPayload.trim()) return null;
-
+function parsePayload(raw: unknown): { packageId: string } | null {
   try {
-    const payload = JSON.parse(rawPayload) as { packageId?: unknown };
-    return typeof payload.packageId === 'string' ? payload.packageId : null;
+    const parsed = JSON.parse(String(raw ?? '{}'));
+    const packageId = String(parsed.packageId ?? '');
+    return PACKAGES[packageId] ? { packageId } : null;
   } catch {
     return null;
   }
 }
 
-function getPaymentId(payment: any): string {
-  return String(
-    payment?.telegram_payment_charge_id ||
-    payment?.provider_payment_charge_id ||
-    payment?.invoice_payload ||
-    ''
-  );
-}
-
-function isValidPayment(payment: any, pkg: PackageConfig): boolean {
-  if (!payment) return false;
-  if (payment.currency !== 'XTR') return false;
-  if (Number(payment.total_amount) !== pkg.stars) return false;
-  return true;
-}
-
-export function getPackage(packageId: string): PackageConfig | null {
-  return PACKAGES[packageId] ?? null;
-}
-
 export async function sendInvoice(ctx: Context, packageId: string): Promise<void> {
   const pkg = PACKAGES[packageId];
-  if (!pkg) {
-    await ctx.reply('Неизвестный тариф. Откройте /upgrade и выберите пакет заново.');
-    return;
-  }
+  if (!pkg) return;
 
   await (ctx as any).replyWithInvoice({
     title: `CardZip — ${pkg.label}`,
     description: pkg.description,
-    payload: JSON.stringify({ packageId, v: 1 }),
+    payload: JSON.stringify({ packageId }),
     provider_token: '',
     currency: 'XTR',
     prices: [{ label: pkg.label, amount: pkg.stars }],
@@ -111,14 +73,12 @@ export async function sendInvoice(ctx: Context, packageId: string): Promise<void
 }
 
 export async function handlePreCheckout(ctx: Context): Promise<void> {
-  const preCheckoutQuery = (ctx as any).preCheckoutQuery;
-  if (!preCheckoutQuery) return;
-
-  const packageId = parsePackageId(preCheckoutQuery.invoice_payload);
-  const pkg = packageId ? PACKAGES[packageId] : null;
-  const ok = Boolean(pkg && preCheckoutQuery.currency === 'XTR' && Number(preCheckoutQuery.total_amount) === pkg.stars);
-
-  await (ctx as any).answerPreCheckoutQuery(ok, ok ? undefined : 'Пакет не найден или сумма платежа не совпадает. Выберите тариф заново.');
+  const query = (ctx as any).preCheckoutQuery;
+  if (!query) return;
+  const payload = parsePayload(query.invoice_payload);
+  const pkg = payload ? PACKAGES[payload.packageId] : null;
+  const ok = Boolean(pkg && query.currency === 'XTR' && query.total_amount === pkg.stars);
+  await (ctx as any).answerPreCheckoutQuery(ok, ok ? undefined : 'Платёж не прошёл проверку пакета. Попробуйте выбрать тариф заново.');
 }
 
 export async function handleSuccessfulPayment(
@@ -126,28 +86,26 @@ export async function handleSuccessfulPayment(
   userId: string
 ): Promise<void> {
   const payment = (ctx.message as any)?.successful_payment;
-  if (!payment || !userId) return;
+  if (!payment) return;
 
-  const packageId = parsePackageId(payment.invoice_payload);
-  const pkg = packageId ? PACKAGES[packageId] : null;
-
-  if (!pkg || !packageId || !isValidPayment(payment, pkg)) {
-    console.warn('[payment] Invalid successful_payment payload/amount', {
-      userId,
-      packageId,
-      currency: payment?.currency,
-      totalAmount: payment?.total_amount,
-    });
-    await ctx.reply('⚠️ Платёж получен, но пакет не распознан. Напишите в поддержку — начислим вручную.');
+  const payload = parsePayload(payment.invoice_payload);
+  if (!payload) {
+    await ctx.reply('⚠️ Не удалось определить оплаченный пакет. Напишите в поддержку.');
     return;
   }
 
-  const paymentId = getPaymentId(payment);
-  if (!rememberPayment(`${userId}:${paymentId}`)) {
-    console.warn('[payment] Duplicate successful_payment ignored', { userId, paymentId });
-    await ctx.reply('✅ Этот платёж уже был обработан. Отправляйте ссылку на товар 👇');
+  const pkg = PACKAGES[payload.packageId];
+  if (payment.currency !== 'XTR' || payment.total_amount !== pkg.stars) {
+    await ctx.reply('⚠️ Сумма платежа не совпала с выбранным пакетом. Кредиты не начислены, напишите в поддержку.');
     return;
   }
+
+  const chargeId = String(payment.telegram_payment_charge_id || payment.provider_payment_charge_id || '');
+  if (chargeId && processedCharges.has(chargeId)) {
+    await ctx.reply('✅ Платёж уже был обработан. Баланс не дублирую.');
+    return;
+  }
+  if (chargeId) processedCharges.add(chargeId);
 
   if (pkg.unlimitedDays > 0) {
     await subscriptionService.activateUnlimited(userId, pkg.unlimitedDays, pkg.unlimitedLimit);
@@ -155,13 +113,7 @@ export async function handleSuccessfulPayment(
     await subscriptionService.addCredits(userId, pkg.credits);
   }
 
-  await track(userId, 'paid', {
-    packageId,
-    stars: payment.total_amount,
-    currency: payment.currency,
-    telegramPaymentChargeId: payment.telegram_payment_charge_id,
-    providerPaymentChargeId: payment.provider_payment_charge_id,
-  });
+  track(userId, 'paid', { packageId: payload.packageId, stars: payment.total_amount, chargeId });
 
   const successMsg = pkg.unlimitedDays > 0
     ? `✅ Активировано: <b>${pkg.label}</b> (до ${pkg.unlimitedLimit} разборов за ${pkg.unlimitedDays} дней)`

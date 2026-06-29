@@ -87,7 +87,6 @@ function productToCard(p: ParserProduct): WbCard | null {
     url: buildWbUrl(id),
     rating: normalizeRating(p.rating),
     feedbacks: normalizeFeedbacks(p.feedbacks),
-    marketType: 'local_wb_market',
   };
 }
 

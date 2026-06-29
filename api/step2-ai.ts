@@ -4,21 +4,87 @@ import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { canonicalizeProduct } from '../src/providers/productCanonicalizer';
 import { createStepProgress } from '../src/core/progress';
+import { cleanChineseTitle } from '../src/core/cnNormalize';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 
 export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
-function safeString(value: unknown, fallback = ''): string {
-  if (typeof value === 'string') return value.trim();
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value).trim();
-  return fallback;
+function toProductIntelligence(raw: any, productContext: any) {
+  const ctx = productContext ?? {};
+  const identity = ctx.identity ?? {};
+  const titles = ctx.titles ?? {};
+  const wbSearch = ctx.wbSearch ?? {};
+  const seoPolicy = ctx.seoPolicy ?? {};
+  const missing = ctx.missingCritical ?? [];
+  const cleanCn = cleanChineseTitle(raw?.titleCn ?? titles.titleCn ?? '');
+  const titleRu = titles.cleanRu || raw?.titleEn || cleanCn || raw?.titleCn || 'Товар 1688';
+  return {
+    productIdentity: {
+      marketNameRu: titleRu,
+      shortNameRu: titles.shortRu || titleRu,
+      productKind: identity.productType || titleRu,
+      categoryType: identity.categoryType || 'other',
+      subCategoryType: '',
+      categoryPath: [identity.categoryType || 'other'].filter(Boolean),
+      coreObject: identity.coreObject || identity.productType || titleRu,
+      formFactor: '',
+      audience: identity.audience || 'неизвестно',
+      gender: identity.gender || 'неизвестно',
+      season: identity.season || 'неизвестно',
+      useCases: identity.useCases || [],
+      materials: Object.entries(ctx.facts ?? {}).filter(([k]) => /материал/i.test(k)).map(([, v]) => String(v)),
+      powerType: Object.entries(ctx.facts ?? {}).filter(([k]) => /питание|аккумулятор|батар/i.test(k)).map(([, v]) => String(v)),
+      visibleFeatures: [],
+      importantFeatures: Object.values(ctx.facts ?? {}).map(String).slice(0, 8),
+      notConfirmedFeatures: [],
+      possibleConfusions: identity.notThis || [],
+    },
+    cleanTitles: {
+      titleCnClean: cleanCn,
+      titleRuClean: titleRu,
+      titleForReport: titles.shortRu || titleRu,
+      titleForWb: titles.wbTitleDraft || titleRu,
+    },
+    wbSearch: {
+      wbCoreQuery: wbSearch.coreQuery || titleRu,
+      queryCandidates: wbSearch.queryLadder || [wbSearch.coreQuery || titleRu].filter(Boolean),
+      negativeSearchTerms: wbSearch.mustExclude || [],
+      tooBroadQueries: [],
+      tooNarrowQueries: [],
+    },
+    matchingRules: {
+      mustHaveForDirectAnalog: wbSearch.directMatchRules || wbSearch.mustInclude || [],
+      allowedDifferences: ['цвет как SKU', 'размер как SKU'],
+      directAnalogBlockers: wbSearch.rejectRules || [],
+      similarOnlyIf: [],
+      rejectIf: wbSearch.mustExclude || [],
+    },
+    reportRules: {
+      buyerMustCheck: missing,
+      buyerMustNotAsk: [],
+      seoAllowedClaims: seoPolicy.allowedClaims || [],
+      seoForbiddenClaims: seoPolicy.forbiddenClaims || ['сертифицированный', 'безопасный', 'лечебный', 'премиальный', 'водонепроницаемый', 'IP67', 'для детей'],
+      importantAttributesToShow: Object.keys(ctx.facts ?? {}),
+      attributesToHide: [],
+      riskFlags: ctx.riskTags || [],
+    },
+    supplierQuestions: ctx.supplierQuestions || { ru: [], cn: [] },
+    dataQuality: {
+      missingCriticalFields: missing,
+      skuRisk: ctx.sku?.needsSelection ? 'SKU нужно выбрать' : '',
+      priceRisk: ctx.price?.needsConfirmation ? 'цену SKU/партии нужно подтвердить' : '',
+      weightRisk: raw?.weightKg > 0 ? '' : 'нужен вес с упаковкой',
+      marketRisk: 'рынок WB будет подтверждаться отдельно',
+      visionConfidence: 'medium',
+      textConfidence: 'medium',
+      overallConfidence: ctx.dataQuality?.status === 'reliable' ? 'high' : 'medium',
+      reason: ctx.dataQuality?.explanation || 'Product Intelligence собран из ProductContext и raw данных.',
+    },
+  };
 }
 
-function makeFallbackQuery(raw: any): string {
-  return safeString(raw?.titleEn) || safeString(raw?.categoryName) || safeString(raw?.titleCn);
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -57,18 +123,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       stock: raw.stock,
     }).catch(() => null);
 
+    const productIntelligence = toProductIntelligence(raw, productContext);
+
     // Backward-compatible fields from productContext
-    const fallbackQuery = makeFallbackQuery(raw);
-    const wbCoreQuery = productContext?.wbSearch?.coreQuery || fallbackQuery;
+    const wbCoreQuery = productContext?.wbSearch?.coreQuery ?? '';
     const categoryType = productContext?.identity?.categoryType ?? 'other';
-    const validatedQueries = productContext?.wbSearch?.queryLadder?.length ? productContext.wbSearch.queryLadder : [fallbackQuery].filter(Boolean);
+    const validatedQueries = productContext?.wbSearch?.queryLadder ?? [];
 
     // Temporary SEO (will be regenerated in step4 with market data)
     const seoContent = {
       titleRu: productContext?.titles?.cleanRu ?? raw.titleEn ?? raw.titleCn,
       description: '',
       bullets: [] as string[],
-      keywords: validatedQueries,
+      keywords: productContext?.wbSearch?.queryLadder ?? [],
       characteristics: productContext?.facts ?? {},
     };
 
@@ -82,13 +149,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ...(job.result_json as any),
         seoContent,
         productContext,
+        productIntelligence,
+        intelligence: productIntelligence,
         wbCoreQuery,
         categoryType,
         validatedQueries,
         // backward compat for step3
         productStructure: productContext ? {
-          coreObject: productContext.identity.coreObject || fallbackQuery,
-          productType: productContext.identity.productType || fallbackQuery,
+          coreObject: productContext.identity.coreObject,
+          productType: productContext.identity.productType,
           material: Object.entries(productContext.facts).filter(([k]) => k.includes('материал')).map(([,v]) => v),
           hardConflicts: productContext.conflicts.filter(c => c.severity === 'high').map(c => c.field),
           softConflicts: productContext.conflicts.filter(c => c.severity !== 'high').map(c => c.field),
@@ -97,38 +166,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           mustKeep: productContext.wbSearch.mustInclude,
           doNotSearch: productContext.wbSearch.mustExclude,
           audience: productContext.identity.audience,
-        } : {
-          coreObject: fallbackQuery,
-          productType: fallbackQuery,
-          material: [],
-          hardConflicts: [],
-          softConflicts: [],
-          directAnalogBlockers: [],
-          marketSynonyms: validatedQueries,
-          mustKeep: [],
-          doNotSearch: [],
-          audience: '',
-        },
+        } : null,
         queryPlan: productContext ? {
           L1_exact: productContext.wbSearch.queryLadder.slice(0, 2),
           L2_commercial: productContext.wbSearch.queryLadder.slice(2, 4),
           L3_subtype: [],
           L4_core: [productContext.identity.coreObject],
           L5_category: [],
-        } : {
-          L1_exact: validatedQueries.slice(0, 1),
-          L2_commercial: validatedQueries.slice(1, 2),
-          L3_subtype: [],
-          L4_core: [fallbackQuery].filter(Boolean),
-          L5_category: [],
-        },
+        } : null,
         productLexicon: productContext ? {
           mainTerms: [productContext.identity.coreObject],
           hardNegativeTerms: productContext.wbSearch.mustExclude,
-        } : {
-          mainTerms: [fallbackQuery].filter(Boolean),
-          hardNegativeTerms: [],
-        },
+        } : null,
       },
     }).eq('id', jobId);
 
@@ -139,13 +188,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
-        const response = await fetch(`https://${host}/api/step3-market`, {
+        await fetch(`https://${host}/api/step3-market`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }),
           signal: ac.signal,
         });
-        if (!response.ok) throw new Error(`step3 HTTP ${response.status}`);
         sent = true;
       } catch {
         if (i === 0) await new Promise(r => setTimeout(r, 500));

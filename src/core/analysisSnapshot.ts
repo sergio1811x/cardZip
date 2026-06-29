@@ -312,42 +312,23 @@ function normalizeMarket(input: unknown): AnalysisSnapshot['market'] {
   const market = asRecord(input);
   const directAnalogs = asArray(market.directAnalogs).map((item) => {
     const obj = asRecord(item);
-    const rawLevel = safeString(obj.matchLevel, safeString(obj.level, 'direct'));
-    const normalizedRaw = rawLevel === 'direct_analog' ? 'direct' : rawLevel === 'category_only' ? 'category' : rawLevel;
-    const matchLevel = ['direct', 'similar', 'category', 'rejected'].includes(normalizedRaw) ? normalizedRaw as 'direct' | 'similar' | 'category' | 'rejected' : 'direct';
-    const confidence = Math.max(0, Math.min(100, asNumber(obj.confidence ?? obj.similarity ?? obj.matchConfidence) ?? 0));
+    const matchLevelRaw = safeString(obj.matchLevel, 'direct');
+    const matchLevel = ['direct', 'similar', 'category', 'rejected'].includes(matchLevelRaw) ? matchLevelRaw as 'direct' | 'similar' | 'category' | 'rejected' : 'direct';
     return {
-      title: safeString(obj.title ?? obj.name),
+      title: safeString(obj.title),
       priceRub: positiveNumber(obj.priceRub ?? obj.price),
       matchLevel,
-      confidence,
+      confidence: Math.max(0, Math.min(100, asNumber(obj.confidence) ?? 0)),
     };
   }).filter((item) => item.title || item.priceRub !== null);
 
-  const strictDirect = directAnalogs.filter((item) => item.matchLevel === 'direct' && item.confidence >= 85 && item.priceRub !== null);
-  const directAnalogsCount = Math.max(0, Math.round(asNumber(market.directAnalogsCount) ?? strictDirect.length));
-  const similarAnalogsCount = Math.max(0, Math.round(asNumber(market.similarAnalogsCount) ?? asNumber(market.similarCount) ?? directAnalogs.filter((item) => item.matchLevel === 'similar').length));
-  const broadCategoryCount = Math.max(0, Math.round(asNumber(market.broadCategoryCount) ?? asNumber(market.categoryCount) ?? directAnalogs.filter((item) => item.matchLevel === 'category').length));
+  const directAnalogsCount = Math.max(0, Math.round(asNumber(market.directAnalogsCount) ?? directAnalogs.filter((item) => item.matchLevel === 'direct').length));
+  const similarAnalogsCount = Math.max(0, Math.round(asNumber(market.similarAnalogsCount) ?? asNumber(market.similarCount) ?? 0));
+  const broadCategoryCount = Math.max(0, Math.round(asNumber(market.broadCategoryCount) ?? asNumber(market.categoryCount) ?? 0));
   const crossBorderCount = Math.max(0, Math.round(asNumber(market.crossBorderCount) ?? 0));
-
-  const directPrices = strictDirect.map((item) => item.priceRub).filter((value): value is number => value !== null && value > 0).sort((a, b) => a - b);
-  const medianDirectPrice = directPrices.length
-    ? directPrices[Math.floor(directPrices.length / 2)]
-    : null;
-  const candidateMarketPrice = positiveNumber(market.displayedMainPriceRub ?? market.medianPriceRub ?? market.avgPriceRub) ?? medianDirectPrice;
-
-  // 1–2 прямых аналога — это ориентир, но не подтверждённый рынок для ROI.
-  const enoughDirectAnalogs = directAnalogsCount >= 3;
-  const marketConfirmedInput = Boolean(market.marketConfirmed ?? enoughDirectAnalogs);
-  const marketConfirmed = enoughDirectAnalogs && candidateMarketPrice !== null && marketConfirmedInput;
-  const displayedMainPriceTypeRaw = safeString(market.displayedMainPriceType, positiveNumber(market.medianPriceRub) || medianDirectPrice ? 'median' : positiveNumber(market.avgPriceRub) ? 'average' : 'unknown');
-
-  let rejectedReason = safeString(market.rejectedReason);
-  if (!marketConfirmed) {
-    if (directAnalogsCount <= 0) rejectedReason = rejectedReason || 'Нет прямых аналогов с уверенностью 85%+ для подтверждения рыночной цены.';
-    else if (directAnalogsCount < 3) rejectedReason = rejectedReason || 'Найдено меньше 3 прямых локальных аналогов. Этого недостаточно для рыночной цены и ROI.';
-    else rejectedReason = rejectedReason || 'Рынок не подтверждён: нет валидной цены продажи.';
-  }
+  const displayedMainPriceRub = directAnalogsCount > 0 ? positiveNumber(market.displayedMainPriceRub ?? market.medianPriceRub ?? market.avgPriceRub) : null;
+  const marketConfirmed = directAnalogsCount > 0 && displayedMainPriceRub !== null && Boolean(market.marketConfirmed ?? true);
+  const displayedMainPriceTypeRaw = safeString(market.displayedMainPriceType, positiveNumber(market.medianPriceRub) ? 'median' : positiveNumber(market.avgPriceRub) ? 'average' : 'unknown');
 
   return {
     directAnalogsCount,
@@ -355,10 +336,10 @@ function normalizeMarket(input: unknown): AnalysisSnapshot['market'] {
     broadCategoryCount,
     crossBorderCount,
     marketConfirmed,
-    displayedMainPriceRub: marketConfirmed ? candidateMarketPrice : null,
+    displayedMainPriceRub: marketConfirmed ? displayedMainPriceRub : null,
     displayedMainPriceType: displayedMainPriceTypeRaw === 'median' || displayedMainPriceTypeRaw === 'average' ? displayedMainPriceTypeRaw : 'unknown',
     canUseForEconomics: marketConfirmed,
-    rejectedReason: marketConfirmed ? undefined : rejectedReason,
+    rejectedReason: marketConfirmed ? undefined : safeString(market.rejectedReason, directAnalogsCount <= 0 ? 'Нет прямых аналогов для подтверждения рыночной цены.' : 'Рынок не подтверждён.'),
     directAnalogs,
   };
 }

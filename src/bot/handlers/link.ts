@@ -1,59 +1,119 @@
 import type { Context } from 'telegraf';
 import type { Message } from 'telegraf/typings/core/types/typegram';
-import { Markup } from 'telegraf';
-import { createJob } from '../../db/queries/jobs';
+import { productImporter } from '../../providers/productImporter';
+import { aiContentGenerator } from '../../providers/aiContentGenerator';
+import { marketProvider } from '../../providers/marketProvider';
+import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../../core/economicsCalc';
+import { zipBuilder } from '../../core/zipBuilder';
+import { formatSeoText } from '../../core/seoFormatter';
+import { buildMainMessage } from '../../core/messageBuilder';
+import { buildConclusion } from '../../core/verdict';
+import { buildRiskFlags } from '../../core/riskFlags';
+import { filterWbData } from '../../core/wbFilter';
+import { normalizeCnText } from '../../core/cnNormalize';
+import { buildCacheKey } from '../../lib/cache';
+import { findProductByKey, upsertProduct } from '../../db/queries/products';
 import { getStatus } from '../../services/subscriptionService';
 import { track } from '../../services/analyticsService';
+import { createJob } from '../../db/queries/jobs';
 import { supabase } from '../../db/supabase';
 import { redis } from '../../lib/redis';
+import { AppError, isAppError } from '../../lib/errors';
+import { Input } from 'telegraf';
+import type { ProductWithContent, WbFilterKeywords, AiContentResult } from '../../types';
 
-function resolveAppHost(ctx: Context): string {
-  const fromEnv = process.env.PUBLIC_APP_HOST || process.env.VERCEL_URL;
-  if (fromEnv) return fromEnv.startsWith('http') ? fromEnv : `https://${fromEnv}`;
-  const webhookHost = (ctx as any).webhookReply?.host;
-  if (webhookHost) return `https://${webhookHost}`;
-  return 'https://card-zip.vercel.app';
+// ─── Прогресс-сообщения ──────────────────────────────────────────────────────
+
+const STEP_MESSAGES: Record<string, string[]> = {
+  fetch: [
+    '🔄 Загружаем данные с площадки...',
+    '🔄 Читаем карточку товара...',
+    '🔄 Извлекаем характеристики...',
+    '🔄 Парсим цены и фотографии...',
+    '🔄 Обрабатываем данные поставщика...',
+    '🔄 Почти загрузили...',
+  ],
+  ai: [
+    '🔄 Генерируем SEO-контент...',
+    '🔄 Подбираем ключевые слова для WB...',
+    '🔄 Составляем описание карточки...',
+    '🔄 Формируем буллеты для инфографики...',
+    '🔄 Адаптируем под российский рынок...',
+    '🔄 Готовим вопросы поставщику...',
+  ],
+  wb: [
+    '🔄 Ищем похожие товары на Wildberries...',
+    '🔄 Анализируем цены конкурентов...',
+    '🔄 Загружаем фото для поиска на WB...',
+    '🔄 Фильтруем нерелевантные товары...',
+    '🔄 Оцениваем качество выборки...',
+    '🔄 Рассчитываем экономику...',
+  ],
+  zip: [
+    '🔄 Собираем архив с фотографиями...',
+    '🔄 Скачиваем изображения товара...',
+    '🔄 Формируем SEO-файл...',
+    '🔄 Упаковываем материалы...',
+    '🔄 Почти готово, отправляем...',
+  ],
+};
+
+function createProgressUpdater(ctx: Context, chatId: number, msgId: number) {
+  let currentKey = '';
+  let msgIndex = 0;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const edit = async (text: string) => {
+    try {
+      await ctx.telegram.editMessageText(chatId, msgId, undefined, text, { parse_mode: 'HTML' });
+    } catch {}
+  };
+
+  timer = setInterval(() => {
+    const messages = STEP_MESSAGES[currentKey];
+    if (!messages) return;
+    msgIndex++;
+    const text = messages[msgIndex % messages.length];
+    edit(text);
+  }, 10_000);
+
+  return {
+    step(key: string) {
+      currentKey = key;
+      msgIndex = 0;
+      const messages = STEP_MESSAGES[key];
+      if (messages) edit(messages[0]);
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+    },
+  };
 }
 
-async function callStep1(host: string, jobId: string): Promise<boolean> {
-  const url = `${host.replace(/\/$/, '')}/api/step1-elim`;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const ac = new AbortController();
-    const timeout = setTimeout(() => ac.abort(), 4000);
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId }),
-        signal: ac.signal,
-      });
-      if (response.ok) return true;
-    } catch {
-      // retry below
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (attempt === 0) await new Promise((r) => setTimeout(r, 500));
-  }
+function isNetworkError(e: unknown): boolean {
+  if (e instanceof DOMException && e.name === 'TimeoutError') return true;
+  if (e instanceof TypeError && (e.message === 'terminated' || e.message === 'fetch failed')) return true;
   return false;
 }
 
+const DEFAULT_FILTER_KEYWORDS: WbFilterKeywords = { required: [], optional: [], exclude: [] };
+
 export async function handleLink(ctx: Context, url: string): Promise<void> {
-  const userId = (ctx as any).dbUserId as string | undefined;
+  const userId = (ctx as any).dbUserId as string;
   const chatId = ctx.chat?.id;
   if (!userId || !chatId) return;
 
   const status = await getStatus(userId);
   if (!status.canGenerate) {
-    track(userId, 'upgrade_shown');
+    await track(userId, 'upgrade_shown');
     await ctx.reply(
-      '🔎 <b>Лимит разборов исчерпан</b>\n\nВыберите формат работы:',
+      `🔎 <b>Лимит разборов исчерпан</b>\n\nВыберите формат работы:`,
       {
         parse_mode: 'HTML',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback('10 анализов · 150 ⭐', 'pay_pack10')],
-          [Markup.button.callback('30 анализов · 300 ⭐', 'pay_pack30')],
-          [Markup.button.callback('7 дней Pro · 500 ⭐', 'pay_week')],
+        ...require('telegraf').Markup.inlineKeyboard([
+          [require('telegraf').Markup.button.callback('10 анализов · 150 ⭐', 'pay_pack10')],
+          [require('telegraf').Markup.button.callback('30 анализов · 300 ⭐', 'pay_pack30')],
+          [require('telegraf').Markup.button.callback('7 дней Pro · 500 ⭐', 'pay_week')],
         ]),
       }
     );
@@ -68,40 +128,41 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     }
   }
 
-  await track(userId, 'sent_link', { url });
-
   const progressMsg = await ctx.reply('⏳ Запрос принят, начинаю анализ...', { parse_mode: 'HTML' });
-  const progressMsgId = (progressMsg as Message.TextMessage).message_id;
+  const messageId = (progressMsg as Message.TextMessage).message_id;
 
+  let job: any = null;
   try {
-    const job = await createJob(userId, chatId, progressMsgId, url);
-    if (redis) await redis.set(`processing:${userId}`, job.id, { ex: 75 }).catch(() => {});
+    job = await createJob(userId, chatId, messageId, url);
+    if (redis) await redis.set(`processing:${userId}`, job.id, { ex: 75 }).catch(() => null);
+    await track(userId, 'sent_link', { url });
 
-    const started = await callStep1(resolveAppHost(ctx), job.id);
-    if (!started) {
+    const baseUrl =
+      process.env.APP_URL ||
+      process.env.PUBLIC_APP_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
+
+    if (!baseUrl) {
+      throw new Error('APP_URL/PUBLIC_APP_URL/VERCEL_URL is not configured for step pipeline');
+    }
+
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 4000);
+    await fetch(`${baseUrl.replace(/\/$/, '')}/api/step1-elim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId: job.id }),
+      signal: ac.signal,
+    }).catch(() => null);
+  } catch (e: any) {
+    if (job?.id) {
       await supabase.from('jobs').update({
         status: 'failed',
-        error: 'step1_trigger_failed',
+        error: e?.message ?? 'link_handler_failed',
         finished_at: new Date().toISOString(),
-      }).eq('id', job.id).eq('user_id', userId);
-      if (redis) await redis.del(`processing:${userId}`).catch(() => {});
-      await ctx.telegram.editMessageText(
-        chatId,
-        progressMsgId,
-        undefined,
-        '❌ Сервер перегружен. Попробуйте ещё раз через минуту.',
-        { parse_mode: 'HTML' },
-      ).catch(() => {});
+      }).eq('id', job.id).then(() => null, () => null);
     }
-  } catch (e) {
-    console.error('[handleLink]', e);
-    if (redis) await redis.del(`processing:${userId}`).catch(() => {});
-    await ctx.telegram.editMessageText(
-      chatId,
-      progressMsgId,
-      undefined,
-      '❌ Не удалось создать анализ. Попробуйте ещё раз.',
-      { parse_mode: 'HTML' },
-    ).catch(() => ctx.reply('❌ Не удалось создать анализ. Попробуйте ещё раз.'));
+    if (redis) await redis.del(`processing:${userId}`).catch(() => null);
+    await ctx.telegram.editMessageText(chatId, messageId, undefined, '⚠️ Не удалось запустить анализ. Попробуйте ещё раз.', { parse_mode: 'HTML' }).catch(() => null);
   }
 }

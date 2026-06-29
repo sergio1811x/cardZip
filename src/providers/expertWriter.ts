@@ -1,4 +1,4 @@
-import type { AnalysisSnapshot, GeneratedArtifacts } from '../types';
+import type { AnalysisSnapshot } from '../types';
 
 const WRITER_MODELS = [
   'deepseek/deepseek-v4-pro',
@@ -10,7 +10,16 @@ function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 }
 
-export interface ExpertWriterResult extends GeneratedArtifacts {
+export interface ExpertWriterResult {
+  userCard?: string;
+  seoTitle?: string;
+  seoDescription?: string;
+  seoBullets?: string[];
+  seoKeywords?: string[];
+  seoCharacteristics?: Record<string, string>;
+  buyerBrief?: string;
+  supplierQuestionsRu?: string[];
+  supplierQuestionsCn?: string[];
   verdict: string;
   verdictText: string;
   readinessScore: number;
@@ -566,7 +575,7 @@ export async function runExpertWriter(snapshot: AnalysisSnapshot): Promise<Exper
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!res.ok) {
         console.log(`[expert-writer] ${model} HTTP ${res.status}`);

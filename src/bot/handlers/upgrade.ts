@@ -1,5 +1,5 @@
 import type { Context } from 'telegraf';
-import { sendInvoice, handleSuccessfulPayment } from '../../services/paymentService';
+import { sendInvoice, handleSuccessfulPayment, handlePreCheckout } from '../../services/paymentService';
 import { track } from '../../services/analyticsService';
 import { Markup } from 'telegraf';
 
@@ -58,4 +58,9 @@ export async function handleSuccessPayment(ctx: Context): Promise<void> {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) return;
   await handleSuccessfulPayment(ctx, userId);
+}
+
+
+export async function handlePreCheckoutQuery(ctx: Context): Promise<void> {
+  await handlePreCheckout(ctx);
 }

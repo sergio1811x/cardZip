@@ -56,10 +56,12 @@ export function filterRelevantTrends(
   negativeMatches?: string[],
   directAnalogBlockers?: string[],
 ): WbTrend[] {
+  // WBCON trends are search-demand hints, not direct analogs.
+  // No product-specific hardcode here: blockers must come from Product Intelligence.
   const excludePatterns = [
-    /медицинск/i, /ортопедическ/i, /профессиональн/i,
-    /набор\s/i, /комплект\s/i,
-    /\bswiss\b/i, /\bzwilling\b/i, /\bvictorinox\b/i, /\bsamura\b/i,
+    /медицинск/i,
+    /ортопедическ/i,
+    /профессиональн/i,
   ];
 
   const coreLower = coreQuery.toLowerCase();
@@ -74,11 +76,8 @@ export function filterRelevantTrends(
 
       if (excludePatterns.some((p) => p.test(w))) return false;
 
-      const conflictTerms = [
-        'кожаные', 'кожа', 'замшевые', 'замша', 'текстильные', 'деревянные', 'металлические',
-        'маленький', 'с зубчиками', 'универсальный', 'овощной', 'хлебный', 'филейный',
-      ];
-      for (const cm of conflictTerms) {
+      const materialConflictTerms = ['кожаные', 'кожа', 'замшевые', 'замша', 'текстильные', 'деревянные', 'металлические'];
+      for (const cm of materialConflictTerms) {
         if (w.includes(cm) && !materialSet.has(cm) && !typeLower.includes(cm)) return false;
       }
 

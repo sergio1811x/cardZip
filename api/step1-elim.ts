@@ -58,8 +58,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`[step1] Elim: ${rawProduct.titleCn?.slice(0, 30)} | imgs:${rawProduct.images.length} | skus:${rawProduct.skus?.length ?? 0}`);
 
-    // Кэш намеренно не используется: каждый анализ проходит полный pipeline.
-
     const rawForJob = {
       productId: rawProduct.productId,
       platform: rawProduct.platform,
@@ -92,11 +90,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (needSkuChoice && job.tg_message_id) {
       const { Markup } = require('telegraf');
       const buttons = skus.slice(0, 8).map((sku: any, i: number) => {
-        const rawLabel = String(sku.name ?? sku.label ?? `Вариант ${i + 1}`);
-        let label = normalizeCnText(rawLabel).replace(/[一-鿿]/g, '').replace(/\s+/g, ' ').trim();
-        if (!label) label = `Вариант ${i + 1}`;
-        label = label.slice(0, 28);
-        const priceLabel = sku.price && Number(sku.price) > 0 ? ` · ${sku.price} ¥` : '';
+        // Убираем китайские символы из названия для кнопки
+        let label = (sku.name ?? `Вариант ${i + 1}`).slice(0, 28);
+        const priceLabel = sku.price ? ` · ${sku.price} ¥` : '';
         return [Markup.button.callback(`${label}${priceLabel}`, `sku_${i}_${jobId}`)];
       });
       buttons.push([Markup.button.callback('📊 Все варианты', `sku_all_${jobId}`)]);
@@ -129,13 +125,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         const ac = new AbortController();
         setTimeout(() => ac.abort(), 4000);
-        const response = await fetch(`https://${host}/api/step2-ai`, {
+        await fetch(`https://${host}/api/step2-ai`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ jobId }),
           signal: ac.signal,
         });
-        if (!response.ok) throw new Error(`step2 HTTP ${response.status}`);
         step2Sent = true;
       } catch {
         if (i === 0) await new Promise(r => setTimeout(r, 500));

@@ -1,9 +1,57 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
+import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
+import { markSent } from '../src/db/queries/jobs';
+import { getStatus, tryConsumeCredit } from '../src/services/subscriptionService';
+import { buildMainMessage, buildSafeSummary } from '../src/core/messageBuilder';
+import { runHardValidator, validateReport } from '../src/core/reportValidator';
+import { validateGeneratedText, buildDecisionContext } from '../src/core/decisionLayer';
+import { findWbCategoriesByKeywords } from '../src/db/queries/wbCategories';
+import { formatSeoText } from '../src/core/seoFormatter';
+import { formatOrderBrief } from '../src/core/orderBrief';
+import { upsertProduct } from '../src/db/queries/products';
+import { buildCacheKey } from '../src/lib/cache';
+import { acquireStepLock } from '../src/lib/stepLock';
+import { redis } from '../src/lib/redis';
+import { runQaGate } from '../src/providers/expertQaGate';
+import { runAutoFix } from '../src/providers/autoFix';
+import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
+
+const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
+
+function safeIssues(value: any): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
+function applyCreditsLine(text: string, creditsRemaining: number): string {
+  const line = `📦 Осталось: ${Math.max(0, creditsRemaining)} анализов`;
+  if (/📦 Осталось:\s*\d+\s+анализов/i.test(text)) {
+    return text.replace(/📦 Осталось:\s*\d+\s+анализов/i, line);
+  }
+  return `${text.replace(/\s+$/g, '')}\n\n${line}`;
+}
+
+async function sendPaymentRequired(job: any) {
+  if (job.tg_message_id) await bot.telegram.deleteMessage(job.tg_chat_id, job.tg_message_id).catch(() => {});
+  await bot.telegram.sendMessage(job.tg_chat_id, '💳 Недостаточно кредитов для отправки полного отчёта. Пополните баланс и запустите анализ заново — полный отчёт без списания не отправлен.', {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+  });
+  if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+}
+
+async function sendBlocked(job: any, product: any, reason: string) {
+  if (job.tg_message_id) await bot.telegram.deleteMessage(job.tg_chat_id, job.tg_message_id).catch(() => {});
+  await bot.telegram.sendMessage(job.tg_chat_id, buildSafeSummary(product, reason), {
+    parse_mode: 'HTML',
+    link_preview_options: { is_disabled: true },
+  });
+  await markSent(job.id);
+  if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -12,80 +60,156 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
+    console.log(`[step5] Start: ${jobId}`);
     if (!await acquireStepLock('step5', jobId)) {
       console.log(`[step5] Duplicate blocked for job ${jobId}`);
       return res.status(200).json({ ok: true, skip: true });
     }
 
-    console.log(`[step5] Waiting for snapshot: ${jobId}`);
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
+    if (!job || job.sent_to_telegram) return res.status(200).json({ ok: true, skip: true });
 
-    // Poll DB until step4 saves analysisSnapshot (up to 55s)
-    let snapshotFound = false;
-    const start = Date.now();
-    while (Date.now() - start < 55_000) {
-      const { data: job } = await supabase
-        .from('jobs')
-        .select('status, result_json')
-        .eq('id', jobId)
-        .single();
+    const result = job.result_json as any;
+    const chatId = job.tg_chat_id;
+    const product = {
+      ...(result.product as ProductWithContent),
+      intelligence: result.productIntelligence ?? result.intelligence ?? (result.product as any)?.intelligence,
+      analysisSnapshot: result.analysisSnapshot,
+    } as ProductWithContent & Record<string, any>;
+    const decisionContext = buildDecisionContext(product);
 
-      if (!job || job.status === 'failed') {
-        console.warn(`[step5] Job ${jobId} failed or missing while waiting`);
-        return res.status(200).json({ ok: false, reason: 'job_failed' });
+    const safeRiskFlags = product.riskFlags ?? {
+      hasBrand: false, isElectrical: false, isChildren: false,
+      isCosmetic: false, isFood: false, isMedical: false,
+      supplierOrdersLow: false, supplierTypeUnknown: false,
+      weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: true,
+    };
+
+    // Generate and validate all user-facing files before allowing full send.
+    let seoText = formatSeoText(product, product.seoContent ?? {}, safeRiskFlags);
+    let briefText = formatOrderBrief(
+      product, product.seoContent ?? {}, product.economics,
+      safeRiskFlags, job.input_url, product.budgets, product.conclusion,
+    );
+    const supplierQs = [
+      ...(decisionContext.intelligence.supplierQuestions?.ru ?? []),
+      ...(decisionContext.intelligence.reportRules?.buyerMustCheck ?? []),
+    ].slice(0, 10).map((q: string, i: number) => `${i + 1}. ${q}`).join('\n');
+
+    const seoValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: seoText, reportType: 'seo', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+    const briefValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: briefText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+    const supplierValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: supplierQs, reportType: 'supplierQuestions', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+    seoText = seoValidation.fixedText || seoText;
+    briefText = briefValidation.fixedText || briefText;
+
+    if (!seoValidation.ok || !briefValidation.ok || !supplierValidation.ok) {
+      console.warn('[step5] file validators repaired:', [...seoValidation.errors, ...briefValidation.errors, ...supplierValidation.errors].join(', '));
+    }
+
+    await supabase.from('jobs').update({
+      result_json: { ...result, product, generatedFiles: { seoText, briefText, supplierQuestions: supplierValidation.fixedText } },
+    }).eq('id', jobId);
+
+    const keywords = (product.seoContent?.keywords ?? []).slice(0, 3);
+    if (!keywords.length && product.titleRu) keywords.push(product.titleRu.split(' ').slice(0, 2).join(' '));
+    const wbCats = keywords.length ? await findWbCategoriesByKeywords(keywords).catch(() => []) : [];
+    const wbCategory = wbCats[0] ?? null;
+
+    const currentStatus = await getStatus(job.user_id);
+    const statusBeforeCharge = {
+      plan: currentStatus.plan ?? 'free',
+      creditsRemaining: currentStatus.creditsRemaining ?? 0,
+      creditsTotal: 0,
+      canGenerate: true,
+      isTrial: currentStatus.isTrial ?? false,
+    };
+    const { text: mainText, keyboard } = buildMainMessage(product, job.id, statusBeforeCharge as any, wbCategory);
+
+    const softValidation = validateReport(mainText, (product as any).categoryType ?? decisionContext.categoryType ?? 'other', {
+      hasPrice: !!decisionContext.price.calculationPriceYuan,
+      hasWeight: decisionContext.weight.canUseForRoi,
+      hasDirectAnalogs: decisionContext.market.confirmedDirectCount >= 5,
+      wb429: !!(product as any).wb429,
+      intelligence: decisionContext.intelligence as any,
+    });
+    let finalText = softValidation.ok ? mainText : softValidation.fixedText;
+
+    const snapshot = result.analysisSnapshot ?? { market: product.marketDecision ?? decisionContext.market, economics: product.economics, productContext: product.productContext, purchasePrice: decisionContext.price, weight: decisionContext.weight, sku: decisionContext.sku };
+    let hard = runHardValidator({
+      analysisSnapshot: snapshot,
+      artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierValidation.fixedText },
+    });
+
+    if (hard.block || !hard.canShowFullReport) {
+      console.warn(`[step5] hard validator blocked: ${hard.issues.map(i => i.problem).join('; ')}`);
+      await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Hard Validator заблокировал полный отчёт.');
+      return res.status(200).json({ ok: true, blocked: true, source: 'hard' });
+    }
+
+    const qaResult = await runQaGate(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierValidation.fixedText }).catch(() => null);
+    if (!qaResult || qaResult.decision === 'BLOCK') {
+      const reason = qaResult ? [...safeIssues(qaResult.criticalIssues), ...safeIssues(qaResult.issues)].join('; ') : 'QA Gate недоступен.';
+      console.warn(`[step5] QA blocked/unavailable: ${reason}`);
+      await sendBlocked(job, product, reason || 'QA Gate не разрешил полный отчёт.');
+      return res.status(200).json({ ok: true, blocked: true, source: 'qa' });
+    }
+
+    if (qaResult.decision === 'FIX_REQUIRED') {
+      const fixed = await runAutoFix(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierValidation.fixedText }, { ...qaResult, issues: safeIssues(qaResult.issues).length ? safeIssues(qaResult.issues) : safeIssues(qaResult.requiredEdits) } as any).catch(() => null);
+      if (fixed?.userCard || fixed?.UserCard) finalText = String(fixed.userCard ?? fixed.UserCard);
+      if (fixed?.seoText) seoText = String(fixed.seoText);
+      if (fixed?.buyerBrief) briefText = String(fixed.buyerBrief);
+
+      hard = runHardValidator({ analysisSnapshot: snapshot, artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierValidation.fixedText } });
+      if (hard.block || !hard.canShowFullReport) {
+        await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Auto-Fix не смог безопасно исправить отчёт.');
+        return res.status(200).json({ ok: true, blocked: true, source: 'autofix-hard' });
       }
-
-      const result = job.result_json as any;
-      if (result?.analysisSnapshot) {
-        snapshotFound = true;
-        break;
-      }
-
-      await new Promise(r => setTimeout(r, 3000));
     }
 
-    if (!snapshotFound) {
-      console.error(`[step5] Timeout 55s waiting for snapshot, job ${jobId}`);
-      const { handleStepError } = require('../src/lib/stepError');
-      const { Telegraf } = require('telegraf');
-      const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-      await handleStepError(jobId, 'step5_snapshot_timeout', bot);
-      return res.status(200).json({ ok: false, reason: 'snapshot_timeout' });
+    // Charge only after hard validator + QA allow the full user report.
+    const charged = await tryConsumeCredit(job.user_id);
+    if (!charged) {
+      console.warn(`[step5] no credits after QA for job ${job.id}`);
+      await sendPaymentRequired(job);
+      return res.status(200).json({ ok: true, blocked: true, source: 'payment_required' });
     }
+    const freshStatus = await getStatus(job.user_id);
+    // Do not rebuild the report after QA/Auto-Fix: that can discard repaired text.
+    // Only update the credits line in the already validated artifact.
+    finalText = applyCreditsLine(finalText, freshStatus.creditsRemaining ?? 0);
 
-    // Extend processing lock before triggering step6
-    const { data: job } = await supabase.from('jobs').select('user_id').eq('id', jobId).single();
-    if (job?.user_id) await extendProcessingLock(job.user_id);
+    await supabase.from('jobs').update({
+      result_json: {
+        ...result,
+        product,
+        generatedFiles: { seoText, briefText, supplierQuestions: supplierValidation.fixedText },
+        finalUserCard: finalText,
+        qaResult,
+      },
+    }).eq('id', jobId);
 
-    // Trigger step6 — explicit external URL (avoids Vercel 508 loop detection)
-    console.log(`[step5] Snapshot found, triggering step6 for ${jobId}`);
-    let step6Sent = false;
-    for (let i = 0; i < 2 && !step6Sent; i++) {
-      try {
-        const ac = new AbortController();
-        setTimeout(() => ac.abort(), 4000);
-        const r = await fetch('https://card-zip.vercel.app/api/step6-send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId }),
-          signal: ac.signal,
-        });
-        if (r.ok) step6Sent = true;
-      } catch {
-        if (i === 0) await new Promise(r => setTimeout(r, 500));
-      }
-    }
+    if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+    await bot.telegram.sendMessage(chatId, finalText, {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      ...keyboard,
+    });
 
-    if (!step6Sent) {
-      console.error(`[step5] Failed to trigger step6 for job ${jobId}`);
-      const { handleStepError } = require('../src/lib/stepError');
-      const { Telegraf } = require('telegraf');
-      const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
-      await handleStepError(jobId, 'step6_trigger_failed', bot);
-    }
+    await markSent(job.id);
+    if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
 
-    res.status(200).json({ ok: true, step6Sent });
+    const cacheKey = buildCacheKey(product.productId, product.titleCn, product.mainImageUrl);
+    upsertProduct(job.user_id, { ...product, cacheKey }).catch((e) =>
+      console.warn('[step5] Cache save failed:', e instanceof Error ? e.message : e),
+    );
+
+    console.log(`[step5] Job ${job.id} sent | soft=${softValidation.ok ? 'PASS' : softValidation.errors.length} | hard=PASS | qa=${qaResult.decision}`);
+    res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step5]', e.message);
+    const { handleStepError } = require('../src/lib/stepError');
+    await handleStepError(jobId, e.message, bot);
     res.status(200).json({ ok: false });
   }
 }

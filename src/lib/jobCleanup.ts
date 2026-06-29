@@ -1,50 +1,29 @@
 import { supabase } from '../db/supabase';
 import { redis } from './redis';
-import { buildStepLockKey } from './stepLock';
 
 const STUCK_TIMEOUT_MS = 90_000;
-const ACTIVE_JOB_STATUSES = [
-  'pending',
-  'processing',
-  'elim',
-  'elim_done',
-  'sku_pending',
-  'ai_processing',
-  'ai_done',
-  'market_processing',
-  'done',
-  'qa_pending',
-] as const;
-
-function getTelegramClient(botOrTelegram: any): any | null {
-  return botOrTelegram?.telegram ?? botOrTelegram ?? null;
-}
 
 export async function cleanupStuckJobs(userId: string, chatId: number, botOrTelegram: any): Promise<boolean> {
-  const now = Date.now();
+  const cutoff = new Date(Date.now() - STUCK_TIMEOUT_MS).toISOString();
 
-  // Ищем незавершённые jobs юзера. Done intentionally не трогаем без отдельного sent_at/delivered флага.
-  const { data: activeJobs, error } = await supabase
+  // Ищем ВСЕ незавершённые jobs юзера
+  const { data: activeJobs } = await supabase
     .from('jobs')
     .select('id, tg_message_id, status, updated_at, created_at')
     .eq('user_id', userId)
-    .in('status', [...ACTIVE_JOB_STATUSES])
+    .in('status', ['pending', 'processing', 'elim', 'elim_done', 'sku_pending', 'ai_processing', 'ai_done', 'market_processing'])
     .limit(10);
 
-  if (error) {
-    console.warn('[cleanup] Failed to query active jobs:', error.message);
-    return false;
-  }
-
+  // Фильтруем зависшие: старше 90с ИЛИ done+not_sent
   const stuckJobs = (activeJobs ?? []).filter((j) => {
     const ts = j.updated_at ?? j.created_at;
     if (!ts) return true;
-    const parsed = new Date(ts).getTime();
-    if (!Number.isFinite(parsed)) return true;
-    return parsed < now - STUCK_TIMEOUT_MS;
+    const isOld = new Date(ts).getTime() < Date.now() - STUCK_TIMEOUT_MS;
+    if (j.status === 'done') return isOld; // done но не отправлено
+    return isOld;
   });
 
-  const tg = getTelegramClient(botOrTelegram);
+  const tg = botOrTelegram.telegram ?? botOrTelegram;
 
   if (stuckJobs.length > 0) {
     for (const job of stuckJobs) {
@@ -56,12 +35,12 @@ export async function cleanupStuckJobs(userId: string, chatId: number, botOrTele
         finished_at: new Date().toISOString(),
       }).eq('id', job.id);
 
-      if (job.tg_message_id && tg) {
+      if (job.tg_message_id) {
         await tg.editMessageText(
           chatId, job.tg_message_id, undefined,
           '❌ Анализ не завершился.\n\nПопробуйте ещё раз.\nКредит не списан.'
         ).catch(() => {
-          tg.deleteMessage?.(chatId, job.tg_message_id).catch(() => {});
+          tg.deleteMessage(chatId, job.tg_message_id).catch(() => {});
         });
       }
     }
@@ -77,12 +56,8 @@ export async function cleanupStuckJobs(userId: string, chatId: number, botOrTele
 
   if (stuckJobs.length > 0 && redis) {
     const keys = stuckJobs.flatMap((j) => [
-      buildStepLockKey('step1', String(j.id)),
-      buildStepLockKey('step2', String(j.id)),
-      buildStepLockKey('step3', String(j.id)),
-      buildStepLockKey('step4', String(j.id)),
-      buildStepLockKey('step5', String(j.id)),
-      buildStepLockKey('step6', String(j.id)),
+      `step:step1:${j.id}`, `step:step2:${j.id}`,
+      `step:step3:${j.id}`, `step:step4:${j.id}`,
     ]);
     for (const k of keys) await redis.del(k).catch(() => {});
   }

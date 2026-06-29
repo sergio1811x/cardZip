@@ -52,7 +52,7 @@ function makeProduct(overrides: Partial<ProductWithContent> = {}): ProductWithCo
 describe('buildMainMessage snapshot test', () => {
   it('does not contain forbidden patterns for normal product', () => {
     const product = makeProduct();
-    const { text } = buildMainMessage(product, 'job123');
+    const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
     for (const pattern of FORBIDDEN_PATTERNS) {
       expect(text).not.toMatch(pattern);
     }
@@ -60,7 +60,7 @@ describe('buildMainMessage snapshot test', () => {
 
   it('does not contain forbidden patterns for zero-price product', () => {
     const product = makeProduct({ priceYuan: 0, priceRange: undefined });
-    const { text } = buildMainMessage(product, 'job123');
+    const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
     expect(text).not.toMatch(/Цена: 0 ¥/);
     expect(text).not.toMatch(/undefined/);
   });
@@ -70,20 +70,20 @@ describe('buildMainMessage snapshot test', () => {
       weightKg: 0,
       economics: makeEconomics({ weightMissing: true, categoryDefaultWeightKg: 0.3, weightSource: 'category_default' }),
     });
-    const { text } = buildMainMessage(product, 'job123');
+    const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
     expect(text).not.toMatch(/Вес: 0 кг/);
     expect(text).not.toMatch(/undefined/);
   });
 
   it('shows tier range in header for discount tier product', () => {
     const product = makeProduct({ priceYuan: 26 });
-    const { text } = buildMainMessage(product, 'job123');
+    const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
     expect(text).toMatch(/26.*28/);
   });
 
   it('shows — for price when no prices at all', () => {
     const product = makeProduct({ priceYuan: 0, priceRange: undefined, skus: undefined });
-    const { text } = buildMainMessage(product, 'job123');
+    const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
     expect(text).toContain('Цена: —');
   });
 });

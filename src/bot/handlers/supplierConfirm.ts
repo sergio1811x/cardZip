@@ -1,4 +1,5 @@
 import type { Context } from 'telegraf';
+import { Markup } from 'telegraf';
 import { supabase } from '../../db/supabase';
 import { redis } from '../../lib/redis';
 import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../../core/economicsCalc';
@@ -12,35 +13,16 @@ function confirmKey(chatId: number): string {
   return `confirm_pending:${chatId}`;
 }
 
-function escHtml(str: unknown): string {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function positiveNumber(v: unknown, max = 1_000_000): number | undefined {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 && n <= max ? n : undefined;
-}
-
-function canUseWbMedian(wbFiltered: any): boolean {
-  if (!wbFiltered || !(Number(wbFiltered.medianPrice) > 0)) return false;
-  if (wbFiltered.marketConfirmed === false || wbFiltered.canUseForEconomics === false) return false;
-  if (typeof wbFiltered.directAnalogsCount === 'number' && wbFiltered.directAnalogsCount < 3) return false;
-  if (typeof wbFiltered.reliableCount === 'number' && wbFiltered.reliableCount < 3) return false;
-  return true;
-}
-
 export async function handleSupplierConfirmStart(ctx: Context) {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) return;
 
+  // Найти последний job
   const { data: job } = await supabase
     .from('jobs')
     .select('id')
     .eq('user_id', userId)
-    .in('status', ['done', 'sent', 'qa_pending'])
+    .in('status', ['done', 'sent'])
     .order('created_at', { ascending: false })
     .limit(1)
     .single();
@@ -55,9 +37,6 @@ export async function handleSupplierConfirmStart(ctx: Context) {
 
   if (redis) {
     await redis.set(confirmKey(chatId), JSON.stringify({ jobId: job.id, userId }), { ex: 300 });
-  } else {
-    await ctx.reply('❌ Временное сохранение недоступно. Попробуйте позже.');
-    return;
   }
 
   await ctx.reply(
@@ -69,7 +48,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
     '• цену выбранного SKU\n' +
     '• MOQ\n' +
     '• сроки производства\n\n' +
-    'После этого пересчитаю экономику, если WB-рынок уже подтверждён.\n\n' +
+    'После этого пересчитаю экономику.\n\n' +
     '<i>Можно отправить текст на любом языке.</i>',
     { parse_mode: 'HTML' }
   );
@@ -93,29 +72,22 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
   const pending = await getPendingConfirm(chatId);
   if (!pending) return false;
 
-  const userId = (ctx as any).dbUserId as string | undefined;
-  if (!userId || userId !== pending.userId) return false;
-
+  // Очищаем pending
   if (redis) await redis.del(confirmKey(chatId));
 
   await ctx.reply('🔄 Извлекаю данные из ответа поставщика...');
 
   try {
-    const extractedRaw = await extractSupplierData(text);
-    const extracted = normalizeExtractedData(extractedRaw);
+    // LLM извлечение структурированных данных
+    const extracted = await extractSupplierData(text);
 
-    if (!extracted || Object.keys(extracted).length === 0) {
-      await ctx.reply('❌ Не удалось извлечь полезные данные. Попробуйте отправить ответ поставщика ещё раз с ценой, весом или MOQ.');
+    if (!extracted) {
+      await ctx.reply('❌ Не удалось извлечь данные. Попробуйте отправить текст ещё раз.');
       return true;
     }
 
-    const { data: job } = await supabase
-      .from('jobs')
-      .select('*')
-      .eq('id', pending.jobId)
-      .eq('user_id', pending.userId)
-      .single();
-
+    // Загружаем job
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', pending.jobId).single();
     if (!job?.result_json) {
       await ctx.reply('❌ Товар не найден.');
       return true;
@@ -124,26 +96,23 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     const result = job.result_json as any;
     const raw = result.rawProduct;
     const product = result.product;
-    if (!raw || !product) {
-      await ctx.reply('❌ Данные анализа неполные.');
-      return true;
-    }
 
-    if (extracted.weightKg) raw.weightKg = extracted.weightKg;
-    if (extracted.priceCny) raw.priceYuan = extracted.priceCny;
-    if (extracted.moq) raw.moq = extracted.moq;
+    // Обновляем данные
+    if (extracted.weightKg && extracted.weightKg > 0) raw.weightKg = extracted.weightKg;
+    if (extracted.priceCny && extracted.priceCny > 0) raw.priceYuan = extracted.priceCny;
+    if (extracted.moq && extracted.moq > 0) raw.moq = extracted.moq;
     if (raw.normalized1688) {
-      if (extracted.weightKg) raw.normalized1688.weightKg = extracted.weightKg;
-      if (extracted.priceCny && raw.normalized1688.pricing) {
+      if (extracted.weightKg && extracted.weightKg > 0) raw.normalized1688.weightKg = extracted.weightKg;
+      if (extracted.priceCny && extracted.priceCny > 0) {
         raw.normalized1688.pricing.displayPriceYuan = extracted.priceCny;
         raw.normalized1688.pricing.selectedSkuPriceYuan = extracted.priceCny;
       }
-      if (extracted.moq) raw.normalized1688.moq = extracted.moq;
+      if (extracted.moq && extracted.moq > 0) raw.normalized1688.moq = extracted.moq;
     }
 
+    // Пересчитываем экономику
     const tariffs = await getUserTariffs(pending.userId).catch(() => null);
     const wbFiltered = product?.wbFiltered ?? null;
-    const marketOk = canUseWbMedian(wbFiltered);
 
     const economics = await calcEconomics({
       platform: raw.platform,
@@ -151,12 +120,12 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
       weightKg: raw.weightKg,
       categoryHint: raw.categoryName,
       tariffs: tariffs ?? undefined,
-      ...(marketOk ? { wbMedianPrice: wbFiltered.medianPrice } : {}),
+      ...(wbFiltered?.medianPrice > 0 ? { wbMedianPrice: wbFiltered.medianPrice } : {}),
     });
 
     const riskFlags = buildRiskFlags(raw, wbFiltered);
     const budgets = calcBudgetScenarios(economics.costRub, economics.weightMissing, raw.moq);
-    const maxPurchasePrice = marketOk
+    const maxPurchasePrice = wbFiltered?.medianPrice
       ? calcMaxPurchasePrice(wbFiltered.medianPrice, raw.weightKg, economics.yuanToRub, tariffs ?? undefined, raw.priceYuan)
       : null;
     const conclusion = buildConclusion(raw.platform, economics, wbFiltered, riskFlags);
@@ -171,25 +140,25 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
       riskFlags,
     };
 
+    // Сохраняем обновлённый job
     await supabase.from('jobs').update({
       result_json: { ...result, rawProduct: raw, product: updatedProduct },
-    }).eq('id', pending.jobId).eq('user_id', pending.userId);
+    }).eq('id', pending.jobId);
 
-    const confirmedLines: string[] = ['🟢 <b>Данные поставщика сохранены</b>', ''];
+    // Формируем ответ
+    const confirmedLines: string[] = ['🟢 <b>Данные подтверждены поставщиком</b>', ''];
     if (extracted.weightKg) confirmedLines.push(`Вес: ${extracted.weightKg} кг`);
-    if (extracted.composition) confirmedLines.push(`Состав: ${escHtml(extracted.composition)}`);
+    if (extracted.composition) confirmedLines.push(`Состав: ${extracted.composition}`);
     if (extracted.priceCny) confirmedLines.push(`Цена: ${extracted.priceCny} ¥`);
     if (extracted.moq) confirmedLines.push(`MOQ: ${extracted.moq} шт.`);
     if (extracted.productionDays) confirmedLines.push(`Срок: ${extracted.productionDays} дн.`);
-    if (extracted.sizes) confirmedLines.push(`Размеры: ${escHtml(extracted.sizes)}`);
+    if (extracted.sizes) confirmedLines.push(`Размеры: ${extracted.sizes}`);
     confirmedLines.push('');
-    confirmedLines.push(marketOk
-      ? 'Экономика пересчитана по подтверждённому WB-рынку.'
-      : 'Экономика обновлена по себестоимости. ROI/маржа зависят от подтверждённых прямых аналогов WB.');
+    confirmedLines.push('Теперь доступен полный расчёт экономики.');
 
     await ctx.reply(confirmedLines.join('\n'), { parse_mode: 'HTML' });
 
-    const { text: msgText, keyboard } = buildMainMessage(updatedProduct, pending.jobId);
+    const { text: msgText, keyboard } = buildMainMessage(updatedProduct, pending.jobId, {});
     await ctx.reply(msgText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
@@ -204,6 +173,8 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
   return true;
 }
 
+// ─── LLM extraction ─────────────────────────────────────────────────────────
+
 interface ExtractedData {
   weightKg?: number;
   composition?: string;
@@ -211,22 +182,6 @@ interface ExtractedData {
   moq?: number;
   productionDays?: number;
   sizes?: string;
-}
-
-function normalizeExtractedData(data: ExtractedData | null): ExtractedData | null {
-  if (!data) return null;
-  const out: ExtractedData = {};
-  const weightKg = positiveNumber(data.weightKg, 100);
-  const priceCny = positiveNumber(data.priceCny, 1_000_000);
-  const moq = positiveNumber(data.moq, 1_000_000);
-  const productionDays = positiveNumber(data.productionDays, 365);
-  if (weightKg) out.weightKg = Number(weightKg.toFixed(3));
-  if (priceCny) out.priceCny = Number(priceCny.toFixed(2));
-  if (moq) out.moq = Math.round(moq);
-  if (productionDays) out.productionDays = Math.round(productionDays);
-  if (typeof data.composition === 'string' && data.composition.trim()) out.composition = data.composition.trim().slice(0, 200);
-  if (typeof data.sizes === 'string' && data.sizes.trim()) out.sizes = data.sizes.trim().slice(0, 200);
-  return out;
 }
 
 const EXTRACT_MODELS = [
@@ -267,9 +222,9 @@ async function extractSupplierData(text: string): Promise<ExtractedData | null> 
       if (!res.ok) continue;
       const data = await res.json() as any;
       const raw = data.choices?.[0]?.message?.content ?? '';
-      const cleaned = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+      const cleaned = raw.replace(/```json\s*/i, '').replace(/```\s*$/i, '').trim();
       const parsed = JSON.parse(cleaned);
-      if (parsed && typeof parsed === 'object') return parsed;
+      if (parsed) return parsed;
     } catch {
       continue;
     }

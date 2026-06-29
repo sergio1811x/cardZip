@@ -31,31 +31,25 @@ function parseCards(products: any[]): WbCard[] {
       : time1 !== null && time1 <= 5 ? 'local_wb_market' as const
       : 'unknown_market' as const;
     return {
-      id: p.id,
-      nmId: p.id,
       title: p.name || '', price: p.price,
       url: `https://www.wildberries.ru/catalog/${p.id}/detail.aspx`,
       rating: p.rating || 0, feedbacks: p.feedbacks || 0,
       wh: p.wh, time1, time2: p.time2, dist: p.dist,
       seller: p.seller || '', supplierId: p.supplierId,
       brand: p.brand || '', marketType,
-      sourceHits: p.sourceHits ?? [],
-      queryHits: p.queryHits ?? [],
-    } as WbCard;
+    };
   }).filter((c: WbCard) => c.price > 0);
 }
 
 async function searchWb(queries: string[]): Promise<{ cards: WbCard[]; seenUrls: Set<string>; is429?: boolean }> {
-  const safeQueries = queries.map((q) => String(q || '').trim()).filter(Boolean).slice(0, MAX_WB_QUERIES);
   const seenUrls = new Set<string>();
   const cards: WbCard[] = [];
-  if (!safeQueries.length) return { cards, seenUrls };
 
   try {
     const res = await fetch(`${WB_PARSER_URL}/search-batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ secret: WB_PARSER_SECRET, queries: safeQueries, limit: 100 }),
+      body: JSON.stringify({ secret: WB_PARSER_SECRET, queries, limit: 100 }),
       signal: AbortSignal.timeout(25_000),
     });
     if (!res.ok) {
@@ -205,15 +199,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (judgments.length === borderline.length) {
             borderline.forEach((card: any, i: number) => {
               if (judgments[i]?.matchLevel) {
-                const proposed = judgments[i].matchLevel;
-                // LLM может уточнять borderline, но не имеет права поднимать <85 до direct.
-                card.matchLevel = proposed === 'direct_analog' && (card.similarity ?? 0) < 85 ? 'similar' : proposed;
+                card.matchLevel = judgments[i].matchLevel;
                 card.matchedTerms = judgments[i].matchedAttributes ?? card.matchedTerms;
                 card.missingTerms = judgments[i].missingAttributes ?? card.missingTerms;
               }
             });
             const all = [...similarity.buckets.directLocalAnalogs, ...similarity.buckets.similarLocalProducts, ...similarity.buckets.categoryOnly];
-            similarity.buckets.directLocalAnalogs = all.filter((c: any) => c.matchLevel === 'direct_analog' && (c.similarity ?? 0) >= 85 && c.marketType !== 'crossborder_market').sort((a: any, b: any) => b.similarity - a.similarity);
+            similarity.buckets.directLocalAnalogs = all.filter((c: any) => c.matchLevel === 'direct_analog' && c.marketType !== 'crossborder_market').sort((a: any, b: any) => b.similarity - a.similarity);
             similarity.buckets.similarLocalProducts = all.filter((c: any) => c.matchLevel === 'similar' && c.marketType !== 'crossborder_market').sort((a: any, b: any) => b.similarity - a.similarity);
             similarity.buckets.categoryOnly = all.filter((c: any) => c.matchLevel === 'category_only');
           }
@@ -230,12 +222,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // ─── Build WbData for economics (only confirmed LOCAL direct analogs) ─
-    const directCards = (similarity.buckets.directLocalAnalogs ?? [])
-      .filter((c: any) => c.marketType !== 'crossborder_market' && (c.similarity ?? 0) >= 85 && c.price > 0);
-    const economyDirectCards = directCards.slice(0, 20);
-    const marketConfirmedForEconomy = economyDirectCards.length >= 3;
-    const wbData: WbSearchResult | null = marketConfirmedForEconomy ? {
+    // ─── Build WbData for economics (only LOCAL direct analogs) ─────────
+    const directCards = similarity.buckets.directLocalAnalogs.filter((c: any) => (c.similarity ?? c.matchConfidence ?? 0) >= 85 && c.marketType !== 'crossborder_market');
+    const economyDirectCards = directCards.length >= 5 ? directCards : [];
+    const wbData: WbSearchResult | null = economyDirectCards.length > 0 ? {
       avgPrice: Math.round(economyDirectCards.reduce((s: number, c: any) => s + c.price, 0) / economyDirectCards.length),
       minPrice: Math.min(...economyDirectCards.map((c: any) => c.price)),
       maxPrice: Math.max(...economyDirectCards.map((c: any) => c.price)),
@@ -247,6 +237,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const filterKeywords = seoContent?.filterKeywords ?? { required: [], optional: [], exclude: [] };
     const wbFiltered = filterWbData(wbData, filterKeywords, allQueries);
+    const marketDecision = {
+      status: directCards.length >= 5 ? 'confirmed' : directCards.length > 0 ? 'weak' : wb429 ? 'rate_limited' : 'not_confirmed',
+      rawCandidatesCount: allCards.length,
+      confirmedDirectCount: directCards.length,
+      similarLocalCount: similarity.buckets.similarLocalProducts.length,
+      crossBorderCount: similarity.buckets.crossBorderAnalogs.length,
+      categoryOnlyCount: similarity.buckets.categoryOnly.length,
+      medianPriceRub: directCards.length >= 5 ? wbFiltered?.medianPrice ?? null : null,
+      canCalculateRoi: directCards.length >= 5 && !!wbFiltered?.medianPrice,
+      reason: directCards.length >= 5 ? 'Найдено минимум 5 прямых локальных аналогов 85%+.' : directCards.length > 0 ? 'Выборка прямых аналогов меньше 5 — ROI не считаем.' : 'Прямые локальные аналоги не подтверждены.',
+    };
 
     // ─── Economics ───────────────────────────────────────────────────────
     const userTariffs = await getUserTariffs(job.user_id).catch(() => null);
@@ -256,12 +257,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       weightKg: raw.weightKg,
       categoryHint: raw.categoryName,
       tariffs: userTariffs ?? undefined,
-      ...(wbFiltered && wbFiltered.medianPrice > 0 ? { wbMedianPrice: wbFiltered.medianPrice } : {}),
+      ...(marketDecision.canCalculateRoi && wbFiltered && wbFiltered.medianPrice > 0 ? { wbMedianPrice: wbFiltered.medianPrice } : {}),
     });
 
     const riskFlags = buildRiskFlags(raw, wbFiltered);
     const budgets = calcBudgetScenarios(economics.costRub, economics.weightMissing, raw.moq);
-    const maxPurchasePrice = wbFiltered?.medianPrice
+    const maxPurchasePrice = marketDecision.canCalculateRoi && wbFiltered?.medianPrice
       ? calcMaxPurchasePrice(wbFiltered.medianPrice, raw.weightKg, economics.yuanToRub, userTariffs ?? undefined, raw.priceYuan)
       : null;
     const conclusion = buildConclusion(raw.platform, economics, wbFiltered, riskFlags);
@@ -319,14 +320,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           ...raw,
           titleRu: seoContent?.titleRu ?? raw.titleEn ?? raw.titleCn,
           seoContent, wbData, wbFiltered, riskFlags,
-          productContext: resultJson.productContext ?? null,
           economics, budgets, maxPurchasePrice, conclusion,
           similarityData,
-          marketEvidence: {
-            directAnalogs: directCards.slice(0, 10),
-            marketConfirmedForEconomy,
-            minDirectAnalogsForEconomy: 3,
-          },
+          marketDecision,
           wbTrends,
           wbCoreQuery,
           categoryType,
@@ -338,38 +334,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       finished_at: new Date().toISOString(),
     }).eq('id', jobId);
 
-    // ─── Chain → step4 (writer) + step5 (QA+send) параллельно ─────────
-    // step5 сам ждёт пока step4 сохранит snapshot (polling DB)
-    const host = 'card-zip.vercel.app';
-    const triggerStep = async (path: string) => {
-      for (let i = 0; i < 2; i++) {
-        try {
-          const ac = new AbortController();
-          setTimeout(() => ac.abort(), 4000);
-          const r = await fetch(`https://${host}${path}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jobId }), signal: ac.signal,
-          });
-          if (r.ok) return true;
-        } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
-      }
-      return false;
-    };
-
-    const [step4Sent, step5Sent] = await Promise.all([
-      triggerStep('/api/step4-send'),
-      triggerStep('/api/step5-qa'),
-    ]);
-
-    if (!step4Sent || !step5Sent) {
-      console.warn(`[step3] Trigger results: step4=${step4Sent} step5=${step5Sent}`);
-      if (!step4Sent) {
-        const { handleStepError } = require('../src/lib/stepError');
-        await handleStepError(jobId, 'step4_trigger_failed', bot);
-      }
+    // ─── Chain → step4 ──────────────────────────────────────────────────
+    const host = req.headers.host || 'card-zip.vercel.app';
+    for (let i = 0; i < 2; i++) {
+      try {
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 4000);
+        await fetch(`https://${host}/api/step4-send`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId }), signal: ac.signal,
+        });
+        break;
+      } catch { if (i === 0) await new Promise(r => setTimeout(r, 500)); }
     }
 
-    res.status(200).json({ ok: true, step4Sent, step5Sent });
+    res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step3]', e.message);
     const { handleStepError } = require('../src/lib/stepError');

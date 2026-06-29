@@ -58,7 +58,7 @@ function mapCard(card: ScoredCard, matchLevel: 'direct' | 'similar' | 'category'
     matchLevel,
     confidence: card.similarity,
     url: card.url,
-    evidence: card.evidence,
+    evidence: (card as any).evidence,
   };
 }
 
