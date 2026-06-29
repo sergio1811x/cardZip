@@ -622,6 +622,6 @@ app.listen(PORT, () => {
   console.log(`CardZip VPS server running on port ${PORT}`);
   const webhookUrl = process.env.WEBHOOK_URL;
   if (webhookUrl) {
-    bot.telegram.setWebhook(webhookUrl).then(() => console.log(`Webhook set: ${webhookUrl}`)).catch(console.error);
+    bot.telegram.setWebhook(webhookUrl).then(() => console.log(`Webhook set: ${webhookUrl}`)).catch((e) => console.warn(`Webhook set failed (set manually): ${e.message}`));
   }
 });
