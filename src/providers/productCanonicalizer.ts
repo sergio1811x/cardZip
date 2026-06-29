@@ -1,4 +1,4 @@
-import type { ProductContext } from '../types';
+import type { ProductContext } from "../types";
 
 type RawProductForCanonicalizer = {
   offerId: string;
@@ -17,44 +17,44 @@ type RawProductForCanonicalizer = {
 };
 
 type OpenRouterMessage =
-  | { role: 'system'; content: string }
-  | { role: 'user'; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: string }
   | {
-      role: 'user';
+      role: "user";
       content: Array<
-        | { type: 'text'; text: string }
-        | { type: 'image_url'; image_url: { url: string } }
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string } }
       >;
     };
 
 type CanonicalizerModelResult = Partial<ProductContext> & {
-  identity?: Partial<ProductContext['identity']>;
-  titles?: Partial<ProductContext['titles']>;
+  identity?: Partial<ProductContext["identity"]>;
+  titles?: Partial<ProductContext["titles"]>;
   facts?: Record<string, unknown>;
-  sku?: Partial<ProductContext['sku']>;
-  price?: Partial<ProductContext['price']>;
+  sku?: Partial<ProductContext["sku"]>;
+  price?: Partial<ProductContext["price"]>;
   conflicts?: unknown;
   missingCritical?: unknown;
-  wbSearch?: Partial<ProductContext['wbSearch']>;
-  seoPolicy?: Partial<ProductContext['seoPolicy']>;
-  supplierQuestions?: Partial<ProductContext['supplierQuestions']>;
+  wbSearch?: Partial<ProductContext["wbSearch"]>;
+  seoPolicy?: Partial<ProductContext["seoPolicy"]>;
+  supplierQuestions?: Partial<ProductContext["supplierQuestions"]>;
   riskTags?: unknown;
-  dataQuality?: Partial<ProductContext['dataQuality']>;
+  dataQuality?: Partial<ProductContext["dataQuality"]>;
 };
 
 const DEFAULT_VISION_MODELS = [
-  'google/gemini-2.5-flash-lite',
-  'google/gemini-2.5-flash',
+  "google/gemini-2.5-flash-lite",
+  "google/gemini-2.5-flash",
 ];
 
 const DEFAULT_TEXT_MODELS = [
-  'deepseek/deepseek-chat-v3.1',
-  'qwen/qwen3-32b',
-  'google/gemini-2.5-flash-lite',
-  'z-ai/glm-4.5-air',
+  "deepseek/deepseek-chat-v3.1",
+  "qwen/qwen3-32b",
+  "google/gemini-2.5-flash-lite",
+  "z-ai/glm-4.5-air",
 ];
 
-const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_TIMEOUT_MS = 25_000;
 const DEFAULT_IMAGE_TIMEOUT_MS = 7_000;
 const DEFAULT_MAX_IMAGE_BYTES = 1_200_000;
@@ -62,33 +62,43 @@ const DEFAULT_MAX_TOKENS = 3500;
 const DEFAULT_TEMPERATURE = 0.15;
 
 const CATEGORY_TYPES = [
-  'shoes',
-  'clothes',
-  'electronics',
-  'home',
-  'beauty',
-  'accessory',
-  'kitchen',
-  'fishing',
-  'tools',
-  'other',
+  "shoes",
+  "clothes",
+  "electronics",
+  "home",
+  "beauty",
+  "accessory",
+  "kitchen",
+  "fishing",
+  "tools",
+  "other",
 ] as const;
 
-const DATA_QUALITY_STATUSES = ['reliable', 'working_hypothesis', 'draft'] as const;
-const CONFLICT_SEVERITIES = ['low', 'medium', 'high'] as const;
+const DATA_QUALITY_STATUSES = [
+  "reliable",
+  "working_hypothesis",
+  "draft",
+] as const;
+const CONFLICT_SEVERITIES = ["low", "medium", "high"] as const;
 
 function getEnvList(name: string, fallback: string[]): string[] {
   const raw = process.env[name];
   if (!raw) return fallback;
   const parsed = raw
-    .split(',')
+    .split(",")
     .map((v) => v.trim())
     .filter(Boolean);
   return parsed.length ? parsed : fallback;
 }
 
-const VISION_MODELS = getEnvList('PRODUCT_CANONICALIZER_VISION_MODELS', DEFAULT_VISION_MODELS);
-const TEXT_MODELS = getEnvList('PRODUCT_CANONICALIZER_TEXT_MODELS', DEFAULT_TEXT_MODELS);
+const VISION_MODELS = getEnvList(
+  "PRODUCT_CANONICALIZER_VISION_MODELS",
+  DEFAULT_VISION_MODELS,
+);
+const TEXT_MODELS = getEnvList(
+  "PRODUCT_CANONICALIZER_TEXT_MODELS",
+  DEFAULT_TEXT_MODELS,
+);
 
 function getNumberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
@@ -96,11 +106,11 @@ function getNumberEnv(name: string, fallback: number): number {
 }
 
 function isPositiveNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function safeString(value: unknown, fallback = ''): string {
-  if (typeof value !== 'string') return fallback;
+function safeString(value: unknown, fallback = ""): string {
+  if (typeof value !== "string") return fallback;
   return value.trim();
 }
 
@@ -116,7 +126,7 @@ function uniqueStrings(values: unknown, max = 12): string[] {
   for (const item of values) {
     const value = safeString(item);
     if (!value) continue;
-    const normalized = value.replace(/\s+/g, ' ').trim();
+    const normalized = value.replace(/\s+/g, " ").trim();
     const key = normalized.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -129,49 +139,68 @@ function uniqueStrings(values: unknown, max = 12): string[] {
 
 function stripChineseFromRussianField(value: string): string {
   return value
-    .replace(/[\u3400-\u9FFF\uF900-\uFAFF]+/g, '')
-    .replace(/\s{2,}/g, ' ')
+    .replace(/[\u3400-\u9FFF\uF900-\uFAFF]+/g, "")
+    .replace(/\s{2,}/g, " ")
     .trim();
 }
 
-function safeRu(value: unknown, fallback = ''): string {
+function safeRu(value: unknown, fallback = ""): string {
   return stripChineseFromRussianField(safeString(value, fallback));
 }
 
-function clampInt(value: unknown, fallback: number, min: number, max: number): number {
-  const number = typeof value === 'number' ? value : Number(value);
+function clampInt(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const number = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.max(min, Math.min(max, Math.round(number)));
 }
 
-function normalizeCategoryType(value: unknown): ProductContext['identity']['categoryType'] {
+function normalizeCategoryType(
+  value: unknown,
+): ProductContext["identity"]["categoryType"] {
   const raw = safeString(value).toLowerCase();
-  return CATEGORY_TYPES.includes(raw as any) ? (raw as ProductContext['identity']['categoryType']) : 'other';
+  return CATEGORY_TYPES.includes(raw as any)
+    ? (raw as ProductContext["identity"]["categoryType"])
+    : "other";
 }
 
-function normalizeDataQualityStatus(value: unknown): ProductContext['dataQuality']['status'] {
+function normalizeDataQualityStatus(
+  value: unknown,
+): ProductContext["dataQuality"]["status"] {
   const raw = safeString(value).toLowerCase();
   return DATA_QUALITY_STATUSES.includes(raw as any)
-    ? (raw as ProductContext['dataQuality']['status'])
-    : 'draft';
+    ? (raw as ProductContext["dataQuality"]["status"])
+    : "draft";
 }
 
-function normalizeConflictSeverity(value: unknown): 'low' | 'medium' | 'high' {
+function normalizeConflictSeverity(value: unknown): "low" | "medium" | "high" {
   const raw = safeString(value).toLowerCase();
-  return CONFLICT_SEVERITIES.includes(raw as any) ? (raw as 'low' | 'medium' | 'high') : 'medium';
+  return CONFLICT_SEVERITIES.includes(raw as any)
+    ? (raw as "low" | "medium" | "high")
+    : "medium";
 }
 
-function normalizeFacts(rawFacts: unknown, maxEntries = 30): Record<string, string> {
-  if (!rawFacts || typeof rawFacts !== 'object' || Array.isArray(rawFacts)) return {};
+function normalizeFacts(
+  rawFacts: unknown,
+  maxEntries = 30,
+): Record<string, string> {
+  if (!rawFacts || typeof rawFacts !== "object" || Array.isArray(rawFacts))
+    return {};
 
   const out: Record<string, string> = {};
-  for (const [keyRaw, valueRaw] of Object.entries(rawFacts as Record<string, unknown>)) {
+  for (const [keyRaw, valueRaw] of Object.entries(
+    rawFacts as Record<string, unknown>,
+  )) {
     const key = safeRu(keyRaw);
-    const value = safeRu(String(valueRaw ?? ''));
+    const value = safeRu(String(valueRaw ?? ""));
 
     if (!key || !value) continue;
     if (key.length > 60 || value.length > 160) continue;
-    if (['undefined', 'null', 'nan'].includes(value.toLowerCase())) continue;
+    if (["undefined", "null", "nan"].includes(value.toLowerCase())) continue;
 
     out[key] = value;
     if (Object.keys(out).length >= maxEntries) break;
@@ -180,32 +209,33 @@ function normalizeFacts(rawFacts: unknown, maxEntries = 30): Record<string, stri
   return out;
 }
 
-function normalizeConflicts(value: unknown): ProductContext['conflicts'] {
+function normalizeConflicts(value: unknown): ProductContext["conflicts"] {
   if (!Array.isArray(value)) return [];
 
   return value.slice(0, 12).map((item) => {
-    const obj = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+    const obj =
+      item && typeof item === "object" ? (item as Record<string, unknown>) : {};
     return {
-      field: safeString(obj.field, 'unknown'),
-      problem: safeRu(obj.problem, 'Неясное противоречие'),
+      field: safeString(obj.field, "unknown"),
+      problem: safeRu(obj.problem, "Неясное противоречие"),
       severity: normalizeConflictSeverity(obj.severity),
-      action: safeRu(obj.action, 'Не выводить как подтверждённый факт'),
+      action: safeRu(obj.action, "Не выводить как подтверждённый факт"),
     };
   });
 }
 
 function cleanJson(raw: string): string {
   return raw
-    .replace(/^\uFEFF/, '')
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/```\s*$/i, '')
+    .replace(/^\uFEFF/, "")
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
     .trim();
 }
 
 function extractJsonObject(raw: string): string | null {
   const cleaned = cleanJson(raw);
-  const firstBrace = cleaned.indexOf('{');
+  const firstBrace = cleaned.indexOf("{");
   if (firstBrace === -1) return null;
 
   let depth = 0;
@@ -220,7 +250,7 @@ function extractJsonObject(raw: string): string | null {
       continue;
     }
 
-    if (char === '\\') {
+    if (char === "\\") {
       escaped = true;
       continue;
     }
@@ -232,8 +262,8 @@ function extractJsonObject(raw: string): string | null {
 
     if (inString) continue;
 
-    if (char === '{') depth += 1;
-    if (char === '}') depth -= 1;
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
 
     if (depth === 0) {
       return cleaned.slice(firstBrace, i + 1);
@@ -249,7 +279,7 @@ function parseJsonResult(raw: string): CanonicalizerModelResult | null {
 
   try {
     const parsed = JSON.parse(json);
-    return parsed && typeof parsed === 'object' ? parsed : null;
+    return parsed && typeof parsed === "object" ? parsed : null;
   } catch {
     return null;
   }
@@ -281,7 +311,7 @@ function getRawPriceStats(raw: RawProductForCanonicalizer): {
       visiblePriceCny: null,
       minPriceCny: null,
       maxPriceCny: null,
-      source: 'unknown',
+      source: "unknown",
       needsConfirmation: true,
     };
   }
@@ -289,9 +319,12 @@ function getRawPriceStats(raw: RawProductForCanonicalizer): {
   const minPriceCny = Math.min(...allPrices);
   const maxPriceCny = Math.max(...allPrices);
 
-  let source = 'visible_1688_price';
-  if (skuPrices.length) source = skuPrices.length > 1 ? 'sku_range' : 'sku_price';
-  else if (tierPrices.length) source = tierPrices.length > 1 ? 'discount_tier_range' : 'discount_tier_price';
+  let source = "visible_1688_price";
+  if (skuPrices.length)
+    source = skuPrices.length > 1 ? "sku_range" : "sku_price";
+  else if (tierPrices.length)
+    source =
+      tierPrices.length > 1 ? "discount_tier_range" : "discount_tier_price";
 
   return {
     visiblePriceCny: isPositiveNumber(raw.price) ? raw.price : minPriceCny,
@@ -315,21 +348,25 @@ function buildFallbackContext(raw: RawProductForCanonicalizer): ProductContext {
     identity: {
       productType: raw.titleRu || raw.titleEn || raw.titleCn,
       coreObject: raw.titleRu || raw.titleEn || raw.titleCn,
-      categoryType: 'other',
+      categoryType: "other",
       useCases: [],
       notThis: [],
-      audience: '',
-      season: 'не применимо',
-      gender: 'унисекс',
+      audience: "",
+      season: "не применимо",
+      gender: "унисекс",
     },
     titles: {
       titleCn: raw.titleCn,
-      cleanRu: raw.titleRu ?? raw.titleEn ?? '',
-      shortRu: raw.titleRu ?? raw.titleEn ?? '',
-      wbTitleDraft: raw.titleRu ?? raw.titleEn ?? '',
+      cleanRu: raw.titleRu ?? raw.titleEn ?? "",
+      shortRu: raw.titleRu ?? raw.titleEn ?? "",
+      wbTitleDraft: raw.titleRu ?? raw.titleEn ?? "",
     },
     facts: normalizeFacts(
-      Object.fromEntries((raw.attributes ?? []).slice(0, 20).map((attr) => [attr.name, attr.value])),
+      Object.fromEntries(
+        (raw.attributes ?? [])
+          .slice(0, 20)
+          .map((attr) => [attr.name, attr.value]),
+      ),
     ),
     sku: {
       hasMultipleSku: skuCount > 1,
@@ -340,12 +377,12 @@ function buildFallbackContext(raw: RawProductForCanonicalizer): ProductContext {
     price,
     conflicts: [],
     missingCritical: [
-      ...(raw.weightKg ? [] : ['вес с упаковкой']),
-      ...(skuCount > 1 ? ['выбранный SKU'] : []),
-      'подтверждение цены партии',
+      ...(raw.weightKg ? [] : ["вес с упаковкой"]),
+      ...(skuCount > 1 ? ["выбранный SKU"] : []),
+      "подтверждение цены партии",
     ],
     wbSearch: {
-      coreQuery: raw.titleRu ?? raw.titleEn ?? '',
+      coreQuery: raw.titleRu ?? raw.titleEn ?? "",
       queryLadder: [raw.titleRu ?? raw.titleEn ?? raw.titleCn].filter(Boolean),
       mustInclude: [],
       mustExclude: [],
@@ -354,53 +391,62 @@ function buildFallbackContext(raw: RawProductForCanonicalizer): ProductContext {
     },
     seoPolicy: {
       allowedClaims: [],
-      forbiddenClaims: ['сертифицированный', 'безопасный', 'лечебный', 'премиальный'],
+      forbiddenClaims: [
+        "сертифицированный",
+        "безопасный",
+        "лечебный",
+        "премиальный",
+      ],
     },
     supplierQuestions: {
-      ru: buildDefaultSupplierQuestions(raw, 'ru'),
-      cn: buildDefaultSupplierQuestions(raw, 'cn'),
+      ru: buildDefaultSupplierQuestions(raw, "ru"),
+      cn: buildDefaultSupplierQuestions(raw, "cn"),
     },
-    riskTags: ['canonicalizer_fallback'],
+    riskTags: ["canonicalizer_fallback"],
     dataQuality: {
       score: 2,
-      status: 'draft',
-      explanation: 'LLM-каноникализация недоступна, использован безопасный fallback из raw-данных.',
+      status: "draft",
+      explanation:
+        "LLM-каноникализация недоступна, использован безопасный fallback из raw-данных.",
     },
   };
 }
 
-function buildDefaultSupplierQuestions(raw: RawProductForCanonicalizer, lang: 'ru' | 'cn'): string[] {
+function buildDefaultSupplierQuestions(
+  raw: RawProductForCanonicalizer,
+  lang: "ru" | "cn",
+): string[] {
   const hasSku = (raw.skus?.length ?? 0) > 1;
   const hasWeight = isPositiveNumber(raw.weightKg);
 
-  if (lang === 'cn') {
-    const questions = ['您好，我想采购这个产品，请问：'];
+  if (lang === "cn") {
+    const questions = ["您好，我想采购这个产品，请问："];
 
-    if (hasSku) questions.push('1. 请确认所选SKU的单价是多少？');
-    else questions.push('1. 请确认这个产品的当前单价是多少？');
+    if (hasSku) questions.push("1. 请确认所选SKU的单价是多少？");
+    else questions.push("1. 请确认这个产品的当前单价是多少？");
 
-    questions.push('2. 购买20/50/100件分别是什么价格？');
-    if (!hasWeight) questions.push('3. 单件带包装重量是多少？');
-    questions.push('4. 单件包装尺寸是多少？');
-    questions.push('5. 产品是否包含所有配件？请发实物照片或视频。');
-    questions.push('6. 是否可以先订样品？');
-    questions.push('7. 生产/发货周期多久？');
+    questions.push("2. 购买20/50/100件分别是什么价格？");
+    if (!hasWeight) questions.push("3. 单件带包装重量是多少？");
+    questions.push("4. 单件包装尺寸是多少？");
+    questions.push("5. 产品是否包含所有配件？请发实物照片或视频。");
+    questions.push("6. 是否可以先订样品？");
+    questions.push("7. 生产/发货周期多久？");
 
     return questions;
   }
 
   const questions = [
     hasSku
-      ? '1. Подтвердите цену выбранного SKU.'
-      : '1. Подтвердите актуальную цену товара.',
-    '2. Какая цена при заказе 20 / 50 / 100 шт?',
+      ? "1. Подтвердите цену выбранного SKU."
+      : "1. Подтвердите актуальную цену товара.",
+    "2. Какая цена при заказе 20 / 50 / 100 шт?",
   ];
 
-  if (!hasWeight) questions.push('3. Какой вес одной единицы с упаковкой?');
-  questions.push('4. Какой размер индивидуальной упаковки?');
-  questions.push('5. Что входит в комплектацию? Пришлите реальные фото/видео.');
-  questions.push('6. Можно ли заказать образец?');
-  questions.push('7. Какой срок производства/отгрузки?');
+  if (!hasWeight) questions.push("3. Какой вес одной единицы с упаковкой?");
+  questions.push("4. Какой размер индивидуальной упаковки?");
+  questions.push("5. Что входит в комплектацию? Пришлите реальные фото/видео.");
+  questions.push("6. Можно ли заказать образец?");
+  questions.push("7. Какой срок производства/отгрузки?");
 
   return questions;
 }
@@ -414,10 +460,10 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
   if (raw.categoryName) lines.push(`Категория: ${raw.categoryName}`);
 
   if (isPositiveNumber(raw.price)) lines.push(`Цена: ${raw.price} ¥`);
-  else lines.push('Цена: не распознана');
+  else lines.push("Цена: не распознана");
 
   if (raw.priceRange?.length) {
-    lines.push('Оптовые цены:');
+    lines.push("Оптовые цены:");
     raw.priceRange.slice(0, 10).forEach((tier) => {
       if (isPositiveNumber(tier.price)) {
         lines.push(`- ${tier.minQty}+ шт: ${tier.price} ¥`);
@@ -425,14 +471,15 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
     });
   }
 
-  if (isPositiveNumber(raw.weightKg)) lines.push(`Вес товара: ${raw.weightKg} кг`);
-  else lines.push('Вес товара: не указан');
+  if (isPositiveNumber(raw.weightKg))
+    lines.push(`Вес товара: ${raw.weightKg} кг`);
+  else lines.push("Вес товара: не указан");
 
-  if (typeof raw.sold === 'number') lines.push(`Продажи/заказы: ${raw.sold}`);
-  if (typeof raw.stock === 'number') lines.push(`Остаток: ${raw.stock}`);
+  if (typeof raw.sold === "number") lines.push(`Продажи/заказы: ${raw.sold}`);
+  if (typeof raw.stock === "number") lines.push(`Остаток: ${raw.stock}`);
 
   if (raw.attributes?.length) {
-    lines.push('Атрибуты поставщика:');
+    lines.push("Атрибуты поставщика:");
     raw.attributes.slice(0, 30).forEach((attr) => {
       lines.push(`- ${attr.name}: ${attr.value}`);
     });
@@ -441,13 +488,18 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
   if (raw.skus?.length) {
     lines.push(`SKU (${raw.skus.length}):`);
     raw.skus.slice(0, 20).forEach((sku) => {
-      const price = isPositiveNumber(sku.price) ? `${sku.price} ¥` : 'цена не указана';
-      const stock = typeof sku.stock === 'number' ? `остаток: ${sku.stock}` : 'остаток неизвестен';
+      const price = isPositiveNumber(sku.price)
+        ? `${sku.price} ¥`
+        : "цена не указана";
+      const stock =
+        typeof sku.stock === "number"
+          ? `остаток: ${sku.stock}`
+          : "остаток неизвестен";
       lines.push(`- ${sku.name} — ${price}, ${stock}`);
     });
   }
 
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
 const CANONICALIZER_PROMPT = `Ты — Product Canonicalizer для CardZip: эксперт по товарам 1688 → Wildberries.
@@ -529,11 +581,11 @@ const CANONICALIZER_PROMPT = `Ты — Product Canonicalizer для CardZip: э�
 СТРОГИЕ ПРАВИЛА:
 - Не возвращай китайские слова в русских полях, кроме titles.titleCn и китайских supplierQuestions.cn.
 - Переводи смысл, не транслитерируй.
-- facts должны содержать только подтверждённые атрибуты поставщика или очевидные визуальные признаки. Если не уверен — не добавляй в facts.
-- Не добавляй claims вроде: безопасный, сертифицированный, лечебный, медицинский, ортопедический, гипоаллергенный, премиальный, водонепроницаемый, IP67, для детей — если это явно не подтверждено.
+- facts должны сохранять максимум полезных атрибутов поставщика в переводе. Если свойство заявлено, но не доказано документами, НЕ удаляй его: пиши значение как “заявлено поставщиком: ... / подтвердить”. Если не уверен — перенеси в notConfirmedFeatures или missingCritical.
+- Не выдавай рискованные claims как факт. Но если они есть в title/attributes/SKU, сохрани их как “заявлено поставщиком / подтвердить документами/на образце”. Слово “медицинский” можно использовать как тип товара, если это товарная категория (например медицинские сабо), но не как лечебное свойство.
 - Если атрибут выглядит ошибочно замапленным, добавь его в conflicts и НЕ выводи как факт. Пример: "мощность: красный" → conflict.
 - Используй изображение только для понимания типа товара, формы, визуальной комплектации и явных противоречий. Не делай по фото точных claims о материале, качестве, водонепроницаемости, безопасности или сертификации.
-- supplierQuestions: 5-10 конкретных вопросов по этому товару. Не спрашивай то, что уже есть в данных.
+- supplierQuestions: 7-12 конкретных вопросов по этому товару. Не спрашивай то, что уже известно; вместо этого проси подтвердить выбранный SKU, вес, упаковку и доказательства заявленных свойств.
 - wbSearch.coreQuery: короткий естественный запрос, как пользователь ищет на WB.
 - wbSearch.queryLadder: от точного запроса к более широкому, но без смены типа товара.
 - directMatchRules должны отличать прямой аналог от просто похожей категории.
@@ -549,43 +601,67 @@ const CANONICALIZER_PROMPT = `Ты — Product Canonicalizer для CardZip: э�
 
 Верни только JSON-объект.`;
 
-const SYSTEM_MSG = 'Ты Product Canonicalizer. Отвечай только валидным JSON-объектом. Без markdown. Без пояснений.';
+const SYSTEM_MSG =
+  "Ты Product Canonicalizer. Отвечай только валидным JSON-объектом. Без markdown. Без пояснений.";
 
 async function fetchImageAsDataUrl(url: string): Promise<string | null> {
-  const maxBytes = getNumberEnv('PRODUCT_CANONICALIZER_MAX_IMAGE_BYTES', DEFAULT_MAX_IMAGE_BYTES);
-  const timeoutMs = getNumberEnv('PRODUCT_CANONICALIZER_IMAGE_TIMEOUT_MS', DEFAULT_IMAGE_TIMEOUT_MS);
+  const maxBytes = getNumberEnv(
+    "PRODUCT_CANONICALIZER_MAX_IMAGE_BYTES",
+    DEFAULT_MAX_IMAGE_BYTES,
+  );
+  const timeoutMs = getNumberEnv(
+    "PRODUCT_CANONICALIZER_IMAGE_TIMEOUT_MS",
+    DEFAULT_IMAGE_TIMEOUT_MS,
+  );
 
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return null;
 
-    const contentType = res.headers.get('content-type') || 'image/jpeg';
-    if (!contentType.startsWith('image/')) return null;
+    const contentType = res.headers.get("content-type") || "image/jpeg";
+    if (!contentType.startsWith("image/")) return null;
 
     const buffer = Buffer.from(await res.arrayBuffer());
     if (!buffer.length || buffer.length > maxBytes) return null;
 
-    return `data:${contentType};base64,${buffer.toString('base64')}`;
+    return `data:${contentType};base64,${buffer.toString("base64")}`;
   } catch (error) {
-    console.warn('[canonicalizer] image fetch failed:', error instanceof Error ? error.message : error);
+    console.warn(
+      "[canonicalizer] image fetch failed:",
+      error instanceof Error ? error.message : error,
+    );
     return null;
   }
 }
 
-async function callOpenRouter(model: string, messages: OpenRouterMessage[], apiKey: string): Promise<CanonicalizerModelResult | null> {
-  const timeoutMs = getNumberEnv('PRODUCT_CANONICALIZER_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
-  const maxTokens = getNumberEnv('PRODUCT_CANONICALIZER_MAX_TOKENS', DEFAULT_MAX_TOKENS);
+async function callOpenRouter(
+  model: string,
+  messages: OpenRouterMessage[],
+  apiKey: string,
+): Promise<CanonicalizerModelResult | null> {
+  const timeoutMs = getNumberEnv(
+    "PRODUCT_CANONICALIZER_TIMEOUT_MS",
+    DEFAULT_TIMEOUT_MS,
+  );
+  const maxTokens = getNumberEnv(
+    "PRODUCT_CANONICALIZER_MAX_TOKENS",
+    DEFAULT_MAX_TOKENS,
+  );
   const temperatureRaw = Number(process.env.PRODUCT_CANONICALIZER_TEMPERATURE);
-  const temperature = Number.isFinite(temperatureRaw) ? temperatureRaw : DEFAULT_TEMPERATURE;
+  const temperature = Number.isFinite(temperatureRaw)
+    ? temperatureRaw
+    : DEFAULT_TEMPERATURE;
 
   try {
     const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-      method: 'POST',
+      method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.OPENROUTER_HTTP_REFERER ?? 'https://github.com/sergio1811x/cardZip',
-        'X-Title': process.env.OPENROUTER_X_TITLE ?? 'cardZip',
+        "Content-Type": "application/json",
+        "HTTP-Referer":
+          process.env.OPENROUTER_HTTP_REFERER ??
+          "https://github.com/sergio1811x/cardZip",
+        "X-Title": process.env.OPENROUTER_X_TITLE ?? "cardZip",
       },
       body: JSON.stringify({
         model,
@@ -605,7 +681,7 @@ async function callOpenRouter(model: string, messages: OpenRouterMessage[], apiK
       choices?: Array<{ message?: { content?: string } }>;
     };
 
-    const content = data.choices?.[0]?.message?.content ?? '';
+    const content = data.choices?.[0]?.message?.content ?? "";
     const parsed = parseJsonResult(content);
 
     if (!parsed?.identity) {
@@ -615,7 +691,10 @@ async function callOpenRouter(model: string, messages: OpenRouterMessage[], apiK
 
     return parsed;
   } catch (error) {
-    console.warn(`[canonicalizer] ${model} failed:`, error instanceof Error ? error.message : error);
+    console.warn(
+      `[canonicalizer] ${model} failed:`,
+      error instanceof Error ? error.message : error,
+    );
     return null;
   }
 }
@@ -627,15 +706,27 @@ function buildPrompt(raw: RawProductForCanonicalizer): string {
 ${buildInfo(raw)}`;
 }
 
-function mergePrice(raw: RawProductForCanonicalizer, modelPrice: unknown): ProductContext['price'] {
+function mergePrice(
+  raw: RawProductForCanonicalizer,
+  modelPrice: unknown,
+): ProductContext["price"] {
   const rawPrice = getRawPriceStats(raw);
-  const model = modelPrice && typeof modelPrice === 'object' ? (modelPrice as Record<string, unknown>) : {};
+  const model =
+    modelPrice && typeof modelPrice === "object"
+      ? (modelPrice as Record<string, unknown>)
+      : {};
 
   // Числа из парсера имеют приоритет над LLM. Модель может только дополнить source/needsConfirmation,
   // но не должна ухудшать уже распознанные цены.
-  const modelVisible = isPositiveNumber(model.visiblePriceCny) ? model.visiblePriceCny : null;
-  const modelMin = isPositiveNumber(model.minPriceCny) ? model.minPriceCny : null;
-  const modelMax = isPositiveNumber(model.maxPriceCny) ? model.maxPriceCny : null;
+  const modelVisible = isPositiveNumber(model.visiblePriceCny)
+    ? model.visiblePriceCny
+    : null;
+  const modelMin = isPositiveNumber(model.minPriceCny)
+    ? model.minPriceCny
+    : null;
+  const modelMax = isPositiveNumber(model.maxPriceCny)
+    ? model.maxPriceCny
+    : null;
 
   const visiblePriceCny = rawPrice.visiblePriceCny ?? modelVisible;
   const minPriceCny = rawPrice.minPriceCny ?? modelMin;
@@ -645,13 +736,22 @@ function mergePrice(raw: RawProductForCanonicalizer, modelPrice: unknown): Produ
     visiblePriceCny,
     minPriceCny,
     maxPriceCny,
-    source: rawPrice.source !== 'unknown' ? rawPrice.source : safeString(model.source, 'unknown'),
+    source:
+      rawPrice.source !== "unknown"
+        ? rawPrice.source
+        : safeString(model.source, "unknown"),
     needsConfirmation: true,
   };
 }
 
-function mergeSku(raw: RawProductForCanonicalizer, modelSku: unknown): ProductContext['sku'] {
-  const obj = modelSku && typeof modelSku === 'object' ? (modelSku as Record<string, unknown>) : {};
+function mergeSku(
+  raw: RawProductForCanonicalizer,
+  modelSku: unknown,
+): ProductContext["sku"] {
+  const obj =
+    modelSku && typeof modelSku === "object"
+      ? (modelSku as Record<string, unknown>)
+      : {};
   const skuCount = raw.skus?.length ?? clampInt(obj.skuCount, 0, 0, 999);
   const knownOptionsFromRaw = (raw.skus ?? [])
     .slice(0, 20)
@@ -670,15 +770,24 @@ function mergeSku(raw: RawProductForCanonicalizer, modelSku: unknown): ProductCo
   };
 }
 
-function normalizeContext(raw: RawProductForCanonicalizer, result: CanonicalizerModelResult): ProductContext {
+function normalizeContext(
+  raw: RawProductForCanonicalizer,
+  result: CanonicalizerModelResult,
+): ProductContext {
   const identity = (result.identity ?? {}) as Record<string, any>;
   const titles = (result.titles ?? {}) as Record<string, any>;
   const wbSearch = (result.wbSearch ?? {}) as Record<string, any>;
   const seoPolicy = (result.seoPolicy ?? {}) as Record<string, any>;
-  const supplierQuestions = (result.supplierQuestions ?? {}) as Record<string, any>;
+  const supplierQuestions = (result.supplierQuestions ?? {}) as Record<
+    string,
+    any
+  >;
   const dataQuality = (result.dataQuality ?? {}) as Record<string, any>;
 
-  const productType = safeRu(identity.productType, raw.titleRu ?? raw.titleEn ?? raw.titleCn);
+  const productType = safeRu(
+    identity.productType,
+    raw.titleRu ?? raw.titleEn ?? raw.titleCn,
+  );
   const coreObject = safeRu(identity.coreObject, productType);
   const cleanRu = safeRu(titles.cleanRu, raw.titleRu ?? productType);
   const shortRu = safeRu(titles.shortRu, coreObject);
@@ -687,8 +796,12 @@ function normalizeContext(raw: RawProductForCanonicalizer, result: Canonicalizer
   const ruQuestions = uniqueStrings(supplierQuestions.ru, 10);
   const cnQuestions = uniqueStrings(supplierQuestions.cn, 12);
 
-  const finalRuQuestions = ruQuestions.length ? ruQuestions : buildDefaultSupplierQuestions(raw, 'ru');
-  const finalCnQuestions = cnQuestions.length ? cnQuestions : buildDefaultSupplierQuestions(raw, 'cn');
+  const finalRuQuestions = ruQuestions.length
+    ? ruQuestions
+    : buildDefaultSupplierQuestions(raw, "ru");
+  const finalCnQuestions = cnQuestions.length
+    ? cnQuestions
+    : buildDefaultSupplierQuestions(raw, "cn");
 
   return {
     offerId: raw.offerId,
@@ -696,11 +809,15 @@ function normalizeContext(raw: RawProductForCanonicalizer, result: Canonicalizer
       productType,
       coreObject,
       categoryType: normalizeCategoryType(identity.categoryType),
-      useCases: uniqueStrings(identity.useCases, 10).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
-      notThis: uniqueStrings(identity.notThis, 10).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
-      audience: safeRu(identity.audience, 'неизвестно'),
-      season: safeRu(identity.season, 'неизвестно'),
-      gender: safeRu(identity.gender, 'неизвестно'),
+      useCases: uniqueStrings(identity.useCases, 10)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
+      notThis: uniqueStrings(identity.notThis, 10)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
+      audience: safeRu(identity.audience, "неизвестно"),
+      season: safeRu(identity.season, "неизвестно"),
+      gender: safeRu(identity.gender, "неизвестно"),
     },
     titles: {
       titleCn: safeString(titles.titleCn, raw.titleCn),
@@ -712,28 +829,46 @@ function normalizeContext(raw: RawProductForCanonicalizer, result: Canonicalizer
     sku: mergeSku(raw, result.sku),
     price: mergePrice(raw, result.price),
     conflicts: normalizeConflicts(result.conflicts),
-    missingCritical: uniqueStrings(result.missingCritical, 15).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
+    missingCritical: uniqueStrings(result.missingCritical, 15)
+      .map((value) => stripChineseFromRussianField(value))
+      .filter(Boolean),
     wbSearch: {
       coreQuery: safeRu(wbSearch.coreQuery, shortRu).slice(0, 80),
-      queryLadder: uniqueStrings(wbSearch.queryLadder, 8).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
-      mustInclude: uniqueStrings(wbSearch.mustInclude, 8).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
-      mustExclude: uniqueStrings(wbSearch.mustExclude, 12).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
-      directMatchRules: uniqueStrings(wbSearch.directMatchRules, 10).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
-      rejectRules: uniqueStrings(wbSearch.rejectRules, 12).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
+      queryLadder: uniqueStrings(wbSearch.queryLadder, 8)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
+      mustInclude: uniqueStrings(wbSearch.mustInclude, 8)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
+      mustExclude: uniqueStrings(wbSearch.mustExclude, 12)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
+      directMatchRules: uniqueStrings(wbSearch.directMatchRules, 10)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
+      rejectRules: uniqueStrings(wbSearch.rejectRules, 12)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
     },
     seoPolicy: {
-      allowedClaims: uniqueStrings(seoPolicy.allowedClaims, 12).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
-      forbiddenClaims: uniqueStrings(seoPolicy.forbiddenClaims, 20).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
+      allowedClaims: uniqueStrings(seoPolicy.allowedClaims, 12)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
+      forbiddenClaims: uniqueStrings(seoPolicy.forbiddenClaims, 20)
+        .map((value) => stripChineseFromRussianField(value))
+        .filter(Boolean),
     },
     supplierQuestions: {
       ru: finalRuQuestions,
       cn: finalCnQuestions,
     },
-    riskTags: uniqueStrings(result.riskTags, 15).map((value) => stripChineseFromRussianField(value)).filter(Boolean),
+    riskTags: uniqueStrings(result.riskTags, 15)
+      .map((value) => stripChineseFromRussianField(value))
+      .filter(Boolean),
     dataQuality: {
       score: clampInt(dataQuality.score, 3, 1, 10),
       status: normalizeDataQualityStatus(dataQuality.status),
-      explanation: safeRu(dataQuality.explanation, ''),
+      explanation: safeRu(dataQuality.explanation, ""),
     },
   };
 }
@@ -741,24 +876,28 @@ function normalizeContext(raw: RawProductForCanonicalizer, result: Canonicalizer
 function hasUsableContext(ctx: ProductContext): boolean {
   return Boolean(
     ctx.identity.productType &&
-      ctx.identity.coreObject &&
-      ctx.titles.cleanRu &&
-      ctx.wbSearch.coreQuery,
+    ctx.identity.coreObject &&
+    ctx.titles.cleanRu &&
+    ctx.wbSearch.coreQuery,
   );
 }
 
-async function runVisionCanonicalizer(prompt: string, imageDataUrl: string, apiKey: string): Promise<CanonicalizerModelResult | null> {
+async function runVisionCanonicalizer(
+  prompt: string,
+  imageDataUrl: string,
+  apiKey: string,
+): Promise<CanonicalizerModelResult | null> {
   for (const model of VISION_MODELS) {
     console.log(`[canonicalizer] Trying vision ${model}...`);
     const result = await callOpenRouter(
       model,
       [
-        { role: 'system', content: SYSTEM_MSG },
+        { role: "system", content: SYSTEM_MSG },
         {
-          role: 'user',
+          role: "user",
           content: [
-            { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: imageDataUrl } },
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: imageDataUrl } },
           ],
         },
       ],
@@ -774,14 +913,17 @@ async function runVisionCanonicalizer(prompt: string, imageDataUrl: string, apiK
   return null;
 }
 
-async function runTextCanonicalizer(prompt: string, apiKey: string): Promise<CanonicalizerModelResult | null> {
+async function runTextCanonicalizer(
+  prompt: string,
+  apiKey: string,
+): Promise<CanonicalizerModelResult | null> {
   for (const model of TEXT_MODELS) {
     console.log(`[canonicalizer] Trying text ${model}...`);
     const result = await callOpenRouter(
       model,
       [
-        { role: 'system', content: SYSTEM_MSG },
-        { role: 'user', content: prompt },
+        { role: "system", content: SYSTEM_MSG },
+        { role: "user", content: prompt },
       ],
       apiKey,
     );
@@ -795,16 +937,18 @@ async function runTextCanonicalizer(prompt: string, apiKey: string): Promise<Can
   return null;
 }
 
-export async function canonicalizeProduct(raw: RawProductForCanonicalizer): Promise<ProductContext | null> {
+export async function canonicalizeProduct(
+  raw: RawProductForCanonicalizer,
+): Promise<ProductContext | null> {
   const apiKey = process.env.OPENROUTER_API_KEY;
 
   if (!apiKey) {
-    console.warn('[canonicalizer] OPENROUTER_API_KEY is not set');
+    console.warn("[canonicalizer] OPENROUTER_API_KEY is not set");
     return null;
   }
 
   if (!raw.offerId || !raw.titleCn) {
-    console.warn('[canonicalizer] Missing required raw.offerId or raw.titleCn');
+    console.warn("[canonicalizer] Missing required raw.offerId or raw.titleCn");
     return null;
   }
 
@@ -823,9 +967,11 @@ export async function canonicalizeProduct(raw: RawProductForCanonicalizer): Prom
   }
 
   if (!result?.identity) {
-    if (process.env.PRODUCT_CANONICALIZER_SAFE_FALLBACK === '1') {
+    if (process.env.PRODUCT_CANONICALIZER_SAFE_FALLBACK === "1") {
       const fallback = buildFallbackContext(raw);
-      console.warn(`[canonicalizer] all models failed, using safe fallback for ${raw.offerId}`);
+      console.warn(
+        `[canonicalizer] all models failed, using safe fallback for ${raw.offerId}`,
+      );
       return fallback;
     }
 
@@ -836,9 +982,11 @@ export async function canonicalizeProduct(raw: RawProductForCanonicalizer): Prom
   const ctx = normalizeContext(raw, result);
 
   if (!hasUsableContext(ctx)) {
-    if (process.env.PRODUCT_CANONICALIZER_SAFE_FALLBACK === '1') {
+    if (process.env.PRODUCT_CANONICALIZER_SAFE_FALLBACK === "1") {
       const fallback = buildFallbackContext(raw);
-      console.warn(`[canonicalizer] unusable model result, using safe fallback for ${raw.offerId}`);
+      console.warn(
+        `[canonicalizer] unusable model result, using safe fallback for ${raw.offerId}`,
+      );
       return fallback;
     }
 

@@ -1,13 +1,17 @@
-import type { AnalysisSnapshot } from '../types';
+import type { AnalysisSnapshot } from "../types";
 
 const WRITER_MODELS = [
-  'deepseek/deepseek-v4-pro',
-  'deepseek/deepseek-chat-v3.2',
-  'qwen/qwen3-235b-a22b',
+  "deepseek/deepseek-v4-pro",
+  "deepseek/deepseek-chat-v3.2",
+  "qwen/qwen3-235b-a22b",
 ];
 
 function cleanJson(raw: string): string {
-  return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  return raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
 }
 
 export interface ExpertWriterResult {
@@ -30,26 +34,26 @@ export interface ExpertWriterResult {
 
 const EXPERT_WRITER_PROMPT = `CardZip Expert Writer v4 compact.
 
-Роль: закупочный аналитик 1688 → WB/Ozon. Пиши коротко, практично и безопасно. Источник правды — только AnalysisSnapshot.
+Роль: закупочный аналитик 1688 → WB/Ozon. Пиши практично, насыщенно и безопасно. Источник правды — только AnalysisSnapshot. LLM должен улучшать данные: переводить, структурировать, объяснять статус фактов, а не выкидывать полезную информацию.
 
 Жёсткие правила:
-1. Не придумывай факты, материалы, документы, качество, размеры, влагозащиту, безопасность, бренды, медицинские/детские/пищевые свойства.
+1. Не придумывай факты. Но если свойство есть в title/attributes/SKU, сохрани его в безопасной форме: “заявлено поставщиком / проверить / подтвердить”, а не удаляй.
 2. ROI/маржу/цену продажи выводи только если s.economics.canShowRoi=true и s.market.canUseForEconomics=true.
 3. Broad category, WBCON и cross-border — не рынок для экономики.
 4. Не пиши “можно закупать/брать”, если не подтверждены выбранный SKU, цена, вес с упаковкой и прямой локальный рынок.
-5. Если claim не подтверждён в allowedClaims/facts/raw attributes, формулируй как “уточнить/подтвердить у поставщика”.
+5. Если claim есть в данных поставщика, но не подтверждён документами, формулируй как “заявлено поставщиком, подтвердить документами/на образце”.
 6. В блоках “нельзя писать” используй категории риска, а не буквальные рекламные claims: “влагозащита без подтверждения”, “сертификация без документов”, “обещания безопасности/качества без подтверждения”.
 7. Запрещены пользовательские токены: 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, raw/debug, китайские raw-атрибуты без перевода.
 
 Верни только JSON:
 {
-  "userCard":"короткий отчёт до 2200 знаков: товар, данные 1688, WB рынок, экономика, вопросы, вердикт, next step",
+  "userCard":"структурированный отчёт 1800-3200 знаков: товар, цена, SKU, важные свойства со статусом, WB рынок, экономика, вопросы, вердикт, next step",
   "seoTitle":"название WB без неподтверждённых claims",
-  "seoDescription":"2-4 предложения, только подтверждённое или осторожное",
+  "seoDescription":"3-5 предложений: что это, сценарии использования, заявленные свойства со статусом уточнения, что подтвердить",
   "seoBullets":["5 коротких bullets"],
   "seoKeywords":["до 10 поисковых фраз"],
   "seoCharacteristics":{"параметр":"значение/уточнить"},
-  "buyerBrief":"ТЗ байеру до 2500 знаков: что закупаем, что подтвердить, логистика, бюджет/риски",
+  "buyerBrief":"полезное ТЗ байеру 2500-4000 знаков: что закупаем, SKU, факты 1688, что подтвердить, образец, логистика, бюджет/риски",
   "supplierQuestionsRu":["5-8 конкретных вопросов"],
   "supplierQuestionsCn":["5-8 вопросов на китайском"],
   "verdict":"✅ Можно тестировать | 🟡 Проверять дальше | 🔴 Только образец | ⛔ Не брать | ❓ Недостаточно данных",
@@ -63,7 +67,7 @@ const EXPERT_WRITER_PROMPT = `CardZip Expert Writer v4 compact.
 Decision rules:
 - reliable/full only when SKU + price + packed weight + 5+ direct local analogs are confirmed.
 - if data is incomplete, verdict is “Проверять дальше”, “Только образец” or “Недостаточно данных”.
-- supplier questions must not ask already-known facts; ask missing critical data.
+- supplier questions must preserve useful supplier claims as verification tasks; do not ask already-known facts, ask missing critical data and proof for risky claims.
 
 DATA:
 {{ANALYSIS_SNAPSHOT}}
@@ -101,25 +105,37 @@ function compactSnapshot(snapshot: AnalysisSnapshot): Record<string, unknown> {
   };
 }
 
-export async function runExpertWriter(snapshot: AnalysisSnapshot): Promise<ExpertWriterResult | null> {
+export async function runExpertWriter(
+  snapshot: AnalysisSnapshot,
+): Promise<ExpertWriterResult | null> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
 
   const snapshotStr = JSON.stringify(compactSnapshot(snapshot), null, 0);
-  const prompt = EXPERT_WRITER_PROMPT.replace('{{ANALYSIS_SNAPSHOT}}', snapshotStr.slice(0, 5000));
+  const prompt = EXPERT_WRITER_PROMPT.replace(
+    "{{ANALYSIS_SNAPSHOT}}",
+    snapshotStr.slice(0, 5000),
+  );
 
   for (const model of WRITER_MODELS) {
     try {
-      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           model,
-          max_tokens: 2600,
+          max_tokens: Number(process.env.EXPERT_WRITER_MAX_TOKENS ?? 3400),
           temperature: 0.2,
           messages: [
-            { role: 'system', content: 'Ты — профессиональный товарный аналитик CardZip. Верни СТРОГО JSON, без markdown-обёрток.' },
-            { role: 'user', content: prompt },
+            {
+              role: "system",
+              content:
+                "Ты — профессиональный товарный аналитик CardZip. Верни СТРОГО JSON, без markdown-обёрток.",
+            },
+            { role: "user", content: prompt },
           ],
         }),
         signal: AbortSignal.timeout(30_000),
@@ -128,31 +144,37 @@ export async function runExpertWriter(snapshot: AnalysisSnapshot): Promise<Exper
         console.log(`[expert-writer] ${model} HTTP ${res.status}`);
         continue;
       }
-      const data = await res.json() as { choices?: { message?: { content?: string } }[] };
-      const raw = data.choices?.[0]?.message?.content ?? '';
+      const data = (await res.json()) as {
+        choices?: { message?: { content?: string } }[];
+      };
+      const raw = data.choices?.[0]?.message?.content ?? "";
       const parsed = JSON.parse(cleanJson(raw));
       if (parsed?.userCard) {
-        console.log(`[expert-writer] ${model} | verdict: ${parsed.verdict} | readiness: ${parsed.readinessScore}/10`);
+        console.log(
+          `[expert-writer] ${model} | verdict: ${parsed.verdict} | readiness: ${parsed.readinessScore}/10`,
+        );
         return {
-          userCard: parsed.userCard ?? '',
-          seoTitle: parsed.seoTitle ?? '',
-          seoDescription: parsed.seoDescription ?? '',
+          userCard: parsed.userCard ?? "",
+          seoTitle: parsed.seoTitle ?? "",
+          seoDescription: parsed.seoDescription ?? "",
           seoBullets: parsed.seoBullets ?? [],
           seoKeywords: parsed.seoKeywords ?? [],
           seoCharacteristics: parsed.seoCharacteristics ?? {},
-          buyerBrief: parsed.buyerBrief ?? '',
+          buyerBrief: parsed.buyerBrief ?? "",
           supplierQuestionsRu: parsed.supplierQuestionsRu ?? [],
           supplierQuestionsCn: parsed.supplierQuestionsCn ?? [],
-          verdict: parsed.verdict ?? '❓',
-          verdictText: parsed.verdictText ?? '',
+          verdict: parsed.verdict ?? "❓",
+          verdictText: parsed.verdictText ?? "",
           readinessScore: parsed.readinessScore ?? 0,
-          confidenceLevel: parsed.confidenceLevel ?? '🔴',
-          mainRisk: parsed.mainRisk ?? '',
-          nextStep: parsed.nextStep ?? '',
+          confidenceLevel: parsed.confidenceLevel ?? "🔴",
+          mainRisk: parsed.mainRisk ?? "",
+          nextStep: parsed.nextStep ?? "",
         };
       }
     } catch (err) {
-      console.log(`[expert-writer] ${model} error: ${err instanceof Error ? err.message : err}`);
+      console.log(
+        `[expert-writer] ${model} error: ${err instanceof Error ? err.message : err}`,
+      );
       continue;
     }
   }
