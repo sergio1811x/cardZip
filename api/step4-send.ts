@@ -138,10 +138,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ─── Step 4A: Build AnalysisSnapshot ─────────────────────────────────
     const snapshot = buildAnalysisSnapshot(product, job.input_url);
 
-    // ─── Step 4B: Expert Writer (LLM) ──────────────────────────────────
-    const writerResult = await runExpertWriter(snapshot).catch(() => null);
+    // ─── Step 4B: Optional Expert Writer (LLM) ──────────────────────────
+    // The deterministic Decision Layer already builds the user report/files.
+    // Keep the expensive writer opt-in: it should not spend tokens and then get
+    // blocked by validators on every ordinary analysis.
+    const writerMode = String(process.env.CARDZIP_EXPERT_WRITER_MODE ?? 'off').toLowerCase();
+    const shouldRunWriter = writerMode === 'always' || (writerMode === 'confirmed_market' && snapshot.market.marketConfirmed);
+    const writerResult = shouldRunWriter ? await runExpertWriter(snapshot).catch(() => null) : null;
     if (writerResult) {
-      // Update seoContent from writer
+      // Update seoContent from writer only with fields that validators can still repair.
       product.seoContent = {
         ...product.seoContent,
         titleRu: writerResult.seoTitle || product.seoContent?.titleRu,

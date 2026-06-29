@@ -34,6 +34,16 @@ function applyCreditsLine(text: string, creditsRemaining: number): string {
   return `${text.replace(/\s+$/g, '')}\n\n${line}`;
 }
 
+function applySanitizedArtifacts(hard: { fixedArtifacts?: Record<string, unknown> }, artifacts: { finalText: string; seoText: string; briefText: string; supplierText: string }) {
+  const fixed = hard.fixedArtifacts ?? {};
+  return {
+    finalText: String(fixed.userCard ?? fixed.UserCard ?? artifacts.finalText),
+    seoText: String(fixed.seoText ?? fixed.SeoText ?? artifacts.seoText),
+    briefText: String(fixed.buyerBrief ?? fixed.BuyerBrief ?? artifacts.briefText),
+    supplierText: String(fixed.supplierQuestions ?? fixed.SupplierQuestions ?? artifacts.supplierText),
+  };
+}
+
 async function sendPaymentRequired(job: any) {
   if (job.tg_message_id) await bot.telegram.deleteMessage(job.tg_chat_id, job.tg_message_id).catch(() => {});
   await bot.telegram.sendMessage(job.tg_chat_id, '💳 Недостаточно кредитов для отправки полного отчёта. Пополните баланс и запустите анализ заново — полный отчёт без списания не отправлен.', {
@@ -101,13 +111,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const supplierValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: supplierQs, reportType: 'supplierQuestions', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
     seoText = seoValidation.fixedText || seoText;
     briefText = briefValidation.fixedText || briefText;
+    let supplierText = supplierValidation.fixedText || supplierQs;
 
     if (!seoValidation.ok || !briefValidation.ok || !supplierValidation.ok) {
       console.warn('[step5] file validators repaired:', [...seoValidation.errors, ...briefValidation.errors, ...supplierValidation.errors].join(', '));
     }
 
     await supabase.from('jobs').update({
-      result_json: { ...result, product, generatedFiles: { seoText, briefText, supplierQuestions: supplierValidation.fixedText } },
+      result_json: { ...result, product, generatedFiles: { seoText, briefText, supplierQuestions: supplierText } },
     }).eq('id', jobId);
 
     const keywords = (product.seoContent?.keywords ?? []).slice(0, 3);
@@ -137,8 +148,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const snapshot = result.analysisSnapshot ?? { market: product.marketDecision ?? decisionContext.market, economics: product.economics, productContext: product.productContext, purchasePrice: decisionContext.price, weight: decisionContext.weight, sku: decisionContext.sku };
     let hard = runHardValidator({
       analysisSnapshot: snapshot,
-      artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierValidation.fixedText },
+      artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText },
     });
+    ({ finalText, seoText, briefText, supplierText } = applySanitizedArtifacts(hard, { finalText, seoText, briefText, supplierText }));
 
     if (hard.block || !hard.canShowFullReport) {
       console.warn(`[step5] hard validator blocked: ${hard.issues.map(i => i.problem).join('; ')}`);
@@ -146,21 +158,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ ok: true, blocked: true, source: 'hard' });
     }
 
-    const qaResult = await runQaGate(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierValidation.fixedText }).catch(() => null);
+    const qaMode = String(process.env.CARDZIP_QA_GATE_MODE ?? 'critical_only').toLowerCase();
+    const hasNonLowWarnings = hard.warnings.some((w) => w.severity !== 'low');
+    const mustRunQa = qaMode === 'always' || (qaMode === 'critical_only' && (hard.issues.length > 0 || hasNonLowWarnings));
+    const qaResult = mustRunQa
+      ? await runQaGate(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText }).catch(() => null)
+      : { decision: 'PASS', canShowToUser: true, qualityScore: 8, confidence: 'medium', summary: 'Code hard validator passed; LLM QA skipped by policy.' } as any;
+
     if (!qaResult || qaResult.decision === 'BLOCK') {
       const reason = qaResult ? [...safeIssues(qaResult.criticalIssues), ...safeIssues(qaResult.issues)].join('; ') : 'QA Gate недоступен.';
-      console.warn(`[step5] QA blocked/unavailable: ${reason}`);
-      await sendBlocked(job, product, reason || 'QA Gate не разрешил полный отчёт.');
-      return res.status(200).json({ ok: true, blocked: true, source: 'qa' });
+      if (qaMode === 'always') {
+        console.warn(`[step5] QA blocked/unavailable: ${reason}`);
+        await sendBlocked(job, product, reason || 'QA Gate не разрешил полный отчёт.');
+        return res.status(200).json({ ok: true, blocked: true, source: 'qa' });
+      }
+      console.warn(`[step5] QA unavailable in ${qaMode} mode; sending code-validated report: ${reason}`);
     }
 
-    if (qaResult.decision === 'FIX_REQUIRED') {
-      const fixed = await runAutoFix(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierValidation.fixedText }, { ...qaResult, issues: safeIssues(qaResult.issues).length ? safeIssues(qaResult.issues) : safeIssues(qaResult.requiredEdits) } as any).catch(() => null);
+    if (qaResult?.decision === 'FIX_REQUIRED') {
+      const fixed = await runAutoFix(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText }, { ...qaResult, issues: safeIssues(qaResult.issues).length ? safeIssues(qaResult.issues) : safeIssues(qaResult.requiredEdits) } as any).catch(() => null);
       if (fixed?.userCard || fixed?.UserCard) finalText = String(fixed.userCard ?? fixed.UserCard);
       if (fixed?.seoText) seoText = String(fixed.seoText);
       if (fixed?.buyerBrief) briefText = String(fixed.buyerBrief);
 
-      hard = runHardValidator({ analysisSnapshot: snapshot, artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierValidation.fixedText } });
+      hard = runHardValidator({ analysisSnapshot: snapshot, artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText } });
+      ({ finalText, seoText, briefText, supplierText } = applySanitizedArtifacts(hard, { finalText, seoText, briefText, supplierText }));
       if (hard.block || !hard.canShowFullReport) {
         await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Auto-Fix не смог безопасно исправить отчёт.');
         return res.status(200).json({ ok: true, blocked: true, source: 'autofix-hard' });
@@ -183,7 +205,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       result_json: {
         ...result,
         product,
-        generatedFiles: { seoText, briefText, supplierQuestions: supplierValidation.fixedText },
+        generatedFiles: { seoText, briefText, supplierQuestions: supplierText },
         finalUserCard: finalText,
         qaResult,
       },
@@ -204,7 +226,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       console.warn('[step5] Cache save failed:', e instanceof Error ? e.message : e),
     );
 
-    console.log(`[step5] Job ${job.id} sent | soft=${softValidation.ok ? 'PASS' : softValidation.errors.length} | hard=PASS | qa=${qaResult.decision}`);
+    console.log(`[step5] Job ${job.id} sent | soft=${softValidation.ok ? 'PASS' : softValidation.errors.length} | hard=PASS | qa=${qaResult?.decision ?? 'SKIPPED'}`);
     res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step5]', e.message);

@@ -42,8 +42,8 @@ const ZERO_WEIGHT_PATTERN = /(?:^|[^\d])0(?:[,.]0+)?\s*(?:кг|kg)\b/i;
 const LONG_FLOAT_PATTERN = /\d+[.,]\d{4,}/;
 const RAW_DEBUG_PATTERN = /\b(?:debug|rawPriceFields|extraInfoKeys|quote_type|stack trace|object Object)\b/i;
 const ROI_PATTERN = /\b(?:ROI|марж[аиу]|прибыль|рентабельность)\b[^\n\r]*(?:\d|%|₽)/i;
-const MARKET_PRICE_PATTERN = /\b(?:рыночн\w*\s+цен\w*|цена\s+продажи|sellPrice|marketPrice)\b[^\n\r]*(?:\d|₽)/i;
-const POSITIVE_BUY_PATTERN = /\b(?:можно\s+(?:закупать|брать|тестировать)|заказать\s+тест|тест\s*\d+\s*[–-]\s*\d+\s*шт|закупка\s+целесообразна)\b/i;
+const MARKET_PRICE_PATTERN = /(?:рыночн[а-яё]*\s+цен[а-яё]*|цена\s+продажи|sellPrice|marketPrice)[^\n\r]*(?:\d|₽)/i;
+const POSITIVE_BUY_PATTERN = /(?:можно\s+(?:закупать|брать|тестировать)|заказать\s+тест|тест\s*\d+\s*[–-]\s*\d+\s*шт|закупка\s+целесообразна)/i;
 const UNCONFIRMED_CLAIMS = [
   'водонепроницаемый',
   'влагозащищенный',
@@ -136,11 +136,11 @@ function sanitizeArtifacts(artifacts: Record<string, unknown>, snapshot?: Record
 
   const cleanValue = (value: unknown): unknown => {
     if (typeof value === 'string') {
-      let text = cleanPublicText(value);
+      let text = sanitizeUnconfirmedClaims(cleanPublicText(value), snapshot ?? {});
       if (directAnalogsCount <= 0 || !marketConfirmed) {
         text = text
           .split('\n')
-          .filter((line) => !ROI_PATTERN.test(line))
+          .filter((line) => !ROI_PATTERN.test(line) && !MARKET_PRICE_PATTERN.test(line))
           .join('\n')
           .trim();
       }
@@ -172,9 +172,14 @@ function sanitizeArtifacts(artifacts: Record<string, unknown>, snapshot?: Record
 }
 
 function hasConfirmedClaim(snapshot: Record<string, unknown>, claim: string): boolean {
+  const productContext = asRecord(snapshot.productContext);
+  const seoPolicy = asRecord(productContext.seoPolicy);
+  // Only allowed/confirmed claims can confirm a claim. forbiddenClaims must never
+  // be treated as evidence; otherwise the validator may whitelist a word just
+  // because Product Intelligence explicitly banned it.
   const text = toPlainText([
-    asRecord(snapshot.productContext).seoPolicy,
-    asRecord(snapshot.productContext).facts,
+    seoPolicy.allowedClaims,
+    asRecord(productContext.facts),
     asRecord(snapshot.raw1688).attributesRaw,
   ]).toLowerCase();
 
@@ -235,6 +240,70 @@ function textHasAnyClaim(text: string, claim: string): boolean {
   const lower = text.toLowerCase();
   if (claim === 'ip67' || claim === 'ip68') return lower.includes(claim);
   return lower.includes(claim);
+}
+
+function isNegativeClaimContext(line: string): boolean {
+  return /(?:нельзя|запрещено|не\s+писать|не\s+использовать|не\s+утверждать|недопустимо|запрет)/i.test(line);
+}
+
+function textForClaimScan(text: string): string {
+  return String(text ?? '')
+    .split(/\r?\n/)
+    .filter((line) => !isNegativeClaimContext(line))
+    .join('\n');
+}
+
+function neutralizeClaimWarningLine(line: string): string {
+  if (!isNegativeClaimContext(line)) return line;
+  return line
+    .replace(/IP\s*67\s*\/\s*IP\s*68|IP67\s*\/\s*IP68/gi, 'неподтверждённый IP-рейтинг')
+    .replace(/IP\s*\d{2}|IP\d{2}/gi, 'неподтверждённый IP-рейтинг')
+    .replace(/водонепроницаем[а-яё]*|влагозащищ[её]нн[а-яё]*/gi, 'неподтверждённая влагозащита')
+    .replace(/сертифицир[а-яё]*|сертификат\s+есть/gi, 'неподтверждённая сертификация')
+    .replace(/безопасн[а-яё]*/gi, 'неподтверждённая безопасность')
+    .replace(/премиальн[а-яё]*/gi, 'неподтверждённый класс качества')
+    .replace(/профессиональн[а-яё]*/gi, 'неподтверждённый профессиональный класс')
+    .replace(/для детей/gi, 'детское назначение без документов')
+    .replace(/лечебн[а-яё]*|медицинск[а-яё]*|ортопедическ[а-яё]*|гипоаллергенн[а-яё]*|антибактериальн[а-яё]*/gi, 'медицинские/лечебные claims без документов');
+}
+
+function sanitizeUnconfirmedClaims(text: string, snapshot: Record<string, unknown>): string {
+  let fixed = String(text ?? '')
+    .replace(/IP\s*67\s*\/\s*IP\s*68|IP67\s*\/\s*IP68/gi, 'заявленный класс защиты — уточнить у поставщика')
+    .split(/\r?\n/)
+    .map(neutralizeClaimWarningLine)
+    .join('\n');
+
+  const replaceIfUnconfirmed = (claim: string, pattern: RegExp, replacement: string) => {
+    if (!hasConfirmedClaim(snapshot, claim)) fixed = fixed.replace(pattern, replacement);
+  };
+
+  replaceIfUnconfirmed('ip67', /\bIP\s*67\b|\bIP67\b/gi, 'заявленный класс защиты — уточнить у поставщика');
+  replaceIfUnconfirmed('ip68', /\bIP\s*68\b|\bIP68\b/gi, 'заявленный класс защиты — уточнить у поставщика');
+  replaceIfUnconfirmed('водонепроницаемый', /водонепроницаем\w*/gi, 'заявленная влагозащита — уточнить у поставщика');
+  replaceIfUnconfirmed('влагозащищенный', /влагозащищ[её]нн\w*/gi, 'заявленная влагозащита — уточнить у поставщика');
+  replaceIfUnconfirmed('сертифицированный', /сертифицир[а-яё]*|сертификат\s+есть/gi, 'сертификацию нужно подтвердить');
+  replaceIfUnconfirmed('безопасный', /безопасн[а-яё]*/gi, 'требует подтверждения состава/документов');
+  replaceIfUnconfirmed('премиальный', /премиальн[а-яё]*/gi, 'улучшенная версия по заявлению поставщика');
+  replaceIfUnconfirmed('профессиональный', /профессиональн[а-яё]*/gi, 'для профессионального применения — только после подтверждения');
+  replaceIfUnconfirmed('для детей', /для\s+детей/gi, 'для соответствующей аудитории — только после подтверждения документов');
+  replaceIfUnconfirmed('лечебный', /лечебн[а-яё]*|медицинск[а-яё]*|ортопедическ[а-яё]*|гипоаллергенн[а-яё]*|антибактериальн[а-яё]*/gi, 'медицинские/лечебные свойства не подтверждены');
+
+  return fixed.replace(/\s+—\s+уточнить у поставщика\s+—\s+уточнить у поставщика/gi, ' — уточнить у поставщика');
+}
+
+function unresolvedAfterSanitizer(issue: HardValidatorIssue, sanitizedText: string): boolean {
+  if (issue.field.startsWith('claim.')) {
+    const claim = issue.field.slice('claim.'.length);
+    return textHasAnyClaim(textForClaimScan(sanitizedText), claim);
+  }
+  if (issue.field === 'artifacts.price') return ZERO_PRICE_PATTERN.test(sanitizedText);
+  if (issue.field === 'artifacts.weight') return ZERO_WEIGHT_PATTERN.test(sanitizedText);
+  if (issue.field === 'artifacts.rawTokens') return TECH_GARBAGE_PATTERN.test(sanitizedText);
+  if (issue.field === 'artifacts.debug') return RAW_DEBUG_PATTERN.test(sanitizedText);
+  if (issue.field === 'economics.roi') return ROI_PATTERN.test(sanitizedText);
+  if (issue.field === 'market.price') return MARKET_PRICE_PATTERN.test(sanitizedText);
+  return true;
 }
 
 export function runHardValidator(input: {
@@ -326,8 +395,9 @@ export function runHardValidator(input: {
     addIssue(warnings, 'supplier.moq', 'medium', 'В тексте может быть MOQ, которого нет в snapshot.', 'Проверить, что MOQ не противоречит источнику.');
   }
 
+  const claimScanText = textForClaimScan(fullText);
   for (const claim of UNCONFIRMED_CLAIMS) {
-    if (textHasAnyClaim(fullText, claim) && !hasConfirmedClaim(snapshot, claim)) {
+    if (textHasAnyClaim(claimScanText, claim) && !hasConfirmedClaim(snapshot, claim)) {
       addIssue(issues, `claim.${claim}`, ['ip67', 'ip68', 'сертифицированный', 'для детей', 'лечебный', 'медицинский'].includes(claim) ? 'critical' : 'high', `Неподтверждённый claim в пользовательских материалах: “${claim}”.`, 'Удалить claim или заменить на вопрос поставщику/риск.');
     }
   }
@@ -343,15 +413,26 @@ export function runHardValidator(input: {
   }
 
   const fixedArtifacts = sanitizeArtifacts(artifacts, snapshot);
-  const blockingIssues = issues.filter((issue) => issue.severity === 'critical' || issue.severity === 'high');
-  const safeUserSummary = inferSafeSummary(snapshot, issues);
+  const sanitizedText = toPlainText(fixedArtifacts);
+  const unresolvedIssues = issues.filter((issue) => unresolvedAfterSanitizer(issue, sanitizedText));
+  const autoFixedIssues = issues.filter((issue) => !unresolvedAfterSanitizer(issue, sanitizedText));
+  const allWarnings = [
+    ...warnings,
+    ...autoFixedIssues.map((issue) => ({
+      ...issue,
+      severity: 'low' as HardValidatorSeverity,
+      action: `${issue.action} Исправлено deterministic sanitizer перед отправкой.`,
+    })),
+  ];
+  const blockingIssues = unresolvedIssues.filter((issue) => issue.severity === 'critical' || issue.severity === 'high');
+  const safeUserSummary = inferSafeSummary(snapshot, unresolvedIssues);
 
   return {
-    ok: blockingIssues.length === 0 && warnings.length === 0,
+    ok: blockingIssues.length === 0 && allWarnings.length === 0,
     block: blockingIssues.some((issue) => issue.severity === 'critical'),
     canShowFullReport: blockingIssues.length === 0,
-    issues,
-    warnings,
+    issues: unresolvedIssues,
+    warnings: allWarnings,
     fixedArtifacts,
     safeUserSummary,
   };

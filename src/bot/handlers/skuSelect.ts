@@ -55,21 +55,16 @@ export async function handleSkuSelect(ctx: Context) {
     // Удаляем кнопки выбора
     await ctx.editMessageText('🔄 Обрабатываем выбранный вариант...', { parse_mode: 'HTML' }).catch(() => {});
 
-    // VPS mode: call continuePipeline directly, Vercel mode: HTTP fetch
-    const vpsContinue = (global as any).__continuePipeline;
-    if (typeof vpsContinue === 'function') {
-      vpsContinue(jobId).catch((e: any) => console.error('[skuSelect] pipeline error:', e));
-    } else {
-      const host = 'card-zip.vercel.app';
-      const ac = new AbortController();
-      setTimeout(() => ac.abort(), 4000);
-      fetch(`https://${host}/api/step2-ai`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId }),
-        signal: ac.signal,
-      }).catch(() => {});
-    }
+    // Fire-and-forget step2 (webhook имеет лимит 10с)
+    const host = 'card-zip.vercel.app';
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 4000);
+    fetch(`https://${host}/api/step2-ai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jobId }),
+      signal: ac.signal,
+    }).catch(() => {});
   } catch (e) {
     console.error('[skuSelect]', e);
     await ctx.answerCbQuery('Ошибка').catch(() => {});

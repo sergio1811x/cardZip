@@ -83,7 +83,8 @@ const EXPERT_WRITER_PROMPT = `# CardZip Expert Writer Prompt v3
 * “ROI высокий”, если нет прямых аналогов;
 * “себестоимость точная”, если вес/логистика/SKU не подтверждены;
 * неподтверждённые свойства товара;
-* IP67 / водонепроницаемый / сертифицированный / безопасный / премиальный / профессиональный без подтверждения;
+* IP-рейтинг, влагозащиту, сертификацию, безопасность, премиальный/профессиональный класс без прямого подтверждения;
+* даже в блоках “нельзя писать” не перечисляй буквальные рекламные claims, чтобы пользовательские файлы не содержали запрещённых слов;
 * медицинские, лечебные, детские, пищевые или технические обещания без подтверждения;
 * raw debug-output;
 * \`0 ¥\`, \`0 кг\`, \`NaN\`, \`undefined\`, \`null\`;
@@ -172,6 +173,8 @@ const EXPERT_WRITER_PROMPT = `# CardZip Expert Writer Prompt v3
 Сначала дай короткий управленческий вывод. Потом детали.
 
 Не пиши воду. Не повторяй одно и то же. Если данных нет — так и пиши.
+Верни только валидный JSON с ключами userCard, seoTitle, seoDescription, seoBullets, seoKeywords, seoCharacteristics, buyerBrief, supplierQuestionsRu, supplierQuestionsCn, verdict, verdictText, readinessScore, confidenceLevel, mainRisk, nextStep.
+Не добавляй markdown вне JSON.
 
 ---
 
