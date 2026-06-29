@@ -38,9 +38,12 @@ export function resolvePurchasePrice(product: RawProduct1688): ResolvedPurchaseP
     direct: 'direct_price',
     missing: 'unknown',
   };
-  const displayLabel = decision.priceSource === 'missing'
+  const baseDisplayLabel = decision.priceSource === 'missing'
     ? '—'
     : decision.displayPriceText.replace(/^Цена:\s*/i, '').trim() || '—';
+  const displayLabel = decision.isEstimated && decision.priceSource !== 'missing' && !/ориентир/i.test(baseDisplayLabel)
+    ? `${baseDisplayLabel} · ориентир`
+    : baseDisplayLabel;
   return {
     valueCny: positive(decision.calculationPriceYuan),
     minCny: positive(decision.minPriceYuan),
