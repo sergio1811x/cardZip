@@ -617,11 +617,33 @@ app.get('/health', (_req, res) => {
 
 // ─── Start ──────────────────────────────────────────────────────────────────
 
+import { readFileSync, existsSync } from 'fs';
+import { createServer } from 'https';
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`CardZip VPS server running on port ${PORT}`);
-  const webhookUrl = process.env.WEBHOOK_URL;
-  if (webhookUrl) {
-    bot.telegram.setWebhook(webhookUrl).then(() => console.log(`Webhook set: ${webhookUrl}`)).catch((e) => console.warn(`Webhook set failed (set manually): ${e.message}`));
-  }
-});
+const SSL_KEY = process.env.SSL_KEY || '/opt/cardzip-bot/webhook.key';
+const SSL_CERT = process.env.SSL_CERT || '/opt/cardzip-bot/webhook.pem';
+
+if (existsSync(SSL_KEY) && existsSync(SSL_CERT)) {
+  const httpsServer = createServer({ key: readFileSync(SSL_KEY), cert: readFileSync(SSL_CERT) }, app);
+  httpsServer.listen(PORT, () => {
+    console.log(`CardZip VPS server (HTTPS) running on port ${PORT}`);
+    const webhookUrl = process.env.WEBHOOK_URL;
+    if (webhookUrl) {
+      const certPem = readFileSync(SSL_CERT, 'utf8');
+      bot.telegram.setWebhook(webhookUrl, { certificate: { source: Buffer.from(certPem), filename: 'webhook.pem' } })
+        .then(() => console.log(`Webhook set: ${webhookUrl}`))
+        .catch((e) => console.warn(`Webhook set failed (set manually): ${e.message}`));
+    }
+  });
+} else {
+  app.listen(PORT, () => {
+    console.log(`CardZip VPS server (HTTP) running on port ${PORT}`);
+    const webhookUrl = process.env.WEBHOOK_URL;
+    if (webhookUrl) {
+      bot.telegram.setWebhook(webhookUrl)
+        .then(() => console.log(`Webhook set: ${webhookUrl}`))
+        .catch((e) => console.warn(`Webhook set failed (set manually): ${e.message}`));
+    }
+  });
+}
