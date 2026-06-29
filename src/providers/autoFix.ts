@@ -2,8 +2,8 @@ import type { AnalysisSnapshot, QaResult } from '../types';
 
 const FIX_MODELS = [
   'google/gemini-2.5-flash-lite',
-  'zhipu-ai/glm-4.5-air',
-  'qwen/qwen3-235b-a22b',
+  'google/gemini-2.5-flash',
+  'deepseek/deepseek-chat-v3.2',
 ];
 
 function cleanJson(raw: string): string {

@@ -1,9 +1,9 @@
 import type { AnalysisSnapshot } from "../types";
 
 const WRITER_MODELS = [
-  "deepseek/deepseek-v4-pro",
+  "google/gemini-2.5-flash-lite",
   "deepseek/deepseek-chat-v3.2",
-  "qwen/qwen3-235b-a22b",
+  "google/gemini-2.5-flash",
 ];
 
 function cleanJson(raw: string): string {
