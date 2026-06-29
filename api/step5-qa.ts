@@ -158,21 +158,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ ok: true, blocked: true, source: 'hard' });
     }
 
-    const qaMode = String(process.env.CARDZIP_QA_GATE_MODE ?? 'critical_only').toLowerCase();
+    const qaMode = String(process.env.CARDZIP_QA_GATE_MODE ?? 'always').toLowerCase();
+    const qaUnavailablePolicy = String(process.env.CARDZIP_QA_UNAVAILABLE_POLICY ?? 'send_code_validated').toLowerCase();
     const hasNonLowWarnings = hard.warnings.some((w) => w.severity !== 'low');
-    const mustRunQa = qaMode === 'always' || (qaMode === 'critical_only' && (hard.issues.length > 0 || hasNonLowWarnings));
+    const mustRunQa = qaMode !== 'off' && (qaMode === 'always' || (qaMode === 'critical_only' && (hard.issues.length > 0 || hasNonLowWarnings)));
     const qaResult = mustRunQa
       ? await runQaGate(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText }).catch(() => null)
       : { decision: 'PASS', canShowToUser: true, qualityScore: 8, confidence: 'medium', summary: 'Code hard validator passed; LLM QA skipped by policy.' } as any;
 
     if (!qaResult || qaResult.decision === 'BLOCK') {
       const reason = qaResult ? [...safeIssues(qaResult.criticalIssues), ...safeIssues(qaResult.issues)].join('; ') : 'QA Gate недоступен.';
-      if (qaMode === 'always') {
+      const qaUnavailable = !qaResult || /QA (?:unavailable|fallback|Gate недоступен|all models failed)/i.test(reason);
+      if (!qaUnavailable || qaUnavailablePolicy === 'fail_closed') {
         console.warn(`[step5] QA blocked/unavailable: ${reason}`);
         await sendBlocked(job, product, reason || 'QA Gate не разрешил полный отчёт.');
         return res.status(200).json({ ok: true, blocked: true, source: 'qa' });
       }
-      console.warn(`[step5] QA unavailable in ${qaMode} mode; sending code-validated report: ${reason}`);
+      console.warn(`[step5] QA unavailable; sending code-validated report by policy: ${reason}`);
+      qaResult = { decision: 'PASS', canShowToUser: true, qualityScore: 7, confidence: 'medium', summary: 'LLM QA unavailable; code hard validator passed.', issues: [] } as any;
     }
 
     if (qaResult?.decision === 'FIX_REQUIRED') {

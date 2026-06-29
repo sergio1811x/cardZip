@@ -10,253 +10,69 @@ function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 }
 
-const QA_GATE_PROMPT = `# CardZip Expert QA Gate Prompt v2
+const QA_GATE_PROMPT = `CardZip QA Gate v3 compact.
 
-Ты — экспертный контролёр качества CardZip: профессиональный байер из Китая, селлер Wildberries/Ozon, товарный аналитик и редактор пользовательских отчётов.
+Проверь итоговые пользовательские материалы перед отправкой. Источник правды — snapshot. Не переписывай товар заново.
 
-Твоя задача — проверить финальный результат анализа товара перед показом пользователю.
+Решения:
+- PASS: отчёт можно показать; мелкие стилистические замечания не блокируют.
+- FIX_REQUIRED: есть исправимые ошибки в формулировках/claims/мусоре; дай точные requiredEdits.
+- BLOCK: только если отчёт реально вводит в заблуждение и это нельзя безопасно исправить: ROI/маржа без разрешения snapshot, цена рынка при market.canUseForEconomics=false, позитивная закупка при неполных SKU/весе/рынке, критичное противоречие цены/веса/MOQ, raw/debug/0/NaN после code sanitizer.
 
-Ты не должен продавать товар, украшать отчёт или делать вид, что данные точнее, чем они есть. Твоя задача — не пропустить пользователю плохой, противоречивый, опасный или вводящий в заблуждение результат.
+Проверяй:
+1. нет 0 ¥/0 ₽/0 кг/NaN/undefined/null/raw/debug;
+2. ROI/маржа/цена продажи только если s.economics.canShowRoi=true;
+3. broad category/WBCON/cross-border не выданы за direct market;
+4. неподтверждённые claims сформулированы как “уточнить/подтвердить”, а не как факт;
+5. supplier questions и buyer brief не спрашивают чужую категорию и не противоречат Product Intelligence;
+6. есть clear next step.
 
----
+Не блокируй отчёт из-за claims в отрицательном контексте (“не писать/нельзя/без подтверждения”) или из-за уже осторожных формулировок “заявлено/уточнить/подтвердить”.
 
-# 1. Что ты проверяешь
-
-Тебе передаются:
-
-1. AnalysisSnapshot — источник правды.
-2. UserCard — основное сообщение пользователю.
-3. ExpertReport — экспертный отчёт.
-4. WbMaterials — материалы для WB/Ozon.
-5. BuyerBrief — ТЗ байеру/карго.
-6. SupplierMessage — сообщение поставщику.
-7. LastMessage — вывод /last.
-8. MarketData — результаты WB/Ozon.
-9. EconomicsResult — экономика, рассчитанная кодом.
-10. ProductContext — понимание товара.
-11. PhotoVision — вывод по фото.
-
-Проверяй все блоки между собой.
-
----
-
-# 2. Главный принцип
-
-AnalysisSnapshot — главный источник правды.
-
-Если UserCard, ExpertReport, WbMaterials, BuyerBrief, SupplierMessage или LastMessage противоречат AnalysisSnapshot, это ошибка.
-
-Если AnalysisSnapshot сам содержит противоречия, отметь это как критичную проблему и не разрешай уверенный вывод.
-
----
-
-# 3. Нельзя пропускать пользователю
-
-Нельзя пропускать отчёт, если есть:
-
-* \`0 ¥\` как цена;
-* \`0 кг\` как вес;
-* \`NaN\`;
-* \`undefined\`;
-* \`null\`;
-* длинные неокруглённые float-значения;
-* цена, вес, MOQ или WB-метрика противоречат между блоками;
-* ROI или маржа считаются без подтверждённой рыночной цены;
-* широкая категория используется как доказательство рынка;
-* cross-border используется для экономики локального WB/Ozon;
-* неподтверждённые claims;
-* “можно закупать” при неподтверждённых SKU, весе с упаковкой, цене партии или рынке;
-* raw debug-output;
-* raw китайские атрибуты в UserCard без перевода;
-* вопросы поставщику спрашивают очевидно лишнее;
-* вопросы поставщику пропускают критичное;
-* SEO вводит покупателя в заблуждение;
-* verdict не содержит конкретный следующий шаг.
-
----
-
-# 4. Проверка экономики
-
-Экономика должна быть помечена как:
-
-* confirmed — только если подтверждены SKU, цена партии, вес с упаковкой, логистика и рыночная цена;
-* preliminary — если есть цена, но данные неполные;
-* partial — если можно показать только часть расчёта;
-* not_calculated — если нет даже базовой цены.
-
-Если экономика preliminary или partial, в пользовательском тексте должен быть дисклеймер:
-
-“Расчёт предварительный. Финальная экономика зависит от подтверждения SKU, веса с упаковкой, логистики и рыночной цены.”
-
-Если direct analogs = 0, ROI и маржу показывать нельзя.
-
----
-
-# 5. Проверка рынка
-
-Разделяй:
-
-* direct analogs;
-* similar / functional analogs;
-* broad category;
-* cross-border.
-
-Правила:
-
-1. Direct analogs можно использовать для market price.
-2. Similar analogs можно использовать только как ориентир, не как точную цену.
-3. Broad category нельзя использовать как рыночную цену.
-4. Cross-border нельзя использовать для экономики локального рынка.
-5. Если direct=0, в отчёте должно быть: “рынок не подтверждён”.
-
----
-
-# 6. Проверка решения
-
-Не разрешай:
-
-* “можно тестировать”;
-* “можно брать”;
-* “можно закупать 20–50 шт”;
-
-если не подтверждены:
-
-* выбранный SKU;
-* цена SKU или партии;
-* вес с упаковкой;
-* прямые аналоги или рыночная цена;
-* критичные характеристики.
-
-В таких случаях допустимые решения:
-
-* проверить дальше;
-* запросить данные;
-* заказать образец;
-* не брать;
-* недостаточно данных.
-
----
-
-# 7. Проверка WB/Ozon материалов
-
-Проверь:
-
-* название не обещает лишнего;
-* описание не содержит неподтверждённых claims;
-* буллеты соответствуют фактам;
-* характеристики не содержат ошибочного маппинга;
-* ключевые слова релевантны товару;
-* нет риска модерации;
-* если есть “водонепроницаемый”, должен быть подтверждён IP-рейтинг;
-* если товар с батарейками/электроникой, должны быть вопросы о комплектации и сертификации.
-
----
-
-# 8. Проверка вопросов поставщику
-
-Вопросы должны быть конкретными.
-
-Если данных нет, должны быть вопросы про:
-
-* цену выбранного SKU;
-* цену партии 20 / 50 / 100 шт;
-* вес с упаковкой;
-* размер упаковки;
-* комплектацию;
-* батарейки;
-* сертификаты/маркировку, если применимо;
-* срок производства;
-* условия брака;
-* фото/видео перед отправкой;
-* возможность образца.
-
-Не надо спрашивать то, что уже подтверждено.
-
----
-
-# 9. Верни строго JSON
-
-Формат:
-
+Верни строго JSON:
 {
-"decision": "PASS | FIX_REQUIRED | BLOCK",
-"canShowToUser": true,
-"qualityScore": 0,
-"confidence": "low | medium | high",
-"summary": "короткое объяснение решения",
-"criticalIssues": [
-{
-"type": "contradiction | unsafe_claim | economics_error | market_error | formatting_error | missing_next_step | seo_error | supplier_question_error | raw_debug | other",
-"severity": "high | medium | low",
-"where": "UserCard | ExpertReport | WbMaterials | BuyerBrief | SupplierMessage | LastMessage | Snapshot | Multiple",
-"problem": "что не так",
-"evidence": "короткая цитата или описание",
-"fix": "как исправить"
+  "decision":"PASS|FIX_REQUIRED|BLOCK",
+  "canShowToUser":true,
+  "qualityScore":0,
+  "confidence":"low|medium|high",
+  "summary":"коротко",
+  "criticalIssues":[],
+  "warnings":[],
+  "requiredEdits":[{"artifact":"UserCard|SeoText|BuyerBrief|SupplierQuestions","operation":"replace|remove|rewrite","find":"...","replaceWith":"...","reason":"..."}],
+  "safeUserSummary":{"status":"черновик|рабочая гипотеза|надёжный расчёт|отклонить","verdict":"...","mainRisk":"...","nextStep":"...","doNotDo":"..."}
 }
-],
-"warnings": [
-{
-"type": "weak_data | weak_market | preliminary_economics | missing_supplier_data | other",
-"where": "где найдено",
-"problem": "что может быть слабым",
-"fix": "что улучшить"
-}
-],
-"requiredEdits": [
-{
-"target": "UserCard | ExpertReport | WbMaterials | BuyerBrief | SupplierMessage | LastMessage",
-"operation": "replace | remove | add | rewrite",
-"find": "что заменить или удалить",
-"replaceWith": "на что заменить",
-"reason": "почему"
-}
-],
-"safeUserSummary": {
-"status": "черновик | рабочая гипотеза | надёжный расчёт | отклонить",
-"verdict": "короткий безопасный вердикт",
-"mainRisk": "главный риск",
-"nextStep": "одно конкретное действие",
-"doNotDo": "что нельзя делать сейчас"
-}
-}
-
----
-
-# 10. Критерии решения
-
-PASS:
-
-* нет критичных ошибок;
-* нет противоречий в цене/весе/MOQ/WB-метриках;
-* экономика честно помечена;
-* рынок честно помечен;
-* verdict содержит следующий шаг;
-* нет raw debug, NaN, undefined, null, 0 ¥, 0 кг.
-
-FIX_REQUIRED:
-
-* есть исправимые ошибки;
-* отчёт можно показать после правок;
-* нет опасных утверждений, которые полностью ломают вывод.
-
-BLOCK:
-
-* отчёт вводит пользователя в заблуждение;
-* есть критичные противоречия;
-* экономика или рынок представлены как точные без оснований;
-* есть опасные неподтверждённые claims;
-* пользователь может принять плохое закупочное решение из-за отчёта.
-
----
-
-# Вход
-
-Проверь данные ниже.
 
 DATA:
-
 {{QA_REVIEW_PACKAGE}}
 `;
+
+function compactQaPackage(snapshot: AnalysisSnapshot, artifacts: Record<string, unknown>): Record<string, unknown> {
+  const s = snapshot as any;
+  return {
+    snapshot: {
+      offerId: s.offerId,
+      productContext: s.productContext,
+      supplier: s.supplier,
+      purchasePrice: s.purchasePrice,
+      weight: s.weight,
+      sku: { ...s.sku, variants: s.sku?.variants?.slice?.(0, 8) ?? [] },
+      market: {
+        directAnalogsCount: s.market?.directAnalogsCount,
+        similarAnalogsCount: s.market?.similarAnalogsCount,
+        broadCategoryCount: s.market?.broadCategoryCount,
+        crossBorderCount: s.market?.crossBorderCount,
+        marketConfirmed: s.market?.marketConfirmed,
+        canUseForEconomics: s.market?.canUseForEconomics,
+        displayedMainPriceRub: s.market?.displayedMainPriceRub,
+      },
+      economics: s.economics,
+      missingData: s.missingData,
+      conflicts: s.conflicts,
+      riskFlags: s.riskFlags,
+    },
+    artifacts,
+  };
+}
 
 export async function runQaGate(
   snapshot: AnalysisSnapshot,
@@ -267,8 +83,8 @@ export async function runQaGate(
     return { decision: 'BLOCK', qualityScore: 0, issues: ['QA unavailable: no API key'], criticalIssues: ['QA Gate недоступен — полный отчёт нельзя показывать'] } as any;
   }
 
-  const input = JSON.stringify({ snapshot, artifacts }, null, 0).slice(0, 8000);
-  const prompt = QA_GATE_PROMPT + '\n\nDATA:\n' + input;
+  const input = JSON.stringify(compactQaPackage(snapshot, artifacts), null, 0).slice(0, 6500);
+  const prompt = QA_GATE_PROMPT.replace('{{QA_REVIEW_PACKAGE}}', input);
 
   for (const model of QA_MODELS) {
     try {
@@ -277,14 +93,14 @@ export async function runQaGate(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 2000,
-          temperature: 0.1,
+          max_tokens: 1400,
+          temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — QA-ревьюер CardZip. Верни СТРОГО JSON.' },
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!res.ok) {
         console.log(`[qa-gate] ${model} HTTP ${res.status}`);

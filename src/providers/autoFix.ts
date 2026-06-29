@@ -10,142 +10,32 @@ function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 }
 
-const AUTO_FIX_PROMPT = `# CardZip Auto-Fix Prompt v1
+const AUTO_FIX_PROMPT = `CardZip Auto-Fix v2 compact.
 
-Ты — редактор и корректировщик CardZip.
+Исправь только пользовательские тексты по QA issues. Не анализируй товар заново. Snapshot — источник правды.
 
-Твоя задача — исправить пользовательские материалы по результатам Expert QA Gate.
-
-Ты не должен заново анализировать товар. Ты должен применить только те правки, которые указаны в QA result, и сохранить смысл AnalysisSnapshot.
-
----
-
-# 1. Вход
-
-Тебе передаются:
-
-1. AnalysisSnapshot — источник правды.
-2. GeneratedArtifacts — текущие тексты:
-
-   * UserCard
-   * ExpertReport
-   * WbMaterials
-   * BuyerBrief
-   * SupplierMessage
-   * LastMessage
-3. QaResult — результат проверки:
-
-   * decision
-   * criticalIssues
-   * warnings
-   * requiredEdits
-   * safeUserSummary
-
----
-
-# 2. Главные правила
-
-1. AnalysisSnapshot — источник правды.
-2. Не придумывай новые данные.
-3. Не добавляй неподтверждённые свойства.
-4. Не меняй числа, если они не указаны в AnalysisSnapshot или requiredEdits.
-5. Не считай экономику.
-6. Не считай ROI.
-7. Не меняй структуру без необходимости.
-8. Исправляй только проблемные места.
-9. Если правка невозможна без новых данных, замени уверенную формулировку на осторожную.
-10. Пользовательский текст должен стать безопасным, понятным и непротиворечивым.
-
----
-
-# 3. Что исправлять обязательно
-
-Обязательно удалить или заменить:
-
-* \`0 ¥\`;
-* \`0 кг\`;
-* \`NaN\`;
-* \`undefined\`;
-* \`null\`;
-* длинные float-значения;
-* raw debug-output;
-* неподтверждённые claims;
-* буквальные запрещённые claims даже в секциях “нельзя писать” — заменить на нейтральные категории: “влагозащита без подтверждения”, “сертификация без документов”, “обещания безопасности/качества без подтверждения”;
-* противоречивые MOQ/цены/вес/WB-метрики;
-* ROI/маржу без подтверждённого рынка;
-* “можно закупать”, если данные неполные;
-* raw китайские атрибуты в пользовательской карточке без перевода.
-
----
-
-# 4. Как исправлять
-
-Примеры:
-
-Если цена отсутствует:
-
-* не писать \`0 ¥\`;
-* писать \`цена уточняется\` или \`—\`.
-
-Если вес отсутствует:
-
-* не писать \`0 кг\`;
-* писать \`вес уточняется\` или \`—\`.
-
-Если рынок не подтверждён:
-
-* не писать “рыночная цена”;
-* писать “прямые аналоги не подтверждены”;
-* ROI и маржу не выводить.
-
-Если экономика предварительная:
-
-* писать “предварительно”;
-* добавить дисклеймер.
-
-Если SKU не выбран:
-
-* писать “финальная цена зависит от выбранного SKU”.
-
-Если есть broad category:
-
-* писать “широкая категория не используется для экономики”.
-
-Если есть cross-border:
-
-* писать “cross-border не используется для экономики локального WB”.
-
----
-
-# 5. Верни исправленные материалы
+Правила:
+- не меняй числа, если их нет в snapshot;
+- не считай экономику/ROI;
+- убери 0 ¥/0 ₽/0 кг/NaN/undefined/null/raw/debug;
+- ROI/маржу/цену продажи убери, если snapshot.economics.canShowRoi!=true;
+- claims без подтверждения замени на “уточнить/подтвердить у поставщика”;
+- в “нельзя писать” используй категории риска, а не буквальные рекламные claims;
+- “можно закупать” замени на “проверять дальше/только образец”, если SKU/вес/рынок неполные.
 
 Верни строго JSON:
-
 {
-"fixed": true,
-"summary": "что исправлено",
-"artifacts": {
-"UserCard": "...",
-"ExpertReport": "...",
-"WbMaterials": "...",
-"BuyerBrief": "...",
-"SupplierMessage": "...",
-"LastMessage": "..."
-},
-"remainingRisks": [
-"..."
-],
-"needsSecondQa": true
+  "fixed": true,
+  "summary": "что исправлено",
+  "userCard": "...",
+  "seoText": "...",
+  "buyerBrief": "...",
+  "supplierQuestions": "...",
+  "remainingRisks": [],
+  "needsSecondQa": false
 }
 
----
-
-# Вход
-
-Исправь материалы ниже.
-
 DATA:
-
 {{AUTO_FIX_PACKAGE}}
 `;
 
@@ -164,6 +54,7 @@ export async function runAutoFix(
   const input = JSON.stringify({
     artifacts,
     issues: qaResult.issues,
+    requiredEdits: (qaResult as any).requiredEdits ?? [],
     snapshot: {
       purchasePrice: snapshot.purchasePrice,
       weight: snapshot.weight,
@@ -171,9 +62,9 @@ export async function runAutoFix(
       economics: snapshot.economics,
       riskFlags: snapshot.riskFlags,
     },
-  }, null, 0).slice(0, 6000);
+  }, null, 0).slice(0, 5000);
 
-  const prompt = AUTO_FIX_PROMPT + '\n\nDATA:\n' + input;
+  const prompt = AUTO_FIX_PROMPT.replace('{{AUTO_FIX_PACKAGE}}', input);
 
   for (const model of FIX_MODELS) {
     try {
@@ -182,8 +73,8 @@ export async function runAutoFix(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 3000,
-          temperature: 0.1,
+          max_tokens: 1800,
+          temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — автокорректор CardZip. Верни СТРОГО JSON с исправленными полями.' },
             { role: 'user', content: prompt },

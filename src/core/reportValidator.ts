@@ -44,23 +44,98 @@ const RAW_DEBUG_PATTERN = /\b(?:debug|rawPriceFields|extraInfoKeys|quote_type|st
 const ROI_PATTERN = /\b(?:ROI|марж[аиу]|прибыль|рентабельность)\b[^\n\r]*(?:\d|%|₽)/i;
 const MARKET_PRICE_PATTERN = /(?:рыночн[а-яё]*\s+цен[а-яё]*|цена\s+продажи|sellPrice|marketPrice)[^\n\r]*(?:\d|₽)/i;
 const POSITIVE_BUY_PATTERN = /(?:можно\s+(?:закупать|брать|тестировать)|заказать\s+тест|тест\s*\d+\s*[–-]\s*\d+\s*шт|закупка\s+целесообразна)/i;
-const UNCONFIRMED_CLAIMS = [
-  'водонепроницаемый',
-  'влагозащищенный',
-  'влагозащищённый',
-  'ip67',
-  'ip68',
-  'сертифицированный',
-  'сертификат есть',
-  'безопасный',
-  'лечебный',
-  'медицинский',
-  'ортопедический',
-  'гипоаллергенный',
-  'антибактериальный',
-  'для детей',
-  'премиальный',
-  'профессиональный',
+type ClaimPolicy = {
+  id: string;
+  label: string;
+  severity: HardValidatorSeverity;
+  patterns: RegExp[];
+  evidencePattern: RegExp;
+  replacement: string;
+  negativeContextReplacement: string;
+};
+
+const BASE_CLAIM_POLICIES: ClaimPolicy[] = [
+  {
+    id: 'protection_rating',
+    label: 'класс защиты / IP-рейтинг',
+    severity: 'critical',
+    patterns: [/\bIP\s*\d{2,3}\s*[\/\-]\s*IP?\s*\d{2,3}\b/gi, /\bIP\s*\d{2,3}\b/gi],
+    evidencePattern: /\bIP\s*\d{2,3}\b|класс\s+защит/i,
+    replacement: 'заявленный класс защиты — уточнить у поставщика',
+    negativeContextReplacement: 'неподтверждённый класс защиты',
+  },
+  {
+    id: 'water_resistance',
+    label: 'влагозащита / водонепроницаемость',
+    severity: 'high',
+    patterns: [/водонепроницаем\w*/gi, /влагозащищ[её]нн\w*/gi, /waterproof/gi],
+    evidencePattern: /водонепрониц|влагозащит|waterproof|\bIP\s*\d{2,3}\b/i,
+    replacement: 'заявленная влагозащита — уточнить у поставщика',
+    negativeContextReplacement: 'влагозащита без подтверждения',
+  },
+  {
+    id: 'certification',
+    label: 'сертификация / документы',
+    severity: 'critical',
+    patterns: [/сертифицир[а-яё]*/gi, /сертификат\s+есть/gi, /сертифицированн\w*/gi, /\bEAC\b/gi, /ТР\s*ТС/gi, /деклараци[яи]/gi],
+    evidencePattern: /сертифик|декларац|\bEAC\b|ТР\s*ТС|\bCE\b|протокол\s+испытан/i,
+    replacement: 'сертификацию нужно подтвердить документами',
+    negativeContextReplacement: 'сертификация без документов',
+  },
+  {
+    id: 'safety_compliance',
+    label: 'безопасность / соответствие нормам',
+    severity: 'high',
+    patterns: [/безопасн[а-яё]*/gi, /нетоксичн[а-яё]*/gi, /non[-\s]?toxic/gi],
+    evidencePattern: /безопасн|нетоксич|non[-\s]?toxic|протокол\s+испытан|сертифик|декларац/i,
+    replacement: 'безопасность нужно подтвердить документами/составом',
+    negativeContextReplacement: 'обещания безопасности без подтверждения',
+  },
+  {
+    id: 'regulated_audience',
+    label: 'детское назначение / регулируемая аудитория',
+    severity: 'critical',
+    patterns: [/для\s+детей/gi, /детск[а-яё]*/gi, /kids|children/gi],
+    evidencePattern: /детск|для\s+детей|kids|children|сертифик|декларац/i,
+    replacement: 'детское назначение — только после подтверждения документов',
+    negativeContextReplacement: 'детское назначение без документов',
+  },
+  {
+    id: 'medical_health',
+    label: 'медицинские / лечебные свойства',
+    severity: 'critical',
+    patterns: [/лечебн[а-яё]*/gi, /медицинск[а-яё]*/gi, /ортопедическ[а-яё]*/gi, /гипоаллергенн[а-яё]*/gi, /антибактериальн[а-яё]*/gi, /medical|therapy|hypoallergenic|antibacterial/gi],
+    evidencePattern: /медиц|лечеб|ортопед|гипоаллерген|антибактериальн|medical|therapy|сертифик|регистрационн/i,
+    replacement: 'медицинские/лечебные свойства не подтверждены',
+    negativeContextReplacement: 'медицинские/лечебные claims без документов',
+  },
+  {
+    id: 'quality_grade',
+    label: 'класс качества / премиальность',
+    severity: 'medium',
+    patterns: [/премиальн[а-яё]*/gi, /профессиональн[а-яё]*/gi, /лучший|топовый|идеальн[а-яё]*/gi, /premium|professional|best/gi],
+    evidencePattern: /премиальн|профессиональн|premium|professional|серия|модель|версия|grade/i,
+    replacement: 'класс качества требует подтверждения',
+    negativeContextReplacement: 'обещания класса качества без подтверждения',
+  },
+  {
+    id: 'authenticity_brand',
+    label: 'оригинальность / бренд',
+    severity: 'critical',
+    patterns: [/оригинальн[а-яё]*/gi, /брендов[а-яё]*/gi, /official|original|authentic/gi],
+    evidencePattern: /оригинальн|official|authentic|бренд|товарн[а-яё]+\s+знак|лиценз/i,
+    replacement: 'оригинальность/бренд нужно подтвердить документами',
+    negativeContextReplacement: 'оригинальность/бренд без подтверждения',
+  },
+  {
+    id: 'eco_food_contact',
+    label: 'эко / пищевой контакт',
+    severity: 'high',
+    patterns: [/экологичн[а-яё]*/gi, /эко[-\s]?материал[а-яё]*/gi, /пищев[а-яё]+\s+(?:пластик|силикон|контакт)/gi, /food[-\s]?grade|eco[-\s]?friendly/gi],
+    evidencePattern: /экологич|эко|food[-\s]?grade|пищев|сертифик|декларац|протокол/i,
+    replacement: 'эко/пищевой контакт нужно подтвердить документами',
+    negativeContextReplacement: 'эко/пищевой claim без документов',
+  },
 ];
 
 function toPlainText(value: unknown): string {
@@ -171,24 +246,79 @@ function sanitizeArtifacts(artifacts: Record<string, unknown>, snapshot?: Record
   return fixed;
 }
 
-function hasConfirmedClaim(snapshot: Record<string, unknown>, claim: string): boolean {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeClaimId(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-zа-яё0-9]+/gi, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 60) || 'dynamic_claim';
+}
+
+function getSnapshotClaimText(snapshot: Record<string, unknown>): string {
   const productContext = asRecord(snapshot.productContext);
+  const productIntelligence = asRecord(productContext.productIntelligence);
   const seoPolicy = asRecord(productContext.seoPolicy);
-  // Only allowed/confirmed claims can confirm a claim. forbiddenClaims must never
-  // be treated as evidence; otherwise the validator may whitelist a word just
-  // because Product Intelligence explicitly banned it.
-  const text = toPlainText([
+  const reportRules = asRecord(productIntelligence.reportRules);
+  return toPlainText([
     seoPolicy.allowedClaims,
+    reportRules.seoAllowedClaims,
     asRecord(productContext.facts),
     asRecord(snapshot.raw1688).attributesRaw,
   ]).toLowerCase();
+}
 
-  if (claim.startsWith('ip')) return text.includes(claim);
-  if (claim.includes('водо') || claim.includes('влаго')) return /водонепрониц|влагозащит|ip\s*\d{2}/i.test(text);
-  if (claim.includes('серти')) return /сертифик|декларац|eac|тр\s*тс|ce\b/i.test(text);
-  if (claim.includes('дет')) return /детск|реб[её]н|children|kids/i.test(text);
-  if (claim.includes('леч') || claim.includes('медиц') || claim.includes('ортопед')) return /медиц|лечеб|ортопед|medical|therapy/i.test(text);
-  return text.includes(claim);
+function collectDynamicForbiddenClaims(snapshot: Record<string, unknown>): string[] {
+  const productContext = asRecord(snapshot.productContext);
+  const productIntelligence = asRecord(productContext.productIntelligence);
+  const seoPolicy = asRecord(productContext.seoPolicy);
+  const reportRules = asRecord(productIntelligence.reportRules);
+  const raw = [
+    ...String(toPlainText(seoPolicy.forbiddenClaims)).split(/\n|,|;/),
+    ...String(toPlainText(reportRules.seoForbiddenClaims)).split(/\n|,|;/),
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const value = item.replace(/^[-•\s]+/g, '').trim();
+    if (!value || value.length < 3 || value.length > 80) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+function buildClaimPolicies(snapshot: Record<string, unknown>): ClaimPolicy[] {
+  const byId = new Map<string, ClaimPolicy>();
+  for (const policy of BASE_CLAIM_POLICIES) byId.set(policy.id, policy);
+
+  for (const claim of collectDynamicForbiddenClaims(snapshot)) {
+    const id = `dynamic_${normalizeClaimId(claim)}`;
+    if (byId.has(id)) continue;
+    const exact = new RegExp(escapeRegExp(claim), 'gi');
+    byId.set(id, {
+      id,
+      label: claim,
+      severity: 'high',
+      patterns: [exact],
+      evidencePattern: new RegExp(escapeRegExp(claim), 'i'),
+      replacement: 'неподтверждённое свойство — уточнить у поставщика',
+      negativeContextReplacement: 'неподтверждённое свойство без документов',
+    });
+  }
+
+  return [...byId.values()];
+}
+
+function hasConfirmedClaim(snapshot: Record<string, unknown>, policy: ClaimPolicy): boolean {
+  // Dynamic forbidden claims are intentionally not confirmed by their own
+  // presence in forbiddenClaims. They can be confirmed only by allowedClaims/facts/raw.
+  return policy.evidencePattern.test(getSnapshotClaimText(snapshot));
 }
 
 function inferSafeSummary(snapshot: Record<string, unknown>, issues: HardValidatorIssue[]): HardValidatorSafeSummary {
@@ -236,14 +366,15 @@ function inferSafeSummary(snapshot: Record<string, unknown>, issues: HardValidat
   };
 }
 
-function textHasAnyClaim(text: string, claim: string): boolean {
-  const lower = text.toLowerCase();
-  if (claim === 'ip67' || claim === 'ip68') return lower.includes(claim);
-  return lower.includes(claim);
+function textHasClaim(text: string, policy: ClaimPolicy): boolean {
+  return policy.patterns.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(text);
+  });
 }
 
 function isNegativeClaimContext(line: string): boolean {
-  return /(?:нельзя|запрещено|не\s+писать|не\s+использовать|не\s+утверждать|недопустимо|запрет)/i.test(line);
+  return /(?:нельзя|запрещено|не\s+писать|не\s+использовать|не\s+утверждать|недопустимо|запрет|требует\s+уточнения|нужно\s+подтвердить)/i.test(line);
 }
 
 function textForClaimScan(text: string): string {
@@ -253,49 +384,45 @@ function textForClaimScan(text: string): string {
     .join('\n');
 }
 
-function neutralizeClaimWarningLine(line: string): string {
+function replaceClaimPatterns(text: string, policy: ClaimPolicy, replacement: string): string {
+  let fixed = text;
+  for (const pattern of policy.patterns) {
+    fixed = fixed.replace(pattern, replacement);
+  }
+  return fixed;
+}
+
+function neutralizeClaimWarningLine(line: string, policies: ClaimPolicy[]): string {
   if (!isNegativeClaimContext(line)) return line;
-  return line
-    .replace(/IP\s*67\s*\/\s*IP\s*68|IP67\s*\/\s*IP68/gi, 'неподтверждённый IP-рейтинг')
-    .replace(/IP\s*\d{2}|IP\d{2}/gi, 'неподтверждённый IP-рейтинг')
-    .replace(/водонепроницаем[а-яё]*|влагозащищ[её]нн[а-яё]*/gi, 'неподтверждённая влагозащита')
-    .replace(/сертифицир[а-яё]*|сертификат\s+есть/gi, 'неподтверждённая сертификация')
-    .replace(/безопасн[а-яё]*/gi, 'неподтверждённая безопасность')
-    .replace(/премиальн[а-яё]*/gi, 'неподтверждённый класс качества')
-    .replace(/профессиональн[а-яё]*/gi, 'неподтверждённый профессиональный класс')
-    .replace(/для детей/gi, 'детское назначение без документов')
-    .replace(/лечебн[а-яё]*|медицинск[а-яё]*|ортопедическ[а-яё]*|гипоаллергенн[а-яё]*|антибактериальн[а-яё]*/gi, 'медицинские/лечебные claims без документов');
+  return policies.reduce((current, policy) => replaceClaimPatterns(current, policy, policy.negativeContextReplacement), line);
 }
 
 function sanitizeUnconfirmedClaims(text: string, snapshot: Record<string, unknown>): string {
-  let fixed = String(text ?? '')
-    .replace(/IP\s*67\s*\/\s*IP\s*68|IP67\s*\/\s*IP68/gi, 'заявленный класс защиты — уточнить у поставщика')
-    .split(/\r?\n/)
-    .map(neutralizeClaimWarningLine)
-    .join('\n');
+  const policies = buildClaimPolicies(snapshot);
+  const fixedLines = String(text ?? '').split(/\r?\n/).map((line) => {
+    if (isNegativeClaimContext(line)) return neutralizeClaimWarningLine(line, policies);
+    let fixedLine = line;
+    for (const policy of policies) {
+      if (!hasConfirmedClaim(snapshot, policy)) {
+        fixedLine = replaceClaimPatterns(fixedLine, policy, policy.replacement);
+      }
+    }
+    return fixedLine;
+  });
 
-  const replaceIfUnconfirmed = (claim: string, pattern: RegExp, replacement: string) => {
-    if (!hasConfirmedClaim(snapshot, claim)) fixed = fixed.replace(pattern, replacement);
-  };
-
-  replaceIfUnconfirmed('ip67', /\bIP\s*67\b|\bIP67\b/gi, 'заявленный класс защиты — уточнить у поставщика');
-  replaceIfUnconfirmed('ip68', /\bIP\s*68\b|\bIP68\b/gi, 'заявленный класс защиты — уточнить у поставщика');
-  replaceIfUnconfirmed('водонепроницаемый', /водонепроницаем\w*/gi, 'заявленная влагозащита — уточнить у поставщика');
-  replaceIfUnconfirmed('влагозащищенный', /влагозащищ[её]нн\w*/gi, 'заявленная влагозащита — уточнить у поставщика');
-  replaceIfUnconfirmed('сертифицированный', /сертифицир[а-яё]*|сертификат\s+есть/gi, 'сертификацию нужно подтвердить');
-  replaceIfUnconfirmed('безопасный', /безопасн[а-яё]*/gi, 'требует подтверждения состава/документов');
-  replaceIfUnconfirmed('премиальный', /премиальн[а-яё]*/gi, 'улучшенная версия по заявлению поставщика');
-  replaceIfUnconfirmed('профессиональный', /профессиональн[а-яё]*/gi, 'для профессионального применения — только после подтверждения');
-  replaceIfUnconfirmed('для детей', /для\s+детей/gi, 'для соответствующей аудитории — только после подтверждения документов');
-  replaceIfUnconfirmed('лечебный', /лечебн[а-яё]*|медицинск[а-яё]*|ортопедическ[а-яё]*|гипоаллергенн[а-яё]*|антибактериальн[а-яё]*/gi, 'медицинские/лечебные свойства не подтверждены');
-
-  return fixed.replace(/\s+—\s+уточнить у поставщика\s+—\s+уточнить у поставщика/gi, ' — уточнить у поставщика');
+  return fixedLines
+    .join('\n')
+    .replace(/\s+—\s+уточнить у поставщика\s+—\s+уточнить у поставщика/gi, ' — уточнить у поставщика')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
-function unresolvedAfterSanitizer(issue: HardValidatorIssue, sanitizedText: string): boolean {
+function unresolvedAfterSanitizer(issue: HardValidatorIssue, sanitizedText: string, snapshot: Record<string, unknown>): boolean {
   if (issue.field.startsWith('claim.')) {
-    const claim = issue.field.slice('claim.'.length);
-    return textHasAnyClaim(textForClaimScan(sanitizedText), claim);
+    const claimId = issue.field.slice('claim.'.length);
+    const policy = buildClaimPolicies(snapshot).find((item) => item.id === claimId);
+    return policy ? textHasClaim(textForClaimScan(sanitizedText), policy) : false;
   }
   if (issue.field === 'artifacts.price') return ZERO_PRICE_PATTERN.test(sanitizedText);
   if (issue.field === 'artifacts.weight') return ZERO_WEIGHT_PATTERN.test(sanitizedText);
@@ -396,9 +523,9 @@ export function runHardValidator(input: {
   }
 
   const claimScanText = textForClaimScan(fullText);
-  for (const claim of UNCONFIRMED_CLAIMS) {
-    if (textHasAnyClaim(claimScanText, claim) && !hasConfirmedClaim(snapshot, claim)) {
-      addIssue(issues, `claim.${claim}`, ['ip67', 'ip68', 'сертифицированный', 'для детей', 'лечебный', 'медицинский'].includes(claim) ? 'critical' : 'high', `Неподтверждённый claim в пользовательских материалах: “${claim}”.`, 'Удалить claim или заменить на вопрос поставщику/риск.');
+  for (const policy of buildClaimPolicies(snapshot)) {
+    if (textHasClaim(claimScanText, policy) && !hasConfirmedClaim(snapshot, policy)) {
+      addIssue(issues, `claim.${policy.id}`, policy.severity, `Неподтверждённое утверждение в пользовательских материалах: ${policy.label}.`, 'Удалить claim или заменить на нейтральное “уточнить/подтвердить у поставщика”.');
     }
   }
 
@@ -414,8 +541,8 @@ export function runHardValidator(input: {
 
   const fixedArtifacts = sanitizeArtifacts(artifacts, snapshot);
   const sanitizedText = toPlainText(fixedArtifacts);
-  const unresolvedIssues = issues.filter((issue) => unresolvedAfterSanitizer(issue, sanitizedText));
-  const autoFixedIssues = issues.filter((issue) => !unresolvedAfterSanitizer(issue, sanitizedText));
+  const unresolvedIssues = issues.filter((issue) => unresolvedAfterSanitizer(issue, sanitizedText, snapshot));
+  const autoFixedIssues = issues.filter((issue) => !unresolvedAfterSanitizer(issue, sanitizedText, snapshot));
   const allWarnings = [
     ...warnings,
     ...autoFixedIssues.map((issue) => ({
