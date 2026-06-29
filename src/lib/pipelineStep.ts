@@ -36,11 +36,18 @@ function isOldVercelUrl(value: string): boolean {
   return /(?:^https?:\/\/)?[^\s/]*vercel\.app(?:\/|$)/i.test(value);
 }
 
+function isServerlessRuntime(): boolean {
+  return !!process.env.VERCEL;
+}
+
+function triggerMode(): string {
+  return String(process.env.PIPELINE_TRIGGER_MODE ?? '').toLowerCase().trim();
+}
 
 function isDetachedMode(): boolean {
-  const mode = String(process.env.PIPELINE_TRIGGER_MODE ?? '').toLowerCase().trim();
+  const mode = triggerMode();
   if (mode === 'await' || mode === 'await_response' || mode === 'sync') return false;
-  if (mode === 'detached' || mode === 'background' || mode === 'fire_and_forget') return true;
+  if (mode === 'detached' || mode === 'background' || mode === 'fire_and_forget' || mode === 'local') return true;
 
   // Railway/Docker/VPS runtimes do not need Vercel-style step chaining with a short
   // response timeout. Detached mode lets the next route finish even if LLM/1688 calls
@@ -49,6 +56,17 @@ function isDetachedMode(): boolean {
     return true;
   }
   return !process.env.VERCEL;
+}
+
+function shouldUseLocalStepRunner(): boolean {
+  const mode = triggerMode();
+  if (mode === 'http' || mode === 'detached_http' || mode === 'external_http') return false;
+  if (mode === 'local' || mode === 'in_process' || mode === 'detached') return !isServerlessRuntime();
+
+  // On Railway/VPS the safest default is in-process chaining. It avoids the whole class
+  // of APP_URL/INTERNAL_APP_URL/self-fetch bugs after SKU selection. HTTP self-calls are
+  // still available by setting PIPELINE_TRIGGER_MODE=detached_http.
+  return !isServerlessRuntime() && (isRailwayRuntime() || !process.env.VERCEL);
 }
 
 export function getPipelineBaseUrl(req?: PipelineRequestLike): string {
@@ -85,17 +103,108 @@ export function getPipelineBaseUrl(req?: PipelineRequestLike): string {
   return `${proto}://${host}`;
 }
 
+type MockResponse = {
+  statusCode: number;
+  headersSent: boolean;
+  status(code: number): MockResponse;
+  json(payload: unknown): MockResponse;
+  end(payload?: unknown): MockResponse;
+};
+
+function createMockResponse(logPrefix: string, path: string): MockResponse {
+  return {
+    statusCode: 200,
+    headersSent: false,
+    status(code: number) {
+      this.statusCode = code;
+      return this;
+    },
+    json(payload: unknown) {
+      this.headersSent = true;
+      if (this.statusCode >= 400) {
+        console.error(`[${logPrefix}] local ${path} returned ${this.statusCode}: ${JSON.stringify(payload).slice(0, 240)}`);
+      }
+      return this;
+    },
+    end(payload?: unknown) {
+      this.headersSent = true;
+      if (this.statusCode >= 400) {
+        console.error(`[${logPrefix}] local ${path} ended ${this.statusCode}: ${String(payload ?? '').slice(0, 240)}`);
+      }
+      return this;
+    },
+  };
+}
+
+async function loadLocalHandler(path: string): Promise<any | null> {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  switch (normalized) {
+    case '/api/step1-elim':
+      return (await import('../../api/step1-elim')).default;
+    case '/api/step2-ai':
+      return (await import('../../api/step2-ai')).default;
+    case '/api/step3-market':
+      return (await import('../../api/step3-market')).default;
+    case '/api/step4-send':
+      return (await import('../../api/step4-send')).default;
+    case '/api/step5-qa':
+      return (await import('../../api/step5-qa')).default;
+    case '/api/step6-send':
+      return (await import('../../api/step6-send')).default;
+    default:
+      return null;
+  }
+}
+
+function dispatchLocalPipelineStep(path: string, body: object, logPrefix: string): boolean {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+
+  // Do not await: this keeps Telegram webhook/callback responses fast while still
+  // running the pipeline inside the same Railway container. It is intentionally not
+  // tied to APP_URL, PUBLIC_APP_URL, DNS or self-fetch.
+  setImmediate(async () => {
+    try {
+      const handler = await loadLocalHandler(normalized);
+      if (!handler) {
+        console.error(`[${logPrefix}] local pipeline does not know route ${normalized}`);
+        return;
+      }
+
+      const req = {
+        method: 'POST',
+        body,
+        headers: {
+          host: `127.0.0.1:${process.env.PORT || process.env.BOT_PORT || '8080'}`,
+          'x-forwarded-proto': 'http',
+        },
+      };
+      const res = createMockResponse(logPrefix, normalized);
+      await handler(req, res);
+      console.log(`[${logPrefix}] local ${normalized} finished with status ${res.statusCode}`);
+    } catch (error: any) {
+      console.error(`[${logPrefix}] local ${normalized} failed: ${error?.message ?? String(error)}`);
+    }
+  });
+
+  console.log(`[${logPrefix}] local ${normalized} dispatched`);
+  return true;
+}
+
 export async function triggerPipelineStep(
   req: PipelineRequestLike | undefined,
   path: string,
   body: object,
   options: TriggerOptions = {}
 ): Promise<boolean> {
-  const baseUrl = getPipelineBaseUrl(req);
   const attempts = Math.max(1, options.attempts ?? 2);
   const timeoutMs = Math.max(1_000, options.timeoutMs ?? 8_000);
   const logPrefix = options.logPrefix ?? 'pipeline';
 
+  if (isDetachedMode() && shouldUseLocalStepRunner()) {
+    return dispatchLocalPipelineStep(path, body, logPrefix);
+  }
+
+  const baseUrl = getPipelineBaseUrl(req);
   if (!baseUrl) {
     console.error(`[${logPrefix}] Cannot trigger ${path}: APP_URL/PUBLIC_APP_URL/INTERNAL_APP_URL or request host is missing`);
     return false;
@@ -104,10 +213,9 @@ export async function triggerPipelineStep(
   const url = `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 
   if (isDetachedMode()) {
-    // Railway/VPS mode: do not wait for the whole next step. But do wait a very short
-    // time to catch immediate problems such as wrong APP_URL/port, DNS failure, or 404.
-    // Without this, SKU callbacks could show “Обрабатываем выбранный вариант...” forever
-    // while the detached self-call had already failed in the background.
+    // Railway/VPS HTTP mode: do not wait for the whole next step. But do wait a very
+    // short time to catch immediate problems such as wrong APP_URL/port, DNS failure,
+    // or 404. Prefer local mode on Railway unless a multi-instance HTTP topology needs it.
     const request = fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

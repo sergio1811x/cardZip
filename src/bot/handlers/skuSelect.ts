@@ -70,20 +70,17 @@ export async function handleSkuSelect(ctx: Context) {
       detachedAckTimeoutMs: 2_000,
     });
     if (!sent) {
-      await supabase.from('jobs').update({
-        status: 'failed',
-        error: 'sku_step2_trigger_failed',
-        finished_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).eq('id', jobId);
+      // Не валим анализ сразу. На Railway лучше оставить job в elim_done, показать честный
+      // loader и дать watchdog повторно запустить step2. Раньше здесь появлялась ложная
+      // ошибка “Проверьте APP_URL/INTERNAL_APP_URL”, хотя проблема была в HTTP self-call.
+      console.warn(`[skuSelect] initial step2 trigger returned false for job ${jobId}; watchdog will retry`);
       await ctx.telegram.editMessageText(
         job.tg_chat_id,
         job.tg_message_id,
         undefined,
-        '❌ Не удалось продолжить анализ после выбора SKU. Проверьте APP_URL/INTERNAL_APP_URL и повторите анализ.',
+        buildProgressText(35, 'SKU выбран, повторно готовлю запуск AI-разбора'),
         { parse_mode: 'HTML' }
       ).catch(() => {});
-      return;
     }
 
     // Watchdog: if detached self-call did not actually move the job out of elim_done,
@@ -106,17 +103,12 @@ export async function handleSkuSelect(ctx: Context) {
         detachedAckTimeoutMs: 2_000,
       });
       if (!retried) {
-        await supabase.from('jobs').update({
-          status: 'failed',
-          error: 'sku_step2_retry_failed',
-          finished_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }).eq('id', jobId);
+        console.error(`[skuSelect] retry trigger also returned false for job ${jobId}; leaving job for final watchdog`);
         await ctx.telegram.editMessageText(
           job.tg_chat_id,
           job.tg_message_id,
           undefined,
-          '❌ Анализ остановился после выбора SKU: не удалось запустить следующий шаг. Кредит не списан.',
+          buildProgressText(37, 'Запуск AI-разбора задерживается, пробую ещё раз без сброса анализа'),
           { parse_mode: 'HTML' }
         ).catch(() => {});
       }
@@ -127,6 +119,26 @@ export async function handleSkuSelect(ctx: Context) {
       if (!fresh || fresh.status !== 'elim_done') return;
 
       console.error(`[skuSelect] job still stuck at elim_done after SKU selection: ${jobId}`);
+      // Последняя попытка перед fail: на Railway иногда callback успевает обновить UI,
+      // но step2 не стартует из-за сетевого self-call. triggerPipelineStep теперь умеет
+      // local in-process runner, поэтому эта попытка уже не зависит от APP_URL.
+      const finalRetry = await triggerPipelineStep(undefined, '/api/step2-ai', { jobId }, {
+        logPrefix: 'skuSelect-final-watchdog',
+        detachedAckTimeoutMs: 2_000,
+      });
+
+      await ctx.telegram.editMessageText(
+        job.tg_chat_id,
+        job.tg_message_id,
+        undefined,
+        buildProgressText(38, finalRetry
+          ? 'Запустил AI-разбор выбранного SKU ещё раз, продолжаю анализ'
+          : 'AI-разбор выбранного SKU не стартовал, фиксирую понятную ошибку'),
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+
+      if (finalRetry) return;
+
       await supabase.from('jobs').update({
         status: 'failed',
         error: 'sku_step2_not_started_timeout',
@@ -138,10 +150,10 @@ export async function handleSkuSelect(ctx: Context) {
         job.tg_chat_id,
         job.tg_message_id,
         undefined,
-        '❌ Анализ остановился после выбора SKU: следующий шаг не стартовал. Кредит не списан. Проверьте APP_URL/INTERNAL_APP_URL на Railway.',
+        '❌ Анализ остановился после выбора SKU: не удалось запустить AI-разбор даже локально. Кредит не списан. Посмотрите Railway logs по тегу skuSelect-final-watchdog.',
         { parse_mode: 'HTML' }
       ).catch(() => {});
-    }, 60_000);
+    }, 90_000);
   } catch (e) {
     console.error('[skuSelect]', e);
     await ctx.answerCbQuery('Ошибка').catch(() => {});
