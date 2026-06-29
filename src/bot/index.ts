@@ -22,7 +22,16 @@ import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleBackToMa
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
 
-export const bot = new Telegraf(token);
+function makeTgOptions() {
+  const proxyUrl = process.env.TELEGRAM_PROXY;
+  if (!proxyUrl) return {};
+  try {
+    const { HttpsProxyAgent } = require('https-proxy-agent');
+    return { telegram: { agent: new HttpsProxyAgent(proxyUrl) } };
+  } catch { return {}; }
+}
+
+export const bot = new Telegraf(token, makeTgOptions());
 
 // ─── Глобальные middleware ─────────────────────────────────────────────────────
 bot.use(userMiddleware);
