@@ -6,7 +6,7 @@ import { getCategoryRules, detectCategoryFromAttributes, type ProductCategoryTyp
 async function findLastJob(userId: string) {
   const { data } = await supabase
     .from('jobs')
-    .select('result_json')
+    .select('id, result_json')
     .eq('user_id', userId)
     .in('status', ['done', 'sent'])
     .order('created_at', { ascending: false })
@@ -23,8 +23,9 @@ export async function handleSupplierQuestions(ctx: Context) {
   }
 
   await ctx.reply(
-    '📩 <b>Вопросы поставщику</b>\n\n' +
-    'Скопируйте и отправьте поставщику на 1688.\n' +
+    '💬 <b>Текст поставщику</b>\n\n' +
+    'Сначала отправьте вопросы поставщику в чат 1688.\n' +
+    'После ответа нажмите «📥 Внести ответ» — я обновлю себестоимость, статус закупки и документы.\n\n' +
     'Выберите язык:',
     {
       parse_mode: 'HTML',
@@ -120,11 +121,12 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
       text = lines.join('\n');
     }
 
-    const afterText = text + '\n\nПосле ответа поставщика нажмите 📥';
+    const afterText = text + '\n\nПосле ответа поставщика нажмите «📥 Внести ответ» — обновлю закупочный пакет.';
     await ctx.reply(afterText, {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
         [Markup.button.callback('📥 Внести ответ поставщика', 'supplier_confirm')],
+        ...(lastJob?.id ? [[Markup.button.callback('🚀 Дальнейший план', `proc_plan_${lastJob.id}`)]] : []),
       ]),
     });
   } catch (e) {

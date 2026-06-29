@@ -18,7 +18,7 @@ import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 import { handleMyAnalyses, handleAnalysisDetail } from './handlers/myAnalyses';
 import { handleManualWeightStart, handleManualSalePriceStart, handleManualCompetitorsStart, handleManualInputText, getPendingManualInput } from './handlers/manualInputs';
-import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleMaterialsZip, handleMaterialsList, handleBackToMain, handleProductDetail, handleRiskDetail, handleSampleDetail } from './handlers/detailButtons';
+import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleMaterialsZip, handleMaterialsList, handleMaterialsGroup, handleBackToMain, handleProductDetail, handleRiskDetail, handleSampleDetail, handleProcurementPlan } from './handlers/detailButtons';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -181,9 +181,11 @@ bot.action('reset_tariffs', async (ctx) => {
 
 // ─── Детальные кнопки (экономика, WB, материалы) ────────────────────────────
 bot.action(/^product_detail_(.+)$/, handleProductDetail);
+bot.action(/^proc_plan_(.+)$/, handleProcurementPlan);
 bot.action(/^econ_detail_(.+)$/, handleEconDetail);
 bot.action(/^wb_detail_(.+)$/, handleWbDetail);
 bot.action(/^materials_zip_(.+)$/, handleMaterialsZip);
+bot.action(/^materials_group_(questions|buyer|cargo|check|card)_(.+)$/, handleMaterialsGroup);
 bot.action(/^materials_list_(.+)$/, handleMaterialsList);
 bot.action(/^materials_(.+)$/, handleMaterialsResend);
 bot.action(/^risk_detail_(.+)$/, handleRiskDetail);

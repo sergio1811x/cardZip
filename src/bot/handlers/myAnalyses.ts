@@ -104,19 +104,16 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
   if (x.cost.costWithoutCargoRub) {
     text += `Себестоимость без карго: ${fmtRub(x.cost.costWithoutCargoRub)}\n`;
   }
-  if (x.cost.canShowRoi) {
-    text += `Сценарный ROI: ${x.cost.scenarioRoiPercent}% по цене пользователя\n`;
-  } else {
-    text += 'ROI не рассчитан автоматически — это закупочный пакет, не обещание прибыли.\n';
-  }
+  text += 'Следующий шаг: открыть дальнейший план и отправить вопросы поставщику.\n';
 
   if (x.readiness.nextActions.length) {
     text += '\nЧто сделать:\n' + x.readiness.nextActions.slice(0, 3).map((a, i) => `${i + 1}. ${escHtml(a)}`).join('\n');
   }
 
   const buttons = [];
-  buttons.push([Markup.button.callback('📦 Данные 1688', `product_detail_${job.id}`), Markup.button.callback('💰 Экономика', `econ_detail_${job.id}`)]);
-  buttons.push([Markup.button.callback('📎 Файлы', `materials_${job.id}`)]);
+  buttons.push([Markup.button.callback('🚀 Дальнейший план', `proc_plan_${job.id}`)]);
+  buttons.push([Markup.button.callback('💬 Текст поставщику', 'supplier_questions'), Markup.button.callback('📦 Данные товара', `product_detail_${job.id}`)]);
+  buttons.push([Markup.button.callback('📁 Материалы', `materials_${job.id}`)]);
   buttons.push([Markup.button.callback('⬅️ К списку', 'my_analyses')]);
 
   const keyboard = Markup.inlineKeyboard(buttons);

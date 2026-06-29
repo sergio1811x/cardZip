@@ -94,7 +94,7 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model, max_tokens: 3000, temperature: 0.2,
+          model, max_tokens: 2400, temperature: 0.2,
           messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
         }),
         signal: AbortSignal.timeout(20_000),
@@ -116,7 +116,7 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
         headers: { Authorization: `Bearer ${fwKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'accounts/fireworks/models/deepseek-v4-flash',
-          max_tokens: 3000, temperature: 0.2,
+          max_tokens: 2400, temperature: 0.2,
           messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
         }),
         signal: AbortSignal.timeout(20_000),
@@ -366,7 +366,7 @@ async function callLlmWithVision(prompt: string, systemMsg: string, imageBase64:
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model, max_tokens: 4000, temperature: 0.2,
+          model, max_tokens: 3000, temperature: 0.2,
           messages,
         }),
         signal: AbortSignal.timeout(25_000),
@@ -382,132 +382,88 @@ async function callLlmWithVision(prompt: string, systemMsg: string, imageBase64:
   return null;
 }
 
-const INTELLIGENCE_PROMPT = `Ты — товарный аналитик для маркетплейса Wildberries.
+const INTELLIGENCE_PROMPT = `CardZip 2.0 Product Intelligence.
 
-Тебе дан товар с 1688. Если приложено фото — используй его для визуального анализа. Твоя задача:
-1. Понять, что это за товар (по тексту И по фото, если есть).
-2. Очистить смысл от китайского мусора и машинного перевода.
-3. Дать чистые названия (CN без мусора, RU рыночное, для отчёта, для WB).
-4. Определить, как этот товар называют на Wildberries.
-5. Определить видимые на фото характеристики (visibleFeatures).
-6. Определить, с чем товар можно спутать (possibleConfusions).
-7. Определить, какие характеристики важны именно для этого товара.
-8. Определить, какие вопросы поставщику нужно задать.
-9. Определить, какие темы нельзя спрашивать, потому что они не относятся к товару.
-10. Определить, что можно и нельзя писать в SEO.
-11. Сформировать короткие поисковые запросы WB.
+Роль: закупщик 1688. Нужно понять товар и подготовить правила для закупочного пакета: main report, SKU, вопросы поставщику, SEO, ТЗ байеру/карго, риски и образец. Фото используй только для визуально очевидного.
 
 Верни строго JSON без markdown:
-
 {
   "productIdentity": {
-    "marketNameRu": "рыночное название на русском, как на WB",
-    "shortNameRu": "короткое название 2-4 слова",
-    "productKind": "конкретный тип (домашние тапочки, настольный вентилятор, нож-секач)",
-    "categoryPath": ["Обувь", "Домашняя обувь", "Тапочки"],
+    "marketNameRu": "рыночное название",
+    "shortNameRu": "2-4 слова",
+    "productKind": "конкретный тип",
+    "categoryPath": ["..."],
     "categoryType": "shoes|clothes|electronics|home|beauty|accessory|kitchen|other",
-    "subCategoryType": "конкретная подкатегория (тапочки домашние, USB-вентилятор настольный)",
+    "subCategoryType": "подкатегория",
     "audience": "мужской/женский/детский/унисекс",
-    "useCases": ["дом", "дача", "пляж"],
-    "coreObject": "базовый объект (тапочки, вентилятор, нож)",
-    "formFactor": "форм-фактор (закрытые, складной, настольный)",
-    "material": ["EVA", "PVC"],
-    "powerType": ["USB", "аккумулятор", "сеть 220V", "без питания"],
-    "season": "лето/зима/всесезон/не применимо",
+    "useCases": ["сценарии применения"],
+    "coreObject": "базовый объект",
+    "formFactor": "форма/конструкция",
+    "material": ["материалы, если указаны"],
+    "powerType": ["USB/220V/аккумулятор/без питания"],
+    "season": "лето/зима/демисезон/всесезон/не применимо",
     "gender": "мужской/женский/унисекс",
     "ageGroup": "взрослый/детский/все",
-    "importantFeatures": ["нескользящая подошва", "закрытый носок"],
-    "notConfirmedFeatures": ["ортопедическая стелька — не подтверждено"],
-    "visibleFeatures": ["закрытый носок", "рифлёная подошва", "логотип на стельке"],
-    "possibleConfusions": ["пляжные шлёпанцы", "медицинские тапочки", "ортопедические сабо"]
+    "importantFeatures": ["важные свойства"],
+    "notConfirmedFeatures": ["claim — подтвердить"],
+    "visibleFeatures": ["только то, что видно на фото"],
+    "possibleConfusions": ["похожие, но другие товары"]
   },
-
   "cleanTitles": {
-    "titleCnClean": "убери маркетинг и мусор из CN-названия, оставь суть",
-    "titleRuClean": "чистое русское название без мусора",
-    "titleForReport": "название для отчёта, 3-6 слов, понятное байеру",
-    "titleForWb": "как товар назвали бы на WB, 2-4 слова"
+    "titleCnClean": "CN без маркетингового мусора",
+    "titleRuClean": "чистое RU название",
+    "titleForReport": "3-6 слов для отчёта",
+    "titleForWb": "2-4 слова для карточки"
   },
-
   "wbSearch": {
-    "wbCoreQuery": "1-3 слова, рыночный запрос WB",
-    "queryCandidates": ["запрос1", "запрос2", "запрос3"],
-    "negativeSearchTerms": ["кожаные", "ортопедические"],
-    "tooBroadQueries": ["обувь", "тапки"],
-    "tooNarrowQueries": ["тапочки домашние женские зимние меховые с вышивкой"]
+    "wbCoreQuery": "1-3 слова",
+    "queryCandidates": ["3-5 запросов"],
+    "negativeSearchTerms": [],
+    "tooBroadQueries": [],
+    "tooNarrowQueries": []
   },
-
   "matchingRules": {
-    "mustHaveForDirectAnalog": ["домашние тапочки", "закрытый носок"],
-    "allowedDifferences": ["цвет", "рисунок"],
-    "directAnalogBlockers": ["открытый носок", "уличные"],
-    "similarOnlyIf": ["другой материал подошвы"],
-    "rejectIf": ["сандалии", "кроссовки", "ботинки"]
+    "mustHaveForDirectAnalog": [],
+    "allowedDifferences": [],
+    "directAnalogBlockers": [],
+    "similarOnlyIf": [],
+    "rejectIf": []
   },
-
   "reportRules": {
-    "buyerMustCheck": ["вес пары с упаковкой", "размерная сетка", "длина стельки"],
-    "buyerMustNotAsk": ["мощность", "напряжение", "аккумулятор", "рукав"],
-    "seoAllowedClaims": ["домашние", "тёплые", "нескользящие", "мягкие"],
-    "seoForbiddenClaims": ["ортопедические", "медицинские", "натуральная кожа"],
-    "importantAttributesToShow": ["материал верха", "материал подошвы", "сезон"],
-    "attributesToHide": ["артикул", "складской код", "тип торговли"],
-    "riskFlags": ["вес не указан", "размерная сетка не подтверждена"]
+    "buyerMustCheck": ["что проверить"],
+    "buyerMustNotAsk": ["чужие вопросы"],
+    "seoAllowedClaims": ["можно писать"],
+    "seoForbiddenClaims": ["нельзя как факт"],
+    "importantAttributesToShow": ["важные характеристики"],
+    "attributesToHide": ["мусор/служебное"],
+    "riskFlags": ["риски"]
   },
-
   "supplierQuestions": {
-    "ru": ["Какой вес пары с упаковкой?", "Пришлите размерную сетку"],
-    "cn": ["一双鞋带包装的重量是多少？", "请提供厘米尺寸表"]
+    "ru": ["5-10 вопросов"],
+    "cn": ["5-10 вопросов на китайском"]
   },
-
   "dataQuality": {
-    "missingCriticalFields": ["вес", "размерная сетка"],
-    "skuRisk": "mixed_sku — разные типы в одной карточке",
-    "priceRisk": "ok",
-    "weightRisk": "missing",
-    "overallConfidence": "medium",
-    "visionConfidence": "high/medium/low/none — насколько фото помогло определить товар",
-    "textConfidence": "high/medium/low — насколько текстовые данные достаточны",
-    "reason": "цена есть, но вес и стелька не указаны"
+    "missingCriticalFields": [],
+    "skuRisk": "ok|mixed_sku|needs_selection|unknown",
+    "priceRisk": "ok|range|needs_confirmation|missing",
+    "weightRisk": "ok|estimated|missing",
+    "overallConfidence": "high|medium|low",
+    "visionConfidence": "high|medium|low|none",
+    "textConfidence": "high|medium|low",
+    "reason": "почему"
   }
 }
 
-ПРИМЕРЫ:
-
-Для обуви (categoryType=shoes, тапочки/сабо/шлёпанцы):
-- visibleFeatures: закрытый носок, рифлёная подошва, EVA-материал, без каблука
-- possibleConfusions: пляжные шлёпанцы, медицинские тапочки, ортопедические сабо
-- buyerMustNotAsk: мощность, напряжение, аккумулятор, тип вилки, рукав, плотность ткани, усадка
-- seoForbiddenClaims: ортопедические (если не подтверждено), натуральная кожа (если EVA)
-
-Для USB-устройства (categoryType=electronics):
-- visibleFeatures: USB-разъём, кнопка включения, светодиод, компактный размер
-- possibleConfusions: power bank, зарядное устройство, колонка
-- buyerMustNotAsk: размерная сетка, длина стельки, рукав, ткань, усадка
-- buyerMustCheck: тип разъёма, ёмкость аккумулятора, время работы, мощность
-- seoForbiddenClaims: 220V (если USB 5V), бесшумный (если не подтверждено)
-
-Для техники от сети (categoryType=electronics):
-- visibleFeatures: сетевой шнур, вилка, индикатор, корпус пластик
-- possibleConfusions: другие приборы похожей формы
-
-Для одежды (categoryType=clothes):
-- visibleFeatures: тип ткани, крой, застёжка, декоративные элементы
-- possibleConfusions: похожие модели другого назначения
-- buyerMustNotAsk: мощность, напряжение, длина стельки, тип вилки
-- buyerMustCheck: состав ткани, плотность, размерная сетка, замеры, усадка
-
 Правила:
-- Не возвращай китайские слова в русских полях.
-- Не транслитерируй китайские термины.
-- Переводи смысл на нормальный русский язык.
-- Не придумывай неподтверждённые свойства.
-- visibleFeatures: ТОЛЬКО то, что реально видно на фото. Если фото нет — пустой массив.
-- possibleConfusions: товары, которые ПОХОЖИ но НЕ являются этим товаром.
-- cleanTitles: убери из CN-названия маркетинг (踩屎感, 爆款, 网红), оставь суть товара.
-- wbCoreQuery: 1–3 слова, как реально ищут на WB.
-- queryCandidates: короткие, рыночные запросы.
-- visionConfidence: "high" если фото позволило уверенно определить товар, "medium" если фото помогло частично, "low" если фото малоинформативно, "none" если фото не предоставлено.`;
+- Не возвращай китайский в RU-полях. Переводи смысл.
+- Не придумывай материал, размер, вес, документы, рынок или свойства.
+- Сохраняй полезные claims как “заявлено/подтвердить”, не удаляй их.
+- visibleFeatures только с фото; если фото нет — [].
+- SKU: выделяй цвет, размер, модель, pack-count, молнию, шнурок/манжету, размерные примечания.
+- Если “цвет” содержит свойство, не пиши цвет=свойство; перенеси в importantFeatures/notConfirmedFeatures.
+- buyerMustNotAsk должен защищать от чужих чек-листов: обувь ≠ мощность/аккумулятор; техника ≠ стелька/рукав; пассивная ловушка ≠ лампа/220V.
+- SEO: продающий, но безопасный; спорные claims только в уточнения.
+`;
 
 export async function generateProductIntelligence(raw: {
   titleCn: string;

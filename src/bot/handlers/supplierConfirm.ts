@@ -50,7 +50,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
     '• упаковку\n' +
     '• фото/видео/документы\n\n' +
     'После этого обновлю:\n' +
-    '• экономику\n' +
+    '• предварительную себестоимость\n' +
     '• статус закупки\n' +
     '• ТЗ байеру\n' +
     '• ТЗ карго\n' +
@@ -128,6 +128,11 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
         priceCny: extracted.priceCny,
         moq: extracted.moq,
         composition: extracted.composition,
+        dimensions: extracted.dimensions,
+        packaging: extracted.packaging,
+        deliveryDays: extracted.deliveryDays,
+        documents: extracted.documents,
+        photosOrVideos: extracted.photosOrVideos,
         sizes: extracted.sizes,
         productionDays: extracted.productionDays,
       },
@@ -142,7 +147,7 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
         product_data: true,
         sku_parsed: decisionContext.sku.skuCount > 0,
         weight_confirmed: decisionContext.weight.canUseForCargo,
-        dimensions_confirmed: false,
+        dimensions_confirmed: !!extracted.dimensions,
         supplier_reply_received: true,
         sample_ordered: false,
         sample_checked: false,
@@ -161,11 +166,19 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     if (extracted.moq) confirmedLines.push(`• MOQ: ${extracted.moq} шт.`);
     if (extracted.composition) confirmedLines.push(`• материал: ${extracted.composition}`);
     if (extracted.productionDays) confirmedLines.push(`• срок отгрузки/производства: ${extracted.productionDays} дн.`);
+    if (extracted.deliveryDays) confirmedLines.push(`• срок отгрузки: ${extracted.deliveryDays} дн.`);
     if (extracted.sizes) confirmedLines.push(`• размеры: ${extracted.sizes}`);
+    if (extracted.dimensions) confirmedLines.push(`• габариты упаковки: ${extracted.dimensions}`);
+    if (extracted.packaging) confirmedLines.push(`• упаковка: ${extracted.packaging}`);
+    if (extracted.documents) confirmedLines.push(`• документы/сертификаты: ${extracted.documents}`);
+    if (extracted.photosOrVideos) confirmedLines.push(`• фото/видео: ${extracted.photosOrVideos}`);
     if (confirmedLines.length <= 3) confirmedLines.push('• конкретные числовые данные не найдены — сохранён текст ответа для проверки');
     confirmedLines.push('');
-    confirmedLines.push('Обновил:');
-    confirmedLines.push('• экономику');
+    confirmedLines.push('Изменилось:');
+    if (extracted.weightKg) confirmedLines.push('• вес добавлен');
+    if (extracted.weightKg) confirmedLines.push('• карго можно пересчитать по введённому весу');
+    if (extracted.weightKg) confirmedLines.push('• риск “нет веса” закрыт');
+    confirmedLines.push('• предварительная себестоимость обновлена');
     confirmedLines.push('• ТЗ байеру');
     confirmedLines.push('• ТЗ карго');
     confirmedLines.push('• риск-чеклист');
@@ -200,7 +213,12 @@ interface ExtractedData {
   priceCny?: number;
   moq?: number;
   productionDays?: number;
+  deliveryDays?: number;
   sizes?: string;
+  dimensions?: string;
+  packaging?: string;
+  documents?: string;
+  photosOrVideos?: string;
 }
 
 const EXTRACT_MODELS = [
@@ -216,7 +234,12 @@ const EXTRACT_PROMPT = `Извлеки из текста ответа поста
 - priceCny: цена в юанях при оптовом заказе (число)
 - moq: минимальный заказ в штуках (число)
 - productionDays: срок производства в днях (число)
+- deliveryDays: срок отгрузки/доставки до склада в днях (число)
 - sizes: доступные размеры (строка)
+- dimensions: габариты индивидуальной упаковки (строка, например 28×18×6 см)
+- packaging: тип упаковки/комплектация упаковки (строка)
+- documents: документы/сертификаты/протоколы, если поставщик упомянул (строка)
+- photosOrVideos: фото/видео/реальные снимки, если поставщик упомянул (строка)
 
 Если данных нет — не включай поле. Верни ТОЛЬКО JSON.`;
 

@@ -315,7 +315,7 @@ export function buildMarketDecision(_product: any): MarketDecision { return { st
 export function buildCostDecision(input: { priceDecision: PriceDecision; weightDecision: WeightDecision; yuanRate?: number; manualSalePriceRub?: number | null }): CostDecision {
   const { priceDecision: price, weightDecision: weight } = input;
   const yuanRate = input.yuanRate && input.yuanRate > 0 ? input.yuanRate : YUAN_FALLBACK;
-  if (!price.canCalculateCost || !price.calculationPriceYuan) return { status: 'not_calculated_no_price', canShowPurchaseRub: false, canShowCostWithoutCargo: false, canShowCargo: false, canShowRoi: false, purchaseRub: null, costWithoutCargoRub: null, cargoRub: null, totalCostRub: null, manualSalePriceRub: input.manualSalePriceRub ?? null, scenarioProfitRub: null, scenarioRoiPercent: null, breakEvenPriceRub: null, warnings: ['Экономика не рассчитана — нет цены товара.'], nextAction: 'Уточнить цену выбранного SKU у поставщика.' };
+  if (!price.canCalculateCost || !price.calculationPriceYuan) return { status: 'not_calculated_no_price', canShowPurchaseRub: false, canShowCostWithoutCargo: false, canShowCargo: false, canShowRoi: false, purchaseRub: null, costWithoutCargoRub: null, cargoRub: null, totalCostRub: null, manualSalePriceRub: input.manualSalePriceRub ?? null, scenarioProfitRub: null, scenarioRoiPercent: null, breakEvenPriceRub: null, warnings: ['Себестоимость не рассчитана — нет цены товара.'], nextAction: 'Уточнить цену выбранного SKU у поставщика.' };
   const purchaseRub = Math.round(price.calculationPriceYuan * yuanRate);
   const bankRub = Math.round(purchaseRub * BANK_MARKUP);
   const costWithoutCargoRub = purchaseRub + bankRub + DEFAULT_FULFILLMENT_RUB;
@@ -465,7 +465,7 @@ export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: 
     '⚠️ <b>Мешает закупке</b>',
     ...(risks.length ? risks.slice(0, 5).map(s => `• ${html(s)}`) : ['• перед партией нужна ручная проверка рынка и образца']),
     '',
-    '💰 <b>Экономика</b>',
+    '💸 <b>Себестоимость</b>',
     ...costLines.map(html),
     '',
     '📌 <b>Что уточнить у поставщика</b>',
@@ -484,9 +484,7 @@ export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: 
     html(verdict),
     '',
     'Что сделать:',
-    '1. Нажмите «💬 Поставщику» и отправьте вопросы.',
-    '2. Вставьте ответ через «📥 Ответ поставщика».',
-    '3. После ответа я обновлю статус закупки и документы.',
+    'Нажмите «🚀 Дальнейший план» — покажу, что делать по шагам.',
     '',
     `📦 Осталось: ${typeof statusInfo?.creditsRemaining === 'number' ? Math.max(0, statusInfo.creditsRemaining) : 0} анализов`,
   ];
@@ -524,7 +522,7 @@ function useCasesLine(x: ReturnType<typeof buildDecisionContext>): string {
 }
 
 function buildCostSummaryLines(x: ReturnType<typeof buildDecisionContext>): string[] {
-  if (!x.price.canCalculateCost || !x.price.calculationPriceYuan) return ['Экономика не рассчитана — нет цены товара.'];
+  if (!x.price.canCalculateCost || !x.price.calculationPriceYuan) return ['Себестоимость не рассчитана — нет цены товара.'];
   const lines: string[] = [];
   lines.push(`• Закупка: ${cny(x.price.calculationPriceYuan)}${x.cost.purchaseRub ? ` ≈ ${money(x.cost.purchaseRub)}` : ''}`);
   if (x.cost.costWithoutCargoRub) lines.push(`• Себестоимость без карго: ${money(x.cost.costWithoutCargoRub)}`);
@@ -534,6 +532,11 @@ function buildCostSummaryLines(x: ReturnType<typeof buildDecisionContext>): stri
   if (x.cost.canShowRoi) lines.push(`• Сценарный ROI: ${x.cost.scenarioRoiPercent}% по вашей цене продажи.`);
   else lines.push('• ROI не считаю — рынок и продажная цена не заданы.');
   return lines;
+}
+
+function isSleepMask(product: any, x?: ReturnType<typeof buildDecisionContext>): boolean {
+  const t = `${x?.title ?? ''} ${product?.titleRu ?? ''} ${product?.titleCn ?? ''} ${product?.categoryName ?? ''}`.toLowerCase();
+  return /маск[аи]\s+для\s+сна|sleep\s*mask|眼罩|睡眠眼罩|遮光眼罩/.test(t);
 }
 
 export function build1688Detail(product: any): string {
@@ -577,6 +580,7 @@ function seoFriendlyTitle(product: any, x: ReturnType<typeof buildDecisionContex
   const rawTitle = normalizeFact(content.title || content.wbTitle || x.intelligence.cleanTitles?.titleForWb || x.title);
   const text = `${rawTitle} ${product?.titleCn ?? ''}`.toLowerCase();
   if (/бахил|чехл.*обув|鞋套/.test(text)) return 'Бахилы многоразовые водонепроницаемые для обуви';
+  if (isSleepMask(product, x)) return 'Маска для сна 3D с затемнением мягкая';
   if (/сабо|洞洞鞋|护士鞋/.test(text)) return 'Медицинские сабо EVA для работы и повседневной носки';
   if (/сандал|凉鞋/.test(text)) return 'Женские сандалии летние с декоративным элементом';
   return rawTitle || x.title;
@@ -587,6 +591,9 @@ function seoDescription(product: any, x: ReturnType<typeof buildDecisionContext>
   const material = materialsLine(x, product).replace(/\s+—\s+подтвердить у поставщика$/i, '');
   if (/бахил|чехл.*обув|鞋套/.test(text)) {
     return 'Высокие многоразовые бахилы помогают защитить обувь от дождя, грязи и брызг во время прогулок, поездок на велосипеде, походов и работы на улице. Модель надевается поверх обуви и подходит для использования в сырую погоду. Перед публикацией подтвердите материал, размерную сетку, вес и заявленные противоскользящие свойства на образце.';
+  }
+  if (isSleepMask(product, x)) {
+    return 'Мягкая 3D-маска для сна помогает закрыть глаза от света дома, в дороге, самолёте, поезде или во время отдыха. Объёмная форма снижает давление на глаза и ресницы, а мягкий материал делает маску удобной для ежедневного использования. Перед публикацией подтвердите материал, размер, вес и качество резинки на образце.';
   }
   const uses = useCasesLine(x) || 'повседневного использования';
   const features = uniq([...(x.sku.componentOptions ?? []), ...asArray<string>(x.intelligence.productIdentity?.visibleFeatures)], 4).join(', ');
@@ -602,6 +609,15 @@ function seoBullets(product: any, x: ReturnType<typeof buildDecisionContext>): s
       'Подходит для прогулок, велосипеда, походов и работы на улице',
       'Многоразовый формат',
       'Заявленное антискольжение — проверить на образце',
+    ];
+  }
+  if (isSleepMask(product, x)) {
+    return [
+      '3D-форма не давит на глаза',
+      'Подходит для сна дома и в поездках',
+      'Помогает закрыть глаза от света',
+      'Несколько цветов и вариантов упаковки',
+      'Мягкий материал — подтвердить на образце',
     ];
   }
   return uniq([
@@ -733,7 +749,9 @@ export function buildBuyerBrief(product: any, sourceUrl = ''): string {
 export function buildCargoBrief(product: any, sourceUrl = ''): string {
   const x = buildDecisionContext(product);
   const category = x.categoryType;
-  const extra = category === 'electronics'
+  const extra = isSleepMask(product, x)
+    ? ['- тип упаковки: OPP-пакет или цветная коробка', '- вес и габариты упаковки выбранного SKU', '- материал маски и ремешка']
+    : category === 'electronics'
     ? ['- есть ли батарейка / аккумулятор / магнит', '- мощность и тип зарядки, если товар электрический', '- инструкция и документы']
     : category === 'beauty'
       ? ['- состав, срок годности, документы', '- герметичность упаковки']
@@ -773,6 +791,18 @@ export function buildCargoBrief(product: any, sourceUrl = ''): string {
 
 function categorySpecificSampleChecks(product: any, x: ReturnType<typeof buildDecisionContext>): string[] {
   const text = `${x.title} ${product?.titleCn ?? ''}`.toLowerCase();
+  if (isSleepMask(product, x)) return [
+    'материал и мягкость после распаковки',
+    'форма 3D-углублений и место для глаз/ресниц',
+    'не давит ли маска на глаза',
+    'насколько хорошо закрывает свет',
+    'качество резинки/ремешка и регулировки',
+    'запах после распаковки',
+    'качество швов и краёв',
+    'комфорт при носке 10–15 минут',
+    'упаковка OPP/коробка',
+    'вес и габариты упаковки',
+  ];
   if (/бахил|чехл.*обув|鞋套/.test(text)) return [
     'соответствие цвета/размера выбранному SKU',
     'удобство надевания поверх обуви',
@@ -794,6 +824,7 @@ export function buildInfographicBrief(product: any): string {
   const title = x.title;
   const text = `${title} ${product?.titleCn ?? ''}`.toLowerCase();
   const isShoeCovers = /бахил|чехл[ыа]? для обув|鞋套/i.test(text);
+  const isMask = isSleepMask(product, x);
   const slides = isShoeCovers
     ? [
         { h: 'главный', copy: 'Многоразовые бахилы для защиты обуви', show: 'общий вид бахил на обуви' },
@@ -802,6 +833,14 @@ export function buildInfographicBrief(product: any): string {
         { h: 'фиксация', copy: x.sku.componentOptions?.length ? `Молния и фиксация сверху: ${x.sku.componentOptions.join(', ')}` : 'Фиксацию подтвердить по фото выбранного SKU', show: 'крупно молнию, манжету или шнурок' },
         { h: 'размеры/SKU', copy: 'Выберите цвет и размер', show: `цвета/размеры: ${displaySkuSummary(x.sku.skuSummary)}` },
       ]
+    : isMask
+      ? [
+          { h: 'главный', copy: 'Мягкая 3D-маска для сна', show: 'маска на лице или рядом с подушкой, чистый спокойный фон' },
+          { h: 'сценарии применения', copy: 'Для дома, поездок, самолёта и дневного отдыха', show: 'иконки: дом / поезд / самолёт / отдых' },
+          { h: '3D-форма', copy: 'Не давит на глаза и ресницы', show: 'крупно углубления для глаз, боковой разрез' },
+          { h: 'затемнение', copy: 'Помогает закрыть глаза от света', show: 'сравнение свет/темнота, без обещания 100% затемнения' },
+          { h: 'цвета и упаковка', copy: 'Выберите цвет и вариант упаковки', show: displaySkuSummary(x.sku.skuSummary) },
+        ]
     : [
         { h: 'главный', copy: title, show: 'товар крупно на чистом фоне + главный сценарий применения' },
         { h: 'сценарии применения', copy: useCasesLine(x) || 'Сценарии применения товара', show: '3–4 иконки или фото, где используют товар' },
@@ -932,6 +971,12 @@ export function validateGeneratedText(input: { productIntelligence?: ProductInte
   const category = String(input.categoryType ?? '').toLowerCase();
   if (/shoes|обув/.test(category)) fixed = fixed.replace(/\b(?:мощность|напряжение|аккумулятор|тип вилки|рукав|усадка после стирки)\b[^\n]*/gi, '').replace(/\n{3,}/g, '\n\n');
   if (/passive_insect_trap|ловуш/.test(category)) fixed = fixed.replace(/\b(?:мощность|напряжение|тип вилки|аккумулятор|тип лампы|электрическая)\b[^\n]*/gi, '').replace(/\n{3,}/g, '\n\n');
+  if (/маск[аи]\s+для\s+сна|sleep\s*mask|3d-маск/i.test(fixed)) {
+    fixed = fixed
+      .replace(/\b(?:срок годности|консистенция образца|подошв[аы]|дно|корпус|герметичность упаковки как обязательное|размерная сетка)\b[^\n]*/gi, '')
+      .replace(/товар\s+для\s+для/gi, 'товар для')
+      .replace(/\n{3,}/g, '\n\n');
+  }
   fixed = fixed.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   return { ok: errors.length === 0 || fixed !== before, errors, fixedText: fixed };
 }

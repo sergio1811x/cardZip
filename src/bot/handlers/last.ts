@@ -53,26 +53,19 @@ export async function handleLast(ctx: Context): Promise<void> {
   if (x.cost.costWithoutCargoRub) {
     lines.push(`Себестоимость без карго: ${fmtRub(x.cost.costWithoutCargoRub)}`);
   }
-  if (x.cost.canShowRoi) {
-    lines.push(`Сценарный ROI: ${x.cost.scenarioRoiPercent}% по цене пользователя`);
-  } else {
-    lines.push('ROI не считаю автоматически — можно посчитать сценарий по вашей цене.');
-  }
+  lines.push('Следующий шаг: открыть дальнейший план и отправить вопросы поставщику.');
 
   lines.push('');
   lines.push(`Анализ от ${date}`);
 
   const buttons: any[][] = [
+    [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${lastJob.id}`)],
     [
-      Markup.button.callback('📦 Данные 1688', `product_detail_${lastJob.id}`),
-      Markup.button.callback('💰 Экономика', `econ_detail_${lastJob.id}`),
+      Markup.button.callback('💬 Текст поставщику', 'supplier_questions'),
+      Markup.button.callback('📦 Данные товара', `product_detail_${lastJob.id}`),
     ],
     [
-      Markup.button.callback('💬 Поставщику', 'supplier_questions'),
-      Markup.button.callback('📎 Файлы', `materials_${lastJob.id}`),
-    ],
-    [
-      Markup.button.callback('🔍 Проверить рынок вручную', `wb_detail_${lastJob.id}`),
+      Markup.button.callback('📁 Материалы', `materials_${lastJob.id}`),
       Markup.button.callback('🔄 Новый товар', 'new_search'),
     ],
   ];

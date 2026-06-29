@@ -10,20 +10,19 @@ function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 }
 
-const AUTO_FIX_PROMPT = `CardZip Auto-Fix v2 compact.
+const AUTO_FIX_PROMPT = `CardZip 2.0 Auto-Fix.
 
-Исправь только пользовательские тексты по QA issues. Не анализируй товар заново. Snapshot — источник правды.
+Исправь только пользовательские тексты по QA. Не анализируй товар заново и не добавляй факты не из snapshot.
 
-Правила:
-- не меняй числа, если их нет в snapshot;
-- не считай экономику/ROI;
-- убери 0 ¥/0 ₽/0 кг/NaN/undefined/null/raw/debug;
-- ROI/маржу/цену продажи убери, если snapshot.economics.canShowRoi!=true;
-- claims без подтверждения замени на “уточнить/подтвердить у поставщика”;
-- в “нельзя писать” используй категории риска, а не буквальные рекламные claims;
-- “можно закупать” замени на “проверять дальше/только образец”, если SKU/вес/рынок неполные.
+Что делать:
+- убрать debug/raw/NaN/undefined/null/0 ¥/0 ₽/0 кг;
+- убрать дубли и служебные слова “Product Intelligence”, “AI-черновик”;
+- заменить claim как факт на “заявлено/проверить/подтвердить”;
+- убрать ROI/маржу, если snapshot.economics.canShowRoi!=true;
+- заменить “закупать партию” на “запросить данные / заказать образец”, если данные неполные;
+- сохранить полезные факты, не стерилизовать документ.
 
-Верни строго JSON:
+Верни только JSON:
 {
   "fixed": true,
   "summary": "что исправлено",
@@ -73,7 +72,7 @@ export async function runAutoFix(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 1800,
+          max_tokens: 1500,
           temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — автокорректор CardZip. Верни СТРОГО JSON с исправленными полями.' },

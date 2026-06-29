@@ -12,20 +12,22 @@ import {
 
 function detailKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('📄 Файлы', `materials_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
+  ]);
+}
+
+function topLevelKeyboard(jobId: string) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${jobId}`)],
+    [Markup.button.callback('💬 Текст поставщику', 'supplier_questions'), Markup.button.callback('📦 Данные товара', `product_detail_${jobId}`)],
+    [Markup.button.callback('📁 Материалы', `materials_${jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
 
 export function buildMainMessage(product: any, jobId: string, status: any, _category?: any): { text: string; keyboard: any } {
   const text = buildMainReport(product, { creditsRemaining: status?.creditsRemaining });
-  const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('💬 Поставщику', 'supplier_questions'), Markup.button.callback('📥 Ответ поставщика', 'supplier_confirm')],
-    [Markup.button.callback('📄 Файлы', `materials_${jobId}`), Markup.button.callback('📦 Данные 1688', `product_detail_${jobId}`)],
-    [Markup.button.callback('💰 Экономика', `econ_detail_${jobId}`), Markup.button.callback('⚠️ Риски', `risk_detail_${jobId}`)],
-    [Markup.button.callback('🧪 Образец', `sample_detail_${jobId}`), Markup.button.callback('⚖️ Указать вес', `weight_input:${jobId}`)],
-    [Markup.button.callback('🔄 Новый товар', 'new_search')],
-  ]);
+  const keyboard = topLevelKeyboard(jobId);
   return { text, keyboard };
 }
 
@@ -48,26 +50,69 @@ export function buildMessage3(status: any): { text: string; keyboard: any } {
 
 export function buildEconomicsDetail(product: any, jobId: string): { text: string; keyboard: any } {
   const x = buildDecisionContext(product);
-  const lines = ['💰 <b>Экономика без автоматического WB</b>', ''];
-  if (!x.price.canCalculateCost) lines.push('Экономика не рассчитана — нет цены товара.');
+  const lines = ['💸 <b>Предварительная себестоимость</b>', ''];
+  if (!x.price.canCalculateCost) lines.push('Себестоимость не рассчитана — нет цены товара.');
   else {
-    lines.push(`Цена: ${x.price.displayPriceText}`);
+    lines.push(`Цена товара: ${x.price.displayPriceText}`);
     if (x.cost.purchaseRub) lines.push(`Закупка: ${x.cost.purchaseRub.toLocaleString('ru-RU')} ₽`);
     if (x.cost.costWithoutCargoRub) lines.push(`Себестоимость без карго: ${x.cost.costWithoutCargoRub.toLocaleString('ru-RU')} ₽`);
     if (x.cost.cargoRub) lines.push(`Карго: ${x.cost.cargoRub.toLocaleString('ru-RU')} ₽`);
     else lines.push('Карго: не рассчитано — нужен вес с упаковкой.');
-    if (x.cost.totalCostRub) lines.push(`Итого себестоимость: ${x.cost.totalCostRub.toLocaleString('ru-RU')} ₽`);
+    if (x.cost.totalCostRub) lines.push(`Итого с карго: ${x.cost.totalCostRub.toLocaleString('ru-RU')} ₽`);
     if (x.cost.canShowRoi) {
       lines.push(`Сценарная прибыль: ${x.cost.scenarioProfitRub?.toLocaleString('ru-RU')} ₽`);
       lines.push(`Сценарный ROI: ${x.cost.scenarioRoiPercent}%`);
       lines.push('Это расчёт по цене, введённой пользователем, не подтверждённая рыночная цена.');
     } else {
-      lines.push('ROI не считаю — введите предполагаемую цену продажи или добавьте конкурентов вручную.');
+      lines.push('ROI не считаю — рынок и цена продажи не заданы.');
     }
     if (x.cost.warnings.length) lines.push('', ...x.cost.warnings.map((w) => `⚠️ ${w}`));
   }
-  lines.push('', `Следующий шаг: ${x.cost.nextAction}`);
+  lines.push('', 'Что сделать:');
+  lines.push('1. Уточните вес у поставщика.');
+  lines.push(`2. Или нажмите «⚖️ Указать вес вручную».`);
   return { text: lines.join('\n'), keyboard: detailKeyboard(jobId) };
+}
+
+export function buildProcurementPlanDetail(product: any, jobId: string): { text: string; keyboard: any } {
+  const x = buildDecisionContext(product);
+  const status = x.readiness.canRecommendSample ? '🟡 Готов к запросу данных' : '🟡 Нужны данные поставщика';
+  const hasWeight = x.weight.canUseForCargo;
+  const lines = [
+    '🚀 <b>Дальнейший план закупки</b>',
+    '',
+    `Статус товара: ${status}`,
+    `Готовность: ${x.readiness.score}/100`,
+    '',
+    '<b>Шаг 1. Отправить вопросы поставщику</b>',
+    'Зачем: подтвердить цену, вес, упаковку, материал и SKU.',
+    'Статус: ⏳ нужно сделать',
+    '',
+    '<b>Шаг 2. Внести ответ поставщика</b>',
+    'Зачем: я извлеку вес, габариты, цену и обновлю документы.',
+    'Статус: после ответа поставщика',
+    '',
+    '<b>Шаг 3. Пересчитать себестоимость</b>',
+    'Зачем: после веса можно посчитать карго и бюджет образца.',
+    `Статус: ${hasWeight ? 'можно пересчитать по сохранённому весу' : 'ждёт вес'}`,
+    '',
+    '<b>Шаг 4. Заказать образец</b>',
+    'Зачем: проверить материал, качество, упаковку и заявленные свойства.',
+    'Статус: можно после ответа поставщика',
+    '',
+    '<b>Шаг 5. Принять решение</b>',
+    'Варианты:',
+    '• заказать образец',
+    '• отправить товар в доработку',
+    '• не брать товар',
+  ];
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('1️⃣ Отправить вопросы', 'supplier_questions'), Markup.button.callback('2️⃣ Внести ответ', 'supplier_confirm')],
+    [Markup.button.callback('3️⃣ Указать вес вручную', `weight_input:${jobId}`), Markup.button.callback('4️⃣ План образца', `sample_detail_${jobId}`)],
+    [Markup.button.callback('💸 Себестоимость', `econ_detail_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
+  ]);
+  return { text: lines.join('\n'), keyboard };
 }
 
 export function buildWbDetail(product: any, jobId: string): { text: string; keyboard: any } {

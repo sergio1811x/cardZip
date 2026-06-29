@@ -2,8 +2,8 @@ import type { Context } from 'telegraf';
 import { Input, Markup } from 'telegraf';
 import AdmZip from 'adm-zip';
 import { supabase } from '../../db/supabase';
-import { buildEconomicsDetail, buildWbDetail, build1688Detail } from '../../core/messageBuilder';
-import { buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation } from '../../core/decisionLayer';
+import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail } from '../../core/messageBuilder';
+import { buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildSupplierQuestions } from '../../core/decisionLayer';
 import { formatSeoText } from '../../core/seoFormatter';
 import { formatOrderBrief } from '../../core/orderBrief';
 import { zipBuilder } from '../../core/zipBuilder';
@@ -25,8 +25,18 @@ async function getJobData(ctx: Context, jobId: string): Promise<any | null> {
 
 function detailKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('📄 Файлы', `materials_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
+  ]);
+}
+
+function materialsKeyboard(jobId: string) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('💬 Вопросы поставщику', `materials_group_questions_${jobId}`)],
+    [Markup.button.callback('📄 Для байера', `materials_group_buyer_${jobId}`), Markup.button.callback('🚚 Для карго', `materials_group_cargo_${jobId}`)],
+    [Markup.button.callback('🧪 Образец и риски', `materials_group_check_${jobId}`), Markup.button.callback('📝 Для карточки', `materials_group_card_${jobId}`)],
+    [Markup.button.callback('⬇️ Скачать всё ZIP', `materials_zip_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
   ]);
 }
 
@@ -48,16 +58,20 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   const prefix = `${safePrefix(product, offerId)}_${offerId}`;
   const safeFlags = (product?.riskFlags ?? {}) as any;
 
-  const seoText = generatedFiles?.seoText ?? (product ? formatSeoText(product, product.seoContent ?? {}, safeFlags) : '');
-  const briefText = generatedFiles?.briefText ?? (product ? formatOrderBrief(product, product.seoContent ?? {}, product.economics, safeFlags, job.input_url, product.budgets, product.conclusion) : '');
-  const supplierText = generatedFiles?.supplierQuestions ?? generatedFiles?.supplierText ?? '';
-  const cargoText = generatedFiles?.cargoText ?? (product ? buildCargoBrief(product, job.input_url) : '');
-  const infographicText = generatedFiles?.infographicText ?? (product ? buildInfographicBrief(product) : '');
-  const riskChecklistText = generatedFiles?.riskChecklistText ?? (product ? buildRiskChecklist(product) : '');
-  const sampleRecommendationText = generatedFiles?.sampleRecommendationText ?? (product ? buildSampleRecommendation(product) : '');
+  // Build materials from the current product state so supplier replies/manual weight
+  // immediately update buyer/cargo/risk/sample docs instead of showing stale files.
+  const seoText = product ? formatSeoText(product, product.seoContent ?? {}, safeFlags) : (generatedFiles?.seoText ?? '');
+  const briefText = product ? formatOrderBrief(product, product.seoContent ?? {}, product.economics, safeFlags, job.input_url, product.budgets, product.conclusion) : (generatedFiles?.briefText ?? '');
+  const supplierText = product
+    ? ['# Вопросы поставщику', '', '## Русская версия', ...buildSupplierQuestions(product).ru.map((q, i) => `${i + 1}. ${q}`), '', '## Китайская версия', ...buildSupplierQuestions(product).cn.map((q, i) => `${i + 1}. ${q}`)].join('\n')
+    : (generatedFiles?.supplierQuestions ?? generatedFiles?.supplierText ?? '');
+  const cargoText = product ? buildCargoBrief(product, job.input_url) : (generatedFiles?.cargoText ?? '');
+  const infographicText = product ? buildInfographicBrief(product) : (generatedFiles?.infographicText ?? '');
+  const riskChecklistText = product ? buildRiskChecklist(product) : (generatedFiles?.riskChecklistText ?? '');
+  const sampleRecommendationText = product ? buildSampleRecommendation(product) : (generatedFiles?.sampleRecommendationText ?? '');
 
   const docs = [
-    { filename: `questions_ru_cn_${prefix}.txt`, text: String(supplierText || 'Вопросы поставщику не найдены. Откройте кнопку “Поставщику”.'), title: '💬 questions_ru_cn.txt', description: 'Вопросы поставщику на русском и китайском.' },
+    { filename: `questions_ru_cn_${prefix}.txt`, text: String(supplierText || 'Вопросы поставщику не найдены. Откройте кнопку “Текст поставщику”.'), title: '💬 questions_ru_cn.txt', description: 'Вопросы поставщику на русском и китайском.' },
     { filename: `buyer_brief_${prefix}.md`, text: String(briefText), title: '📄 buyer_brief.md', description: 'ТЗ байеру: что закупаем, SKU, цена, риски, что проверить.' },
     { filename: `cargo_brief_${prefix}.md`, text: String(cargoText), title: '🚚 cargo_brief.md', description: 'ТЗ карго: вес, габариты, упаковка, ограничения.' },
     { filename: `risk_checklist_${prefix}.md`, text: String(riskChecklistText), title: '⚠️ risk_checklist.md', description: 'Что проверить до образца, на образце и перед партией.' },
@@ -73,6 +87,18 @@ async function sendDocs(ctx: Context, chatId: number, docs: Array<{ filename: st
   for (const doc of docs) {
     await ctx.telegram.sendDocument(chatId, Input.fromBuffer(Buffer.from(doc.text, 'utf-8'), doc.filename)).catch(() => {});
   }
+}
+
+export async function handleProcurementPlan(ctx: Context): Promise<void> {
+  const match = (ctx.callbackQuery as any)?.data?.match(/^proc_plan_(.+)$/);
+  if (!match) return;
+  const jobId = match[1];
+  const job = await getJobData(ctx, jobId);
+  const product = (job?.result_json as any)?.product as ProductWithContent | undefined;
+  if (!product) return void await ctx.answerCbQuery('Данные недоступны');
+  await ctx.answerCbQuery();
+  const { text, keyboard } = buildProcurementPlanDetail(product, jobId);
+  await ctx.reply(text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...keyboard });
 }
 
 export async function handleEconDetail(ctx: Context): Promise<void> {
@@ -176,18 +202,57 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
 
   await ctx.answerCbQuery();
   const { docs, imageUrls } = buildMaterials(job);
-  const preview = ['📄 <b>Закупочный пакет готов</b>', '', `Я подготовил ${docs.length} материалов:`, '',
-    ...docs.map((d, i) => `${i + 1}. ${d.title}\n   ${d.description}`),
-    ...(imageUrls.length ? ['', '8. 📷 photos.zip\n   Фото товара с 1688.'] : []),
-    '', 'Скачать всё одним ZIP?'].join('\n');
+  const preview = [
+    '📁 <b>Закупочный пакет</b>',
+    '',
+    'Я подготовил материалы по этапам.',
+    '',
+    '1. <b>Для поставщика</b>',
+    '💬 Вопросы RU/CN — нужно отправить сейчас.',
+    '',
+    '2. <b>Для байера</b>',
+    '📄 ТЗ байеру — что закупаем, SKU, цена, что проверить.',
+    '',
+    '3. <b>Для карго</b>',
+    '🚚 ТЗ карго — вес, габариты, упаковка, ограничения.',
+    '',
+    '4. <b>Для проверки товара</b>',
+    '⚠️ Риск-чеклист',
+    '🧪 План образца',
+    '',
+    '5. <b>Для карточки</b>',
+    '📝 SEO-черновик',
+    '🎨 ТЗ для инфографики',
+    ...(imageUrls.length ? ['', '📷 Фото товара доступны отдельным архивом после скачивания ZIP.'] : []),
+    '',
+    'Рекомендация: сначала используйте «Вопросы поставщику». Остальные документы лучше скачивать после ответа поставщика.',
+    '',
+    `Всего документов: ${docs.length}`,
+  ].join('\n');
   await ctx.reply(preview, {
     parse_mode: 'HTML',
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('⬇️ Скачать ZIP', `materials_zip_${jobId}`)],
-      [Markup.button.callback('📄 Скачать по отдельности', `materials_list_${jobId}`)],
-      [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
-    ]),
+    ...materialsKeyboard(jobId),
   });
+}
+
+export async function handleMaterialsGroup(ctx: Context): Promise<void> {
+  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_group_(questions|buyer|cargo|check|card)_(.+)$/);
+  if (!match) return;
+  const [, group, jobId] = match;
+  const job = await getJobData(ctx, jobId);
+  if (!job) return void await ctx.answerCbQuery('Данные недоступны');
+  const { docs } = buildMaterials(job);
+  const selected = docs.filter((d) => {
+    if (group === 'questions') return /questions/i.test(d.filename);
+    if (group === 'buyer') return /buyer_brief/i.test(d.filename);
+    if (group === 'cargo') return /cargo_brief/i.test(d.filename);
+    if (group === 'check') return /risk_checklist|sample_plan/i.test(d.filename);
+    if (group === 'card') return /seo_draft|infographic_brief/i.test(d.filename);
+    return false;
+  });
+  await ctx.answerCbQuery(selected.length ? 'Отправляю материалы' : 'Материалы не найдены');
+  if (!selected.length) return;
+  await sendDocs(ctx, ctx.chat!.id, selected);
 }
 
 export async function handleMaterialsZip(ctx: Context): Promise<void> {
