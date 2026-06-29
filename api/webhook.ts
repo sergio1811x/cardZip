@@ -9,6 +9,7 @@ import { supabase } from '../src/db/supabase';
 import { redis } from '../src/lib/redis';
 import { checkLinkLimit, checkCallbackLimit, checkGlobalLimit } from '../src/bot/middleware/rateLimit';
 import { cleanupStuckJobs } from '../src/lib/jobCleanup';
+import { triggerPipelineStep } from '../src/lib/pipelineStep';
 
 export const config = { maxDuration: 10 };
 
@@ -17,25 +18,6 @@ async function isDuplicate(updateId: number): Promise<boolean> {
   const key = `dedup:${updateId}`;
   const result = await redis.set(key, '1', { nx: true, ex: 60 });
   return result === null;
-}
-
-async function callStep(host: string, path: string, body: object): Promise<boolean> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const ac = new AbortController();
-      setTimeout(() => ac.abort(), 4000);
-      await fetch(`https://${host}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: ac.signal,
-      });
-      return true;
-    } catch {
-      if (attempt === 0) await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  return false;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -125,12 +107,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
 
       const job = await createJob(dbUser.id, msg.chat.id, progressMsg.message_id, urlMatch[0]);
-      if (redis) await redis.set(`processing:${dbUser.id}`, job.id, { ex: 75 });
+      if (redis) await redis.set(`processing:${dbUser.id}`, job.id, { ex: Number(process.env.PROCESSING_LOCK_TTL_SEC ?? 900) });
       await track(dbUser.id, 'sent_link', { url: urlMatch[0] });
 
-      const host = req.headers.host || 'card-zip.vercel.app';
-      // Ждём отправки но не фейлим job при таймауте — step1 может стартовать с задержкой
-      await callStep(host, '/api/step1-elim', { jobId: job.id });
+      const started = await triggerPipelineStep(req, '/api/step1-elim', { jobId: job.id }, { logPrefix: 'webhook', timeoutMs: 8_000 });
+      if (!started) {
+        await supabase.from('jobs').update({
+          status: 'failed',
+          error: 'step1_trigger_failed',
+          finished_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }).eq('id', job.id);
+        if (redis) await redis.del(`processing:${dbUser.id}`).catch(() => null);
+        await bot.telegram.editMessageText(
+          msg.chat.id, progressMsg.message_id, undefined,
+          '⚠️ Не удалось запустить анализ. Сервер не принял первый шаг пайплайна.',
+          { parse_mode: 'HTML' }
+        ).catch(() => null);
+      }
     } catch (e) {
       console.error('[webhook] URL pipeline:', e);
     }

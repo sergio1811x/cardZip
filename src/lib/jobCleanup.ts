@@ -1,7 +1,7 @@
 import { supabase } from '../db/supabase';
 import { redis } from './redis';
 
-const STUCK_TIMEOUT_MS = 90_000;
+const STUCK_TIMEOUT_MS = Number(process.env.JOB_STUCK_TIMEOUT_MS ?? 10 * 60_000);
 
 export async function cleanupStuckJobs(userId: string, chatId: number, botOrTelegram: any): Promise<boolean> {
   const cutoff = new Date(Date.now() - STUCK_TIMEOUT_MS).toISOString();
@@ -11,7 +11,18 @@ export async function cleanupStuckJobs(userId: string, chatId: number, botOrTele
     .from('jobs')
     .select('id, tg_message_id, status, updated_at, created_at')
     .eq('user_id', userId)
-    .in('status', ['pending', 'processing', 'elim', 'elim_done', 'sku_pending', 'ai_processing', 'ai_done', 'market_processing'])
+    .in('status', [
+      'pending',
+      'processing',
+      'elim',
+      'elim_done',
+      'sku_pending',
+      'ai_processing',
+      'ai_done',
+      'market_processing',
+      'package_processing',
+      'done',
+    ])
     .limit(10);
 
   // Фильтруем зависшие: старше 90с ИЛИ done+not_sent
@@ -56,8 +67,8 @@ export async function cleanupStuckJobs(userId: string, chatId: number, botOrTele
 
   if (stuckJobs.length > 0 && redis) {
     const keys = stuckJobs.flatMap((j) => [
-      `step:step1:${j.id}`, `step:step2:${j.id}`,
-      `step:step3:${j.id}`, `step:step4:${j.id}`,
+      `lock:step1:${j.id}`, `lock:step2:${j.id}`, `lock:step3:${j.id}`, `lock:step4:${j.id}`, `lock:step5:${j.id}`,
+      `step:step1:${j.id}`, `step:step2:${j.id}`, `step:step3:${j.id}`, `step:step4:${j.id}`, `step:step5:${j.id}`,
     ]);
     for (const k of keys) await redis.del(k).catch(() => {});
   }

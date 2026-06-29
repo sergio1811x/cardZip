@@ -5,6 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { productImporter } from '../src/providers/productImporter';
 import { normalizeCnText } from '../src/core/cnNormalize';
 import { createStepProgress } from '../src/core/progress';
+import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock } from '../src/lib/stepLock';
 
 export const config = { maxDuration: 60 };
@@ -40,11 +41,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'elim')
       : null;
 
-    // Elim API с safety timeout (Vercel лимит 60с, нужен запас на error handling)
+    // Elim/RapidAPI can legitimately take 60–120s on Railway. Keep a safety timeout,
+    // but do not use the old Vercel 40s limit.
     let rawProduct;
     try {
       const safetyTimeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Elim не ответил за 40 секунд')), 40_000)
+        setTimeout(() => reject(new Error('Elim/RapidAPI не ответил за отведённое время')), Number(process.env.ELIM_TIMEOUT_MS ?? 120_000))
       );
       rawProduct = await Promise.race([
         productImporter.fetchProduct(job.input_url),
@@ -118,32 +120,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       result_json: { rawProduct: rawForJob, imageUrls: rawProduct.images },
     }).eq('id', jobId);
 
-    // Вызываем step2 — 2 попытки с увеличенным таймаутом
-    const host = req.headers.host || 'card-zip.vercel.app';
-    let step2Sent = false;
-    for (let i = 0; i < 2 && !step2Sent; i++) {
-      try {
-        const ac = new AbortController();
-        setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step2-ai`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId }),
-          signal: ac.signal,
-        });
-        step2Sent = true;
-      } catch {
-        if (i === 0) await new Promise(r => setTimeout(r, 500));
-      }
-    }
+    // Вызываем step2. Важно: проверяем HTTP status и используем правильный origin
+    // (на VPS это может быть http://..., а не всегда https://host).
+    const step2Sent = await triggerPipelineStep(req, '/api/step2-ai', { jobId }, { logPrefix: 'step1', timeoutMs: 8_000 });
 
     if (!step2Sent) {
       console.error(`[step1] Failed to trigger step2 for job ${jobId}`);
-      await supabase.from('jobs').update({ status: 'failed', error: 'step2ai_trigger_failed', finished_at: new Date().toISOString() }).eq('id', jobId);
+      await supabase.from('jobs').update({
+        status: 'failed',
+        error: 'step2ai_trigger_failed',
+        finished_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq('id', jobId);
       if (job.tg_message_id) {
         await bot.telegram.editMessageText(
           job.tg_chat_id, job.tg_message_id, undefined,
-          '❌ Сервер перегружен. Попробуйте ещё раз через минуту.',
+          '❌ Анализ остановился после чтения карточки: сервер не запустил AI-шаг. Попробуйте ещё раз через минуту.',
           { parse_mode: 'HTML' }
         ).catch(() => {});
       }

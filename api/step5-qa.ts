@@ -13,6 +13,7 @@ import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
 import { acquireStepLock } from '../src/lib/stepLock';
 import { redis } from '../src/lib/redis';
+import { createStepProgress } from '../src/core/progress';
 import { runQaGate } from '../src/providers/expertQaGate';
 import { runAutoFix } from '../src/providers/autoFix';
 import type { ProductWithContent } from '../src/types';
@@ -76,6 +77,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const { jobId } = req.body ?? {};
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
+  let progress: ReturnType<typeof createStepProgress> | null = null;
+
   try {
     console.log(`[step5] Start: ${jobId}`);
     if (!await acquireStepLock('step5', jobId)) {
@@ -88,6 +91,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const result = job.result_json as any;
     const chatId = job.tg_chat_id;
+    progress = job.tg_message_id ? createStepProgress(bot, chatId, job.tg_message_id, 'files') : null;
+    progress?.step('files');
     const product = {
       ...(result.product as ProductWithContent),
       intelligence: result.productIntelligence ?? result.intelligence ?? (result.product as any)?.intelligence,
@@ -133,6 +138,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .map((q: string, i: number) => `${i + 1}. ${q}`)
       .join('\n');
 
+    progress?.step('validate');
     const seoValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: seoText, reportType: 'seo', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
     const briefValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: briefText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
     const supplierValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: supplierQs, reportType: 'supplierQuestions', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
@@ -185,15 +191,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (hard.block || !hard.canShowFullReport) {
       console.warn(`[step5] hard validator blocked: ${hard.issues.map(i => i.problem).join('; ')}`);
+      progress?.message('Отчёт требует безопасного уточнения — отправляю короткое объяснение', 98);
+      progress?.stop();
       await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Hard Validator заблокировал полный отчёт.');
       return res.status(200).json({ ok: true, blocked: true, source: 'hard' });
     }
 
+    progress?.step('qa');
     const qaMode = String(process.env.CARDZIP_QA_GATE_MODE ?? 'always').toLowerCase();
     const qaUnavailablePolicy = String(process.env.CARDZIP_QA_UNAVAILABLE_POLICY ?? 'send_code_validated').toLowerCase();
     const hasNonLowWarnings = hard.warnings.some((w) => w.severity !== 'low');
     const mustRunQa = qaMode !== 'off' && (qaMode === 'always' || (qaMode === 'critical_only' && (hard.issues.length > 0 || hasNonLowWarnings)));
-    const qaResult = mustRunQa
+    let qaResult = mustRunQa
       ? await runQaGate(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText }).catch(() => null)
       : { decision: 'PASS', canShowToUser: true, qualityScore: 8, confidence: 'medium', summary: 'Code hard validator passed; LLM QA skipped by policy.' } as any;
 
@@ -206,6 +215,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         qaResult = { ...qaResult, decision: 'PASS', canShowToUser: true, qualityScore: Math.max(6, Number(qaResult.qualityScore ?? 6)), confidence: qaResult.confidence ?? 'medium', summary: `QA warning downgraded: ${reason}`, issues: [] } as any;
       } else if (!qaUnavailable || qaUnavailablePolicy === 'fail_closed') {
         console.warn(`[step5] QA blocked/unavailable: ${reason}`);
+        progress?.message('QA не разрешил полный отчёт — отправляю безопасное объяснение', 98);
+        progress?.stop();
         await sendBlocked(job, product, reason || 'QA Gate не разрешил полный отчёт.');
         return res.status(200).json({ ok: true, blocked: true, source: 'qa' });
       } else {
@@ -215,6 +226,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (qaResult?.decision === 'FIX_REQUIRED') {
+      progress?.step('autofix');
       const fixed = await runAutoFix(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText }, { ...qaResult, issues: safeIssues(qaResult.issues).length ? safeIssues(qaResult.issues) : safeIssues(qaResult.requiredEdits) } as any).catch(() => null);
       if (fixed?.userCard || fixed?.UserCard) finalText = String(fixed.userCard ?? fixed.UserCard);
       if (fixed?.seoText) seoText = String(fixed.seoText);
@@ -223,15 +235,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       hard = runHardValidator({ analysisSnapshot: snapshot, artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText } });
       ({ finalText, seoText, briefText, supplierText } = applySanitizedArtifacts(hard, { finalText, seoText, briefText, supplierText }));
       if (hard.block || !hard.canShowFullReport) {
+        progress?.message('Auto-Fix не смог безопасно исправить отчёт — отправляю короткое объяснение', 98);
+        progress?.stop();
         await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Auto-Fix не смог безопасно исправить отчёт.');
         return res.status(200).json({ ok: true, blocked: true, source: 'autofix-hard' });
       }
     }
 
+    progress?.step('charge');
     // Charge only after hard validator + QA allow the full user report.
     const charged = await tryConsumeCredit(job.user_id);
     if (!charged) {
       console.warn(`[step5] no credits after QA for job ${job.id}`);
+      progress?.message('Кредит не списан: не хватает баланса для отправки полного отчёта', 98);
+      progress?.stop();
       await sendPaymentRequired(job);
       return res.status(200).json({ ok: true, blocked: true, source: 'payment_required' });
     }
@@ -250,12 +267,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     }).eq('id', jobId);
 
-    if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
+    progress?.step('telegram');
     await bot.telegram.sendMessage(chatId, finalText, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       ...keyboard,
     });
+
+    progress?.stop();
+    if (job.tg_message_id) await bot.telegram.deleteMessage(chatId, job.tg_message_id).catch(() => {});
 
     await markSent(job.id);
     if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
@@ -268,6 +288,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log(`[step5] Job ${job.id} sent | soft=${softValidation.ok ? 'PASS' : softValidation.errors.length} | hard=PASS | qa=${qaResult?.decision ?? 'SKIPPED'}`);
     res.status(200).json({ ok: true });
   } catch (e: any) {
+    progress?.message('Возникла ошибка на финальной стадии — отправляю служебное сообщение', 98);
+    progress?.stop();
     console.error('[step5]', e.message);
     const { handleStepError } = require('../src/lib/stepError');
     await handleStepError(jobId, e.message, bot);

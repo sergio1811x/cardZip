@@ -1,6 +1,7 @@
 import type { Context } from 'telegraf';
 import { supabase } from '../../db/supabase';
 import { redis } from '../../lib/redis';
+import { triggerPipelineStep } from '../../lib/pipelineStep';
 
 export async function handleSkuSelect(ctx: Context) {
   const match = (ctx as any).match as RegExpMatchArray | undefined;
@@ -55,16 +56,18 @@ export async function handleSkuSelect(ctx: Context) {
     // Удаляем кнопки выбора
     await ctx.editMessageText('🔄 Обрабатываем выбранный вариант...', { parse_mode: 'HTML' }).catch(() => {});
 
-    // Fire-and-forget step2 (webhook имеет лимит 10с)
-    const host = 'card-zip.vercel.app';
-    const ac = new AbortController();
-    setTimeout(() => ac.abort(), 4000);
-    fetch(`https://${host}/api/step2-ai`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId }),
-      signal: ac.signal,
-    }).catch(() => {});
+    // Continue on the current deployment. Do not hardcode Vercel: on Railway/VPS
+    // the old URL made jobs stop at sku_pending after the user selected a SKU.
+    const sent = await triggerPipelineStep(undefined, '/api/step2-ai', { jobId }, { logPrefix: 'skuSelect' });
+    if (!sent) {
+      await supabase.from('jobs').update({
+        status: 'failed',
+        error: 'sku_step2_trigger_failed',
+        finished_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).eq('id', jobId);
+      await ctx.reply('❌ Не удалось продолжить анализ после выбора SKU. Попробуйте отправить ссылку ещё раз.').catch(() => {});
+    }
   } catch (e) {
     console.error('[skuSelect]', e);
     await ctx.answerCbQuery('Ошибка').catch(() => {});

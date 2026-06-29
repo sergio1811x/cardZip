@@ -5,6 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { canonicalizeProduct } from '../src/providers/productCanonicalizer';
 import { createStepProgress } from '../src/core/progress';
 import { cleanChineseTitle } from '../src/core/cnNormalize';
+import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 
 export const config = { maxDuration: 60 };
@@ -182,23 +183,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }).eq('id', jobId);
 
     // Chain → step3-package (legacy endpoint name step3-market)
-    const host = req.headers.host || 'card-zip.vercel.app';
-    let sent = false;
-    for (let i = 0; i < 2 && !sent; i++) {
-      try {
-        const ac = new AbortController();
-        setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step3-market`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId }),
-          signal: ac.signal,
-        });
-        sent = true;
-      } catch {
-        if (i === 0) await new Promise(r => setTimeout(r, 500));
-      }
-    }
+    const sent = await triggerPipelineStep(req, '/api/step3-market', { jobId }, { logPrefix: 'step2', timeoutMs: 8_000 });
 
     if (!sent) {
       const { handleStepError } = require('../src/lib/stepError');

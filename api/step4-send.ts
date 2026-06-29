@@ -5,6 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { getStatus } from '../src/services/subscriptionService';
 import { track } from '../src/services/analyticsService';
 import { createStepProgress } from '../src/core/progress';
+import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import { runExpertWriter } from '../src/providers/expertWriter';
 import { buildDecisionContext } from '../src/core/decisionLayer';
@@ -132,6 +133,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const snapshot = buildAnalysisSnapshot(product, job.input_url);
 
     // ─── Step 4B: Expert Writer (LLM) ───────────────────────────────────
+    progress?.step('writer');
     // Runs by default for paid MVP, but uses compact prompt/input.
     // It enriches SEO/files; deterministic Decision Layer remains source of truth.
     const writerMode = String(process.env.CARDZIP_EXPERT_WRITER_MODE ?? 'always').toLowerCase();
@@ -153,8 +155,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await track(job.user_id, 'generation_done', { url: job.input_url });
     const freshStatus = await getStatus(job.user_id);
 
-    progress?.stop();
-    // Progress message will be deleted by step5
+    progress?.step('files');
+    progress?.stop({ clear: false });
+    // Progress message continues in step5 and will be deleted after final send
 
     // ─── Save snapshot + artifacts, chain to step5 ───────────────────────
     await supabase.from('jobs').update({
@@ -172,25 +175,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }).eq('id', jobId);
 
     // Chain → step5-qa
-    const host = req.headers.host || 'card-zip.vercel.app';
-    for (let i = 0; i < 2; i++) {
-      try {
-        const ac = new AbortController();
-        setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step5-qa`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId }),
-          signal: ac.signal,
-        });
-        break;
-      } catch (e: any) {
-        console.warn(`[step4] step5 chain attempt ${i + 1} failed: ${e.message}`);
-        if (i === 0) await new Promise(r => setTimeout(r, 500));
-      }
+    const sent = await triggerPipelineStep(req, '/api/step5-qa', { jobId }, { logPrefix: 'step4', timeoutMs: 8_000 });
+    if (!sent) {
+      const { handleStepError } = require('../src/lib/stepError');
+      await handleStepError(jobId, 'step5_trigger_failed', bot);
     }
 
-    console.log(`[step4] Job ${jobId} snapshot built, chaining step5`);
+    console.log(`[step4] Job ${jobId} snapshot built, chaining step5 sent=${sent}`);
     res.status(200).json({ ok: true });
   } catch (e: any) {
     console.error('[step4]', e.message);

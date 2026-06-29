@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { createStepProgress } from '../src/core/progress';
+import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import { buildDecisionContext } from '../src/core/decisionLayer';
 
@@ -70,7 +71,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const decision = buildDecisionContext(product);
 
     const progress = job.tg_message_id ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market') : null;
-    progress?.stop();
+    progress?.step('package');
+    progress?.stop({ clear: false });
 
     await supabase.from('jobs').update({
       status: 'done',
@@ -91,25 +93,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       updated_at: new Date().toISOString(),
     }).eq('id', jobId);
 
-    const host = req.headers.host || 'card-zip.vercel.app';
-    for (let i = 0; i < 2; i++) {
-      try {
-        const ac = new AbortController();
-        setTimeout(() => ac.abort(), 4000);
-        await fetch(`https://${host}/api/step4-send`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jobId }),
-          signal: ac.signal,
-        });
-        break;
-      } catch (e: any) {
-        console.warn(`[step3] step4 chain attempt ${i + 1} failed: ${e.message}`);
-        if (i === 0) await new Promise(r => setTimeout(r, 500));
-      }
+    const sent = await triggerPipelineStep(req, '/api/step4-send', { jobId }, { logPrefix: 'step3', timeoutMs: 8_000 });
+    if (!sent) {
+      const { handleStepError } = require('../src/lib/stepError');
+      await handleStepError(jobId, 'step4_trigger_failed', bot);
     }
 
-    res.status(200).json({ ok: true, noWbMvp: true });
+    res.status(200).json({ ok: true, noWbMvp: true, chained: sent });
   } catch (e: any) {
     console.error('[step3]', e.message);
     const { handleStepError } = require('../src/lib/stepError');

@@ -18,6 +18,7 @@ import { track } from '../../services/analyticsService';
 import { createJob } from '../../db/queries/jobs';
 import { supabase } from '../../db/supabase';
 import { redis } from '../../lib/redis';
+import { triggerPipelineStep } from '../../lib/pipelineStep';
 import { AppError, isAppError } from '../../lib/errors';
 import { Input } from 'telegraf';
 import type { ProductWithContent, WbFilterKeywords, AiContentResult } from '../../types';
@@ -134,26 +135,11 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
   let job: any = null;
   try {
     job = await createJob(userId, chatId, messageId, url);
-    if (redis) await redis.set(`processing:${userId}`, job.id, { ex: 75 }).catch(() => null);
+    if (redis) await redis.set(`processing:${userId}`, job.id, { ex: Number(process.env.PROCESSING_LOCK_TTL_SEC ?? 900) }).catch(() => null);
     await track(userId, 'sent_link', { url });
 
-    const baseUrl =
-      process.env.APP_URL ||
-      process.env.PUBLIC_APP_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '');
-
-    if (!baseUrl) {
-      throw new Error('APP_URL/PUBLIC_APP_URL/VERCEL_URL is not configured for step pipeline');
-    }
-
-    const ac = new AbortController();
-    setTimeout(() => ac.abort(), 4000);
-    await fetch(`${baseUrl.replace(/\/$/, '')}/api/step1-elim`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jobId: job.id }),
-      signal: ac.signal,
-    }).catch(() => null);
+    const started = await triggerPipelineStep(undefined, '/api/step1-elim', { jobId: job.id }, { logPrefix: 'link' });
+    if (!started) throw new Error('step1_trigger_failed');
   } catch (e: any) {
     if (job?.id) {
       await supabase.from('jobs').update({
