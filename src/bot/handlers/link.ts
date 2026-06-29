@@ -129,7 +129,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     }
   }
 
-  const progressMsg = await ctx.reply('⏳ Запрос принят, начинаю анализ...', { parse_mode: 'HTML' });
+  const progressMsg = await ctx.reply('🔍 <b>Анализирую товар с 1688...</b>\n\nЧто делаю:\n1. Получаю данные товара\n2. Разбираю SKU и цену\n3. Определяю риски закупки\n4. Готовлю вопросы поставщику\n5. Формирую файлы для байера, карго и карточки\n\n⏱ Обычно 40–70 секунд', { parse_mode: 'HTML' });
   const messageId = (progressMsg as Message.TextMessage).message_id;
 
   let job: any = null;

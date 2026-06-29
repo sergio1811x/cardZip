@@ -94,6 +94,9 @@ alter table jobs add column if not exists telegram_file_ids jsonb;
 alter table jobs add column if not exists updated_at timestamptz not null default now();
 alter table jobs add column if not exists started_at timestamptz;
 alter table jobs add column if not exists finished_at timestamptz;
+alter table jobs add column if not exists procurement_status text not null default 'new_analysis';
+alter table jobs add column if not exists procurement_score integer;
+alter table jobs add column if not exists procurement_pipeline jsonb not null default '{}';
 
 create index if not exists idx_jobs_user_created on jobs(user_id, created_at desc);
 create index if not exists idx_jobs_status_created on jobs(status, created_at);

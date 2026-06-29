@@ -11,16 +11,20 @@ import {
 } from './decisionLayer';
 
 function detailKeyboard(jobId: string) {
-  return Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('📎 Файлы', `materials_${jobId}`)]]);
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('📄 Файлы', `materials_${jobId}`)],
+    [Markup.button.callback('🔄 Новый товар', 'new_search')],
+  ]);
 }
 
 export function buildMainMessage(product: any, jobId: string, status: any, _category?: any): { text: string; keyboard: any } {
   const text = buildMainReport(product, { creditsRemaining: status?.creditsRemaining });
   const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('💬 Поставщику', 'supplier_questions'), Markup.button.callback('📥 Внести ответ', 'supplier_confirm')],
-    [Markup.button.callback('⚖️ Указать вес', `weight_input:${jobId}`), Markup.button.callback('💰 Моя цена', `manual_price_${jobId}`)],
-    [Markup.button.callback('📎 Файлы', `materials_${jobId}`), Markup.button.callback('📦 1688 детали', `product_detail_${jobId}`)],
-    [Markup.button.callback('🔍 Конкуренты вручную', `manual_competitors_${jobId}`)],
+    [Markup.button.callback('💬 Поставщику', 'supplier_questions'), Markup.button.callback('📥 Ответ поставщика', 'supplier_confirm')],
+    [Markup.button.callback('📄 Файлы', `materials_${jobId}`), Markup.button.callback('📦 Данные 1688', `product_detail_${jobId}`)],
+    [Markup.button.callback('💰 Экономика', `econ_detail_${jobId}`), Markup.button.callback('⚠️ Риски', `risk_detail_${jobId}`)],
+    [Markup.button.callback('🧪 Образец', `sample_detail_${jobId}`), Markup.button.callback('⚖️ Указать вес', `weight_input:${jobId}`)],
+    [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
   return { text, keyboard };
 }

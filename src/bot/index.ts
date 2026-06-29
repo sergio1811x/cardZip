@@ -18,7 +18,7 @@ import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 import { handleMyAnalyses, handleAnalysisDetail } from './handlers/myAnalyses';
 import { handleManualWeightStart, handleManualSalePriceStart, handleManualCompetitorsStart, handleManualInputText, getPendingManualInput } from './handlers/manualInputs';
-import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleBackToMain, handleProductDetail } from './handlers/detailButtons';
+import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleMaterialsZip, handleMaterialsList, handleBackToMain, handleProductDetail, handleRiskDetail, handleSampleDetail } from './handlers/detailButtons';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -80,6 +80,54 @@ bot.action('pay_test', handlePayTest);
 bot.action('pay_pack10', handlePayPack10);
 bot.action('pay_pack30', handlePayPack30);
 bot.action('pay_week', handlePayWeek);
+
+bot.action('tariffs', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleTariffsMenu(ctx);
+});
+bot.action('example_result', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `📋 <b>Пример результата CardZip</b>
+
+` +
+      `📦 Товар: бахилы многоразовые для обуви
+` +
+      `• цена, MOQ, SKU и поставщик
+` +
+      `• вопросы поставщику RU/CN
+` +
+      `• ТЗ байеру и ТЗ карго
+` +
+      `• риск-чеклист и план образца
+` +
+      `• SEO-черновик и ТЗ для инфографики
+
+` +
+      `Отправьте ссылку 1688 — соберу такой пакет по вашему товару.`,
+    { parse_mode: 'HTML' },
+  );
+});
+bot.action('how_it_works', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    `ℹ️ <b>Как это работает</b>
+
+` +
+      `1. Вы отправляете ссылку 1688 / Taobao / Tmall.
+` +
+      `2. CardZip разбирает товар, SKU, цену, MOQ и поставщика.
+` +
+      `3. Я готовлю закупочный пакет: вопросы поставщику, ТЗ байеру, ТЗ карго, риски, образец, SEO и инфографику.
+` +
+      `4. После ответа поставщика можно внести данные и обновить статус закупки.
+
+` +
+      `Я не обещаю прибыль и не считаю ROI без рынка и вашей цены продажи — задача CardZip помочь не закупать вслепую.`,
+    { parse_mode: 'HTML' },
+  );
+});
+
 bot.action('new_search', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.reply('Отправь ссылку на товар с 1688.com 👇');
@@ -135,7 +183,11 @@ bot.action('reset_tariffs', async (ctx) => {
 bot.action(/^product_detail_(.+)$/, handleProductDetail);
 bot.action(/^econ_detail_(.+)$/, handleEconDetail);
 bot.action(/^wb_detail_(.+)$/, handleWbDetail);
+bot.action(/^materials_zip_(.+)$/, handleMaterialsZip);
+bot.action(/^materials_list_(.+)$/, handleMaterialsList);
 bot.action(/^materials_(.+)$/, handleMaterialsResend);
+bot.action(/^risk_detail_(.+)$/, handleRiskDetail);
+bot.action(/^sample_detail_(.+)$/, handleSampleDetail);
 bot.action(/^back_main_(.+)$/, handleBackToMain);
 
 // ─── Ручные вводы: вес, цена продажи, конкуренты ───────────────────────────

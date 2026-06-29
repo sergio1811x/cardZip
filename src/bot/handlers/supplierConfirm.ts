@@ -38,17 +38,27 @@ export async function handleSupplierConfirmStart(ctx: Context) {
 
   await ctx.reply(
     '📥 <b>Ответ поставщика</b>\n\n' +
-    'Вставьте сюда ответ поставщика из 1688 или WeChat.\n\n' +
-    'Я попробую извлечь:\n' +
-    '• вес с упаковкой\n' +
-    '• размеры упаковки\n' +
+    'Вставьте сюда ответ поставщика.\n' +
+    'Я попробую извлечь:\n\n' +
     '• цену выбранного SKU\n' +
+    '• вес с упаковкой\n' +
+    '• габариты упаковки\n' +
     '• MOQ\n' +
-    '• сроки производства\n\n' +
-    'После этого пересчитаю экономику.\n\n' +
-    '<i>Можно отправить текст на любом языке.</i>',
+    '• сроки отгрузки\n' +
+    '• комплектацию\n' +
+    '• материал\n' +
+    '• упаковку\n' +
+    '• фото/видео/документы\n\n' +
+    'После этого обновлю:\n' +
+    '• экономику\n' +
+    '• статус закупки\n' +
+    '• ТЗ байеру\n' +
+    '• ТЗ карго\n' +
+    '• риск-чеклист\n\n' +
+    '<i>Можно отправить текст на русском, китайском или английском.</i>',
     { parse_mode: 'HTML' }
   );
+
 }
 
 export async function getPendingConfirm(chatId: number): Promise<{ jobId: string; userId: string } | null> {
@@ -126,19 +136,44 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
 
     // Сохраняем обновлённый job
     await supabase.from('jobs').update({
+      procurement_status: decisionContext.readiness.canRecommendSample ? 'ready_for_sample' : 'supplier_reply_received',
+      procurement_score: decisionContext.readiness.score,
+      procurement_pipeline: {
+        product_data: true,
+        sku_parsed: decisionContext.sku.skuCount > 0,
+        weight_confirmed: decisionContext.weight.canUseForCargo,
+        dimensions_confirmed: false,
+        supplier_reply_received: true,
+        sample_ordered: false,
+        sample_checked: false,
+        test_batch_ready: false,
+      },
       result_json: { ...result, rawProduct: raw, product: updatedProduct, decisionContext },
     }).eq('id', pending.jobId);
 
     // Формируем ответ
-    const confirmedLines: string[] = ['🟢 <b>Данные подтверждены поставщиком</b>', ''];
-    if (extracted.weightKg) confirmedLines.push(`Вес: ${extracted.weightKg} кг`);
-    if (extracted.composition) confirmedLines.push(`Состав: ${extracted.composition}`);
-    if (extracted.priceCny) confirmedLines.push(`Цена: ${extracted.priceCny} ¥`);
-    if (extracted.moq) confirmedLines.push(`MOQ: ${extracted.moq} шт.`);
-    if (extracted.productionDays) confirmedLines.push(`Срок: ${extracted.productionDays} дн.`);
-    if (extracted.sizes) confirmedLines.push(`Размеры: ${extracted.sizes}`);
+    const previousScore = buildDecisionContext(product as any).readiness.score;
+    const newScore = decisionContext.readiness.score;
+    const confirmedLines: string[] = ['✅ <b>Закупочный пакет обновлён</b>', ''];
+    confirmedLines.push('Извлечено:');
+    if (extracted.weightKg) confirmedLines.push(`• вес с упаковкой: ${extracted.weightKg} кг`);
+    if (extracted.priceCny) confirmedLines.push(`• цена SKU: ${extracted.priceCny} ¥`);
+    if (extracted.moq) confirmedLines.push(`• MOQ: ${extracted.moq} шт.`);
+    if (extracted.composition) confirmedLines.push(`• материал: ${extracted.composition}`);
+    if (extracted.productionDays) confirmedLines.push(`• срок отгрузки/производства: ${extracted.productionDays} дн.`);
+    if (extracted.sizes) confirmedLines.push(`• размеры: ${extracted.sizes}`);
+    if (confirmedLines.length <= 3) confirmedLines.push('• конкретные числовые данные не найдены — сохранён текст ответа для проверки');
     confirmedLines.push('');
-    confirmedLines.push('Закупочный пакет обновлён. Если вес подтверждён, пересчитана себестоимость; ROI остаётся только сценарным по вашей цене продажи.');
+    confirmedLines.push('Обновил:');
+    confirmedLines.push('• экономику');
+    confirmedLines.push('• ТЗ байеру');
+    confirmedLines.push('• ТЗ карго');
+    confirmedLines.push('• риск-чеклист');
+    confirmedLines.push('• статус закупки');
+    confirmedLines.push('');
+    confirmedLines.push(`Новый статус: ${decisionContext.readiness.label}`);
+    confirmedLines.push(`Готовность: ${previousScore}/100 → ${newScore}/100`);
+
 
     await ctx.reply(confirmedLines.join('\n'), { parse_mode: 'HTML' });
 

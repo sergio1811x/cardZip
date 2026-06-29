@@ -258,6 +258,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     finalText = applyCreditsLine(finalText, freshStatus.creditsRemaining ?? 0);
 
     await supabase.from('jobs').update({
+      procurement_status: decisionContext.readiness.canRecommendSample ? 'ready_for_sample' : 'questions_ready',
+      procurement_score: decisionContext.readiness.score,
+      procurement_pipeline: {
+        product_data: true,
+        sku_parsed: decisionContext.sku.skuCount > 0,
+        weight_confirmed: decisionContext.weight.canUseForCargo,
+        dimensions_confirmed: false,
+        supplier_reply_received: false,
+        sample_ordered: false,
+        sample_checked: false,
+        test_batch_ready: false,
+      },
       result_json: {
         ...result,
         product,

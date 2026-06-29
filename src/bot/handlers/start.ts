@@ -1,4 +1,5 @@
 import type { Context } from 'telegraf';
+import { Markup } from 'telegraf';
 import { track } from '../../services/analyticsService';
 
 export async function handleStart(ctx: Context): Promise<void> {
@@ -6,21 +7,27 @@ export async function handleStart(ctx: Context): Promise<void> {
   if (userId) track(userId, 'start');
 
   await ctx.reply(
-    `🚀 <b>CardZip</b> — ИИ-закупщик для товаров с 1688, Taobao и Tmall.\n\n` +
-      `Отправьте ссылку — бот соберёт закупочный пакет для проверки товара перед WB/Ozon.\n\n` +
-      `<b>Что внутри:</b>\n` +
-      `📦 Понятный разбор товара и свойств\n` +
-      `📋 Нормализация SKU: цвета, размеры, комплектации\n` +
-      `💰 Цена 1688 и себестоимость без/с карго\n` +
-      `⚠️ Риски и закупочная готовность 0–100\n` +
-      `💬 Вопросы поставщику на русском и китайском\n` +
-      `🧾 ТЗ байеру и отдельное ТЗ карго\n` +
-      `📝 SEO-черновик WB/Ozon\n` +
-      `🖼 ТЗ для инфографики\n` +
-      `🧪 Рекомендация по образцу\n\n` +
-      `<b>Важно:</b> мы не обещаем прибыль и не считаем автоматический ROI без ваших данных. CardZip помогает не закупать вслепую и быстро понять, что нужно подтвердить.\n\n` +
-      `🎁 3 бесплатных анализа\n\n` +
-      `👇 Отправьте ссылку на товар.`,
-    { parse_mode: 'HTML' }
+    `👋 <b>CardZip — закупочный ассистент для 1688</b>\n\n` +
+      `Скиньте ссылку на товар с 1688.\n` +
+      `Я подготовлю закупочный пакет:\n\n` +
+      `• понятный разбор товара и SKU\n` +
+      `• цену, MOQ и данные поставщика\n` +
+      `• вопросы поставщику RU/CN\n` +
+      `• ТЗ байеру\n` +
+      `• ТЗ карго\n` +
+      `• риск-чеклист\n` +
+      `• рекомендацию по образцу\n` +
+      `• SEO-черновик WB/Ozon\n` +
+      `• ТЗ для инфографики\n\n` +
+      `🎁 Бесплатно: 3 анализа\n\n` +
+      `Пришлите ссылку на товар.`,
+    {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('📦 Подготовить товар', 'new_search')],
+        [Markup.button.callback('📋 Пример результата', 'example_result'), Markup.button.callback('💳 Тарифы', 'tariffs')],
+        [Markup.button.callback('ℹ️ Как это работает', 'how_it_works')],
+      ]),
+    },
   );
 }

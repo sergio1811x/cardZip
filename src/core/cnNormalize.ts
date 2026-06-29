@@ -23,6 +23,16 @@ const CN_MAP: Record<string, string> = {
   跨境: "для cross-border торговли",
   防水: "заявленная влагозащита",
   防滑: "заявленное противоскользящее свойство",
+  鞋套: "бахилы/чехлы для обуви",
+  雨鞋套: "дождевые бахилы",
+  防雨: "защита от дождя",
+  高筒: "высокая посадка",
+  长筒: "высокая посадка",
+  拉链: "молния",
+  抽绳: "шнурок-утяжка",
+  松紧: "эластичная манжета",
+  束口: "манжета сверху",
+  PVC: "PVC",
   透气: "заявленная воздухопроницаемость",
   速干: "заявленное быстрое высыхание",
   弹力: "эластичность",
@@ -222,6 +232,29 @@ function detectColor(input: string): string | undefined {
   return undefined;
 }
 
+
+export function extractLetterSize(input: unknown): string | undefined {
+  const text = String(input ?? "").toUpperCase();
+  const direct = text.match(/(?:^|[^A-ZА-ЯЁ0-9])((?:XS|S|M|L|XL|XXL|XXXL|2XL|3XL|4XL))(?:[^A-ZА-ЯЁ0-9]|$)/);
+  if (direct) return direct[1].replace('XXXL', '3XL').replace('XXL', '2XL');
+  if (/小码|小号/.test(String(input ?? ""))) return 'S';
+  if (/中码|中号/.test(String(input ?? ""))) return 'M';
+  if (/大码|大号/.test(String(input ?? ""))) return 'L';
+  return undefined;
+}
+
+export function extractSkuComponents(input: unknown): string[] {
+  const raw = String(input ?? "");
+  const components: string[] = [];
+  if (/拉链|молни/i.test(raw)) components.push('молния');
+  if (/抽绳|шнур/i.test(raw)) components.push('шнурок-утяжка');
+  if (/松紧|束口|манжет/i.test(raw)) components.push('манжета сверху');
+  if (/高筒|长筒|высок/i.test(raw)) components.push('высокая посадка');
+  if (/PVC|ПВХ/i.test(raw)) components.push('ПВХ');
+  if (/加厚|утолщ/i.test(raw)) components.push('утолщённый материал');
+  return [...new Set(components)];
+}
+
 export function normalizeSkuText(input: unknown): string {
   const raw = String(input ?? "")
     .replace(/\s+/g, " ")
@@ -229,13 +262,22 @@ export function normalizeSkuText(input: unknown): string {
   if (!raw) return "";
   const parts: string[] = [];
   const color = detectColor(raw);
-  const size = extractShoeSize(raw);
+  const numericSize = extractShoeSize(raw);
+  const letterSize = extractLetterSize(raw);
+  const size = numericSize || letterSize;
   const pack = detectPackCount(raw);
+  const components = extractSkuComponents(raw);
+
+  const model = raw.match(/\b[A-Z]{1,8}\d{2,}[\w-]*\b/i)?.[0];
+  if (model) parts.push(`Модель/SKU: ${model}`);
   if (color) parts.push(`Цвет: ${color}`);
   if (/经典款/.test(raw)) parts.push("Модель: классическая");
+  if (/普通款|基础款/.test(raw)) parts.push("Модель: базовая");
   if (/高版本/.test(raw)) parts.push("Версия: высокая");
   if (size) parts.push(`Размер: ${size}`);
   if (/偏小一码/.test(raw)) parts.push("Примечание: маломерит на 1 размер");
+  if (components.length) parts.push(`Комплектация/детали: ${components.join(", ")}`);
+
   const featureParts: string[] = [];
   if (/防臭|不臭脚/.test(raw)) featureParts.push("заявленная защита от запаха");
   if (/抗菌|杀菌/.test(raw))
@@ -243,14 +285,13 @@ export function normalizeSkuText(input: unknown): string {
   if (/防滑/.test(raw))
     featureParts.push("заявленное противоскользящее свойство");
   if (/透气/.test(raw)) featureParts.push("заявленная воздухопроницаемость");
+  if (/防水|防雨/.test(raw)) featureParts.push("заявленная влагозащита");
   if (/厚底/.test(raw)) featureParts.push("толстая подошва");
   if (/软底|不累脚/.test(raw))
     featureParts.push("заявленный комфорт/мягкая подошва");
   if (featureParts.length)
     parts.push(`Особенность: ${[...new Set(featureParts)].join(", ")}`);
   if (pack) parts.push(`Комплект: ${pack} шт`);
-  const model = raw.match(/\b[A-Z]{1,6}\d{2,}[\w-]*\b/i)?.[0];
-  if (model) parts.unshift(`Модель/SKU: ${model}`);
   if (parts.length) return parts.join("; ");
   return normalizeMixedProductText(raw);
 }
