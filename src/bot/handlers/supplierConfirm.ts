@@ -17,7 +17,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
   // Найти последний job
   const { data: job } = await supabase
     .from('jobs')
-    .select('id')
+    .select('id, result_json, procurement_status')
     .eq('user_id', userId)
     .in('status', ['done', 'sent'])
     .order('created_at', { ascending: false })
@@ -36,9 +36,14 @@ export async function handleSupplierConfirmStart(ctx: Context) {
     await redis.set(confirmKey(chatId), JSON.stringify({ jobId: job.id, userId }), { ex: 300 });
   }
 
+  const rawStatus = String((job as any).procurement_status ?? ((job as any).result_json as any)?.product?.procurementStatus ?? '').toLowerCase();
+  const questionsAlreadySent = /waiting_supplier_reply|supplier_reply_received|ready_for_sample|sample_ordered|sample_received|ready_for_test_batch/.test(rawStatus);
+  const prefix = questionsAlreadySent
+    ? '📥 <b>Ответ поставщика</b>\n\nВставьте сюда ответ поставщика.\n'
+    : '📥 <b>Ответ поставщика</b>\n\nЕсли вопросы ещё не отправлены, сначала нажмите «💬 Текст поставщику».\nКогда поставщик ответит — вставьте сюда его сообщение.\n';
+
   await ctx.reply(
-    '📥 <b>Ответ поставщика</b>\n\n' +
-    'Вставьте сюда ответ поставщика.\n' +
+    prefix +
     'Я попробую извлечь:\n\n' +
     '• цену выбранного SKU\n' +
     '• вес с упаковкой\n' +
@@ -56,7 +61,13 @@ export async function handleSupplierConfirmStart(ctx: Context) {
     '• ТЗ карго\n' +
     '• риск-чеклист\n\n' +
     '<i>Можно отправить текст на русском, китайском или английском.</i>',
-    { parse_mode: 'HTML' }
+    {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('💬 Текст поставщику', 'supplier_questions')],
+        [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${job.id}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+      ]),
+    }
   );
 
 }
@@ -138,6 +149,7 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
       },
     } as any;
     const decisionContext = buildDecisionContext(updatedProduct);
+    (updatedProduct as any).procurementStatus = decisionContext.readiness.canRecommendSample ? 'ready_for_sample' : 'supplier_reply_received';
 
     // Сохраняем обновлённый job
     await supabase.from('jobs').update({

@@ -25,7 +25,8 @@ async function getJobData(ctx: Context, jobId: string): Promise<any | null> {
 
 function detailKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${jobId}`)],
+    [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
@@ -36,7 +37,8 @@ function materialsKeyboard(jobId: string) {
     [Markup.button.callback('📄 Для байера', `materials_group_buyer_${jobId}`), Markup.button.callback('🚚 Для карго', `materials_group_cargo_${jobId}`)],
     [Markup.button.callback('🧪 Образец и риски', `materials_group_check_${jobId}`), Markup.button.callback('📝 Для карточки', `materials_group_card_${jobId}`)],
     [Markup.button.callback('⬇️ Скачать всё ZIP', `materials_zip_${jobId}`)],
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
+    [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
 
@@ -253,6 +255,7 @@ export async function handleMaterialsGroup(ctx: Context): Promise<void> {
   await ctx.answerCbQuery(selected.length ? 'Отправляю материалы' : 'Материалы не найдены');
   if (!selected.length) return;
   await sendDocs(ctx, ctx.chat!.id, selected);
+  await ctx.reply('Готово. Можно вернуться к плану или скачать весь закупочный пакет.', materialsKeyboard(jobId)).catch(() => {});
 }
 
 export async function handleMaterialsZip(ctx: Context): Promise<void> {
@@ -270,6 +273,7 @@ export async function handleMaterialsZip(ctx: Context): Promise<void> {
     const imgZip = await zipBuilder.buildFromUrls(imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null);
     if (imgZip) await ctx.telegram.sendDocument(ctx.chat!.id, Input.fromBuffer(imgZip, `Фото_1688_${prefix}.zip`)).catch(() => {});
   }
+  await ctx.reply('ZIP отправлен. Дальше лучше внести ответ поставщика и обновить пакет.', materialsKeyboard(match[1])).catch(() => {});
 }
 
 export async function handleMaterialsList(ctx: Context): Promise<void> {

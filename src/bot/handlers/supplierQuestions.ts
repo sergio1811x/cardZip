@@ -31,6 +31,8 @@ export async function handleSupplierQuestions(ctx: Context) {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
         [Markup.button.callback('🇷🇺 На русском', 'sq_ru'), Markup.button.callback('🇨🇳 На китайском', 'sq_cn')],
+        ...(lastJob?.id ? [[Markup.button.callback('⬅️ Назад к плану', `proc_plan_${lastJob.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${lastJob.id}`)]] : []),
+        [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     }
   );
@@ -121,12 +123,24 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
       text = lines.join('\n');
     }
 
+
+    // Mark the product as waiting for supplier reply once the user opens the ready-to-send text.
+    try {
+      const updatedProduct = { ...(product ?? {}), procurementStatus: 'waiting_supplier_reply' };
+      await supabase.from('jobs').update({
+        procurement_status: 'waiting_supplier_reply',
+        result_json: { ...data, product: updatedProduct },
+      }).eq('id', lastJob.id);
+    } catch {}
+
     const afterText = text + '\n\nПосле ответа поставщика нажмите «📥 Внести ответ» — обновлю закупочный пакет.';
     await ctx.reply(afterText, {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Я отправил вопросы / жду ответ', lastJob?.id ? `proc_plan_${lastJob.id}` : 'new_search')],
         [Markup.button.callback('📥 Внести ответ поставщика', 'supplier_confirm')],
-        ...(lastJob?.id ? [[Markup.button.callback('🚀 Дальнейший план', `proc_plan_${lastJob.id}`)]] : []),
+        ...(lastJob?.id ? [[Markup.button.callback('🚀 Дальнейший план', `proc_plan_${lastJob.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${lastJob.id}`)]] : []),
+        [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     });
   } catch (e) {

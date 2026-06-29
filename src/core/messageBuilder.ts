@@ -12,7 +12,8 @@ import {
 
 function detailKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${jobId}`)],
+    [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
@@ -76,41 +77,51 @@ export function buildEconomicsDetail(product: any, jobId: string): { text: strin
 
 export function buildProcurementPlanDetail(product: any, jobId: string): { text: string; keyboard: any } {
   const x = buildDecisionContext(product);
-  const status = x.readiness.canRecommendSample ? '🟡 Готов к запросу данных' : '🟡 Нужны данные поставщика';
+  const flow = String(product?.procurementStatus ?? product?.procurement_status ?? '').toLowerCase();
+  const questionsSent = /waiting_supplier_reply|supplier_reply_received|ready_for_sample|sample_ordered|sample_received|ready_for_test_batch/.test(flow);
+  const replyReceived = !!product?.supplierAnswer || /supplier_reply_received|ready_for_sample|sample_ordered|sample_received|ready_for_test_batch/.test(flow);
   const hasWeight = x.weight.canUseForCargo;
+  const status = replyReceived ? (hasWeight ? '🧪 Готов к плану образца' : '✅ Ответ получен, нужен вес') : questionsSent ? '⏳ Ждём ответ поставщика' : '🟡 Готов к запросу данных';
+  const step1Status = questionsSent ? '✅ вопросы отправлены / можно ждать ответ' : '⏳ нужно сделать';
+  const step2Status = replyReceived ? '✅ ответ внесён' : questionsSent ? '⏳ ждём ответ поставщика' : '🔒 сначала отправьте вопросы';
+  const step3Status = hasWeight ? '✅ вес есть, себестоимость можно обновлять' : replyReceived ? '⏳ проверьте, есть ли вес в ответе' : '🔒 ждёт вес от поставщика';
+  const step4Status = replyReceived || hasWeight ? '🧪 можно готовить заказ 1–2 образцов' : '🔒 после ответа поставщика';
+
   const lines = [
     '🚀 <b>Дальнейший план закупки</b>',
     '',
     `Статус товара: ${status}`,
     `Готовность: ${x.readiness.score}/100`,
     '',
-    '<b>Шаг 1. Отправить вопросы поставщику</b>',
-    'Зачем: подтвердить цену, вес, упаковку, материал и SKU.',
-    'Статус: ⏳ нужно сделать',
+    '<b>1️⃣ Спросить поставщика</b>',
+    'Зачем: без веса, упаковки и точного SKU нельзя понять реальную себестоимость.',
+    'Что получим: цену SKU, вес, габариты, материал, комплектацию.',
+    `Статус: ${step1Status}`,
     '',
-    '<b>Шаг 2. Внести ответ поставщика</b>',
-    'Зачем: я извлеку вес, габариты, цену и обновлю документы.',
-    'Статус: после ответа поставщика',
+    '<b>2️⃣ Внести ответ поставщика</b>',
+    'Зачем: я извлеку из ответа вес, габариты, цену, MOQ и обновлю документы.',
+    `Статус: ${step2Status}`,
     '',
-    '<b>Шаг 3. Пересчитать себестоимость</b>',
-    'Зачем: после веса можно посчитать карго и бюджет образца.',
-    `Статус: ${hasWeight ? 'можно пересчитать по сохранённому весу' : 'ждёт вес'}`,
+    '<b>3️⃣ Обновить себестоимость</b>',
+    'Зачем: после веса можно посчитать карго, бюджет образца и тестовой закупки.',
+    `Статус: ${step3Status}`,
     '',
-    '<b>Шаг 4. Заказать образец</b>',
-    'Зачем: проверить материал, качество, упаковку и заявленные свойства.',
-    'Статус: можно после ответа поставщика',
+    '<b>4️⃣ Заказать образец</b>',
+    'Зачем: проверить качество, упаковку и заявленные свойства руками, а не по картинке.',
+    `Статус: ${step4Status}`,
     '',
-    '<b>Шаг 5. Принять решение</b>',
-    'Варианты:',
-    '• заказать образец',
-    '• отправить товар в доработку',
-    '• не брать товар',
+    '<b>5️⃣ Принять решение</b>',
+    'Варианты: заказать образец · отправить в доработку · не брать товар.',
+    '',
+    '<b>Сейчас лучшее действие:</b>',
+    questionsSent ? 'Если поставщик уже ответил — нажмите «2️⃣ Внести ответ».' : 'Нажмите «1️⃣ Отправить вопросы» и скопируйте текст в чат 1688.',
   ];
   const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('1️⃣ Отправить вопросы', 'supplier_questions'), Markup.button.callback('2️⃣ Внести ответ', 'supplier_confirm')],
-    [Markup.button.callback('3️⃣ Указать вес вручную', `weight_input:${jobId}`), Markup.button.callback('4️⃣ План образца', `sample_detail_${jobId}`)],
-    [Markup.button.callback('💸 Себестоимость', `econ_detail_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)],
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
+    [Markup.button.callback('1️⃣ Отправить вопросы', 'supplier_questions')],
+    [Markup.button.callback('2️⃣ Внести ответ', 'supplier_confirm'), Markup.button.callback('3️⃣ Указать вес', `weight_input:${jobId}`)],
+    [Markup.button.callback('4️⃣ План образца', `sample_detail_${jobId}`), Markup.button.callback('💸 Себестоимость', `econ_detail_${jobId}`)],
+    [Markup.button.callback('📁 Материалы', `materials_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
+    [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
   return { text: lines.join('\n'), keyboard };
 }
