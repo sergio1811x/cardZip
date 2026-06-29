@@ -7,14 +7,17 @@ export const config = { maxDuration: 60 };
 const WBCON_URL = 'https://wbcon.ru/wp-json/services-wb/v1/get_analysis_data';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const secret = req.headers['authorization'] ?? req.query.secret;
+  if (req.method !== 'POST') return res.status(405).json({ error: 'method_not_allowed' });
+
+  const body = (req.body ?? {}) as any;
+  const secret = req.headers['authorization'] ?? req.headers['x-cardzip-admin-secret'] ?? body.secret ?? req.query.secret;
   const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
   if (secret !== expected && secret !== `Bearer ${expected}`) {
     return res.status(401).json({ error: 'unauthorized' });
   }
 
   try {
-    const dateParam = (req.query.date as string) || getLastSunday();
+    const dateParam = (body.date as string) || (req.query.date as string) || getLastSunday();
 
     const response = await fetch(WBCON_URL, {
       method: 'POST',

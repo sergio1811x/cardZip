@@ -21,16 +21,14 @@ export async function cleanupStuckJobs(userId: string, chatId: number, botOrTele
       'ai_done',
       'market_processing',
       'package_processing',
-      'done',
     ])
     .limit(10);
 
-  // Фильтруем зависшие: старше 90с ИЛИ done+not_sent
+  // Фильтруем зависшие: старше configured timeout. Done jobs are not touched here.
   const stuckJobs = (activeJobs ?? []).filter((j) => {
     const ts = j.updated_at ?? j.created_at;
     if (!ts) return true;
     const isOld = new Date(ts).getTime() < Date.now() - STUCK_TIMEOUT_MS;
-    if (j.status === 'done') return isOld; // done но не отправлено
     return isOld;
   });
 

@@ -1,4 +1,4 @@
-import { Telegraf } from 'telegraf';
+import type { Telegraf } from 'telegraf';
 import { redis } from '../lib/redis';
 
 type ProgressStage = {
@@ -80,13 +80,6 @@ const PHASE_MAX_INDEX: Record<string, number> = {
   sent: STAGE_INDEX.sent,
 };
 
-function buildBar(pct: number): string {
-  const safePct = Math.max(0, Math.min(100, Math.round(pct)));
-  const filled = Math.max(0, Math.min(10, Math.floor(safePct / 10)));
-  const bar = '🟩'.repeat(filled) + '⬜'.repeat(10 - filled);
-  return `⏳ ${bar} ${safePct}%`;
-}
-
 function progressKey(messageId: number): string {
   return `progress:${messageId}`;
 }
@@ -95,8 +88,18 @@ function progressHoldKey(messageId: number): string {
   return `progress_hold:${messageId}`;
 }
 
+type ProgressBotLike = Pick<Telegraf, 'telegram'> | { telegram: Telegraf['telegram'] };
+
+export function buildProgressText(pct: number, text: string): string {
+  const safePct = Math.max(0, Math.min(100, Math.round(pct)));
+  const total = 12;
+  const filled = Math.max(0, Math.min(total, Math.round((safePct / 100) * total)));
+  const bar = '▰'.repeat(filled) + '▱'.repeat(total - filled);
+  return `⏳ ${safePct}%  ${bar}\n\n${text}...`;
+}
+
 export function createStepProgress(
-  bot: Telegraf,
+  bot: ProgressBotLike,
   chatId: number,
   messageId: number,
   startPhase: string
@@ -111,7 +114,7 @@ export function createStepProgress(
     if (disposed) return;
     const stage = STAGES[idx] ?? STAGES[STAGES.length - 2];
     const text = holdMessage || stage.text;
-    const body = `${buildBar(stage.pct)}\n\n${text}...`;
+    const body = buildProgressText(stage.pct, text);
     bot.telegram.editMessageText(chatId, messageId, undefined, body).catch(() => {});
     bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
   };
@@ -185,7 +188,7 @@ export function createStepProgress(
         pct: pct ?? (STAGES[localMax]?.pct ?? 90),
         text,
       };
-      bot.telegram.editMessageText(chatId, messageId, undefined, `${buildBar(synthetic.pct)}\n\n${synthetic.text}...`).catch(() => {});
+      bot.telegram.editMessageText(chatId, messageId, undefined, buildProgressText(synthetic.pct, synthetic.text)).catch(() => {});
       bot.telegram.sendChatAction(chatId, 'typing').catch(() => {});
     },
     stop(options?: { clear?: boolean; done?: boolean }) {

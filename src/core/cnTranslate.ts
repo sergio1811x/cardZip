@@ -43,6 +43,27 @@ export function hasChinese(text: string): boolean {
   return /[一-鿿]/.test(text);
 }
 
+
+function tryParseStringArray(raw: string): string[] | null {
+  const cleaned = String(raw ?? '')
+    .replace(/```json\s*/gi, '')
+    .replace(/```/g, '')
+    .trim();
+
+  const candidates = [cleaned];
+  const first = cleaned.indexOf('[');
+  const last = cleaned.lastIndexOf(']');
+  if (first >= 0 && last > first) candidates.push(cleaned.slice(first, last + 1));
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) return parsed;
+    } catch {}
+  }
+  return null;
+}
+
 export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]> {
   const chineseNames = names.filter(hasChinese);
   if (chineseNames.length === 0) return names;
@@ -74,10 +95,9 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
     if (!res.ok) return localTranslated;
     const data = await res.json() as any;
     const raw = data.choices?.[0]?.message?.content ?? '';
-    const cleaned = raw.replace(/```json\s*/i, '').replace(/```\s*$/i, '').trim();
-    const translated: string[] = JSON.parse(cleaned);
+    const translated = tryParseStringArray(raw);
 
-    if (!Array.isArray(translated) || translated.length !== stillChinese.length) return localTranslated;
+    if (!translated || translated.length !== stillChinese.length) return localTranslated;
 
     // Merge LLM translations back
     let llmIdx = 0;
@@ -88,7 +108,7 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
       return name;
     });
   } catch (e) {
-    console.warn('[cnTranslate] LLM fallback failed:', (e as Error).message);
+    console.log('[cnTranslate] LLM fallback skipped:', (e as Error).message);
     return localTranslated;
   }
 }

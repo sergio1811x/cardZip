@@ -2,6 +2,7 @@ import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { getAdminMetrics } from '../../db/queries/events';
 import { redis } from '../../lib/redis';
+import { getPipelineBaseUrl } from '../../lib/pipelineStep';
 
 const ADMIN_IDS: number[] = (process.env.TELEGRAM_ADMIN_TG_ID ?? '')
   .split(',')
@@ -73,10 +74,12 @@ export async function handleAdminWbDateInput(ctx: Context, text: string): Promis
   await ctx.reply(`⏳ Загружаю WB-категории за ${dateMatch[0]}...`);
 
   try {
-    const host = 'card-zip.vercel.app';
     const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    const res = await fetch(`https://${host}/api/update-wb-categories?secret=${secret}&date=${dateMatch[0]}`, {
-      method: 'GET',
+    const baseUrl = getPipelineBaseUrl(undefined);
+    const res = await fetch(`${baseUrl}/api/update-wb-categories`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-cardzip-admin-secret': secret ?? '' },
+      body: JSON.stringify({ secret, date: dateMatch[0] }),
       signal: AbortSignal.timeout(55_000),
     });
     const data = await res.json() as any;
