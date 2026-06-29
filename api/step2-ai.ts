@@ -76,7 +76,7 @@ function toProductIntelligence(raw: any, productContext: any) {
       skuRisk: ctx.sku?.needsSelection ? 'SKU нужно выбрать' : '',
       priceRisk: ctx.price?.needsConfirmation ? 'цену SKU/партии нужно подтвердить' : '',
       weightRisk: raw?.weightKg > 0 ? '' : 'нужен вес с упаковкой',
-      marketRisk: 'рынок WB будет подтверждаться отдельно',
+      marketRisk: 'рынок проверяется вручную; WB/Ozon не блокирует закупочный пакет',
       visionConfidence: 'medium',
       textConfidence: 'medium',
       overallConfidence: ctx.dataQuality?.status === 'reliable' ? 'high' : 'medium',
@@ -181,7 +181,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     }).eq('id', jobId);
 
-    // Chain → step3-market
+    // Chain → step3-package (legacy endpoint name step3-market)
     const host = req.headers.host || 'card-zip.vercel.app';
     let sent = false;
     for (let i = 0; i < 2 && !sent; i++) {

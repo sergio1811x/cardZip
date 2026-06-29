@@ -2,8 +2,7 @@ import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { supabase } from '../../db/supabase';
 import { track } from '../../services/analyticsService';
-import { formatCnyRange, formatWeightKg, formatRubPrice } from '../../lib/formatters';
-import { resolvePurchasePrice } from '../../core/priceResolver';
+import { buildDecisionContext } from '../../core/decisionLayer';
 
 export async function handleLast(ctx: Context): Promise<void> {
   const userId = (ctx as any).dbUserId as string | undefined;
@@ -11,7 +10,6 @@ export async function handleLast(ctx: Context): Promise<void> {
 
   track(userId, 'last_used');
 
-  // Read from the last completed job — single source of truth
   const { data: lastJob } = await supabase
     .from('jobs')
     .select('id, result_json, created_at')
@@ -28,44 +26,37 @@ export async function handleLast(ctx: Context): Promise<void> {
 
   const result = lastJob.result_json as any;
   const raw = result.rawProduct;
-  const product = result.product;
+  const product = result.product ?? raw;
 
-  if (!raw) {
+  if (!raw && !product) {
     await ctx.reply('Данные последнего анализа не найдены. Отправьте ссылку заново.');
     return;
   }
 
-  // Use the same price resolver as the main card
-  const resolved = resolvePurchasePrice(raw);
-  const priceLabel = resolved.displayLabel;
-  const weightLabel = formatWeightKg(raw.weightKg);
-
-  // WB market data from the saved analysis (same source as main card)
-  const wbFiltered = product?.wbFiltered;
-  const wbMedian = wbFiltered?.medianPrice;
-
-  const title = product?.titleRu || raw.titleCn || raw.productId;
+  const x = buildDecisionContext(product);
+  const title = x.intelligence.cleanTitles?.titleForReport || product?.titleRu || raw?.titleCn || raw?.productId || 'Товар';
   const date = new Date(lastJob.created_at).toLocaleDateString('ru-RU');
 
   const lines: string[] = [];
-  lines.push(`📋 <b>Последний анализ</b>`);
+  lines.push('📋 <b>Последний анализ</b>');
   lines.push('');
   lines.push(`<b>${escHtml(title)}</b>`);
   lines.push('');
-  lines.push(`Цена: ${priceLabel}`);
-  lines.push(`Вес: ${weightLabel}`);
-  if (wbMedian && wbMedian > 0) {
-    lines.push(`Медиана WB: ${formatRubPrice(wbMedian)}`);
-  }
+  lines.push(`Цена: ${escHtml(x.price.displayPriceText)}`);
+  lines.push(`SKU: ${escHtml(x.sku.skuSummary)}`);
+  lines.push(`Вес: ${escHtml(x.weight.displayText)}`);
+  lines.push(`${escHtml(x.readiness.label)} · готовность ${x.readiness.score}/100`);
 
-  // Economics summary from saved data
-  const economics = product?.economics;
-  if (economics?.costRub > 0) {
-    const prefix = economics.weightMissing ? '~' : '';
-    lines.push(`Себестоимость: ${prefix}${formatRubPrice(economics.costRub)}`);
-    if (economics.roiPercent && !economics.isSyntheticPrice && !economics.weightMissing) {
-      lines.push(`ROI: ${economics.roiPercent}%`);
-    }
+  if (x.cost.purchaseRub) {
+    lines.push(`Закупка: ${fmtRub(x.cost.purchaseRub)}`);
+  }
+  if (x.cost.costWithoutCargoRub) {
+    lines.push(`Себестоимость без карго: ${fmtRub(x.cost.costWithoutCargoRub)}`);
+  }
+  if (x.cost.canShowRoi) {
+    lines.push(`Сценарный ROI: ${x.cost.scenarioRoiPercent}% по цене пользователя`);
+  } else {
+    lines.push('ROI не считаю автоматически — можно посчитать сценарий по вашей цене.');
   }
 
   lines.push('');
@@ -74,14 +65,14 @@ export async function handleLast(ctx: Context): Promise<void> {
   const buttons: any[][] = [
     [
       Markup.button.callback('📦 Данные 1688', `product_detail_${lastJob.id}`),
-      Markup.button.callback('🔎 WB-рынок', `wb_detail_${lastJob.id}`),
-    ],
-    [
       Markup.button.callback('💰 Экономика', `econ_detail_${lastJob.id}`),
-      Markup.button.callback('💬 Поставщику', 'supplier_questions'),
     ],
     [
+      Markup.button.callback('💬 Поставщику', 'supplier_questions'),
       Markup.button.callback('📎 Файлы', `materials_${lastJob.id}`),
+    ],
+    [
+      Markup.button.callback('🔍 Проверить рынок вручную', `wb_detail_${lastJob.id}`),
       Markup.button.callback('🔄 Новый товар', 'new_search'),
     ],
   ];
@@ -92,6 +83,10 @@ export async function handleLast(ctx: Context): Promise<void> {
   });
 }
 
+function fmtRub(n: number): string {
+  return `${Math.round(n).toLocaleString('ru-RU')} ₽`;
+}
+
 function escHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

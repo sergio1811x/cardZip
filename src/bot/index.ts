@@ -17,6 +17,7 @@ import { handleWbLeaders } from './handlers/wbLeaders';
 import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 import { handleMyAnalyses, handleAnalysisDetail } from './handlers/myAnalyses';
+import { handleManualWeightStart, handleManualSalePriceStart, handleManualCompetitorsStart, handleManualInputText, getPendingManualInput } from './handlers/manualInputs';
 import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleBackToMain, handleProductDetail } from './handlers/detailButtons';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -137,6 +138,11 @@ bot.action(/^wb_detail_(.+)$/, handleWbDetail);
 bot.action(/^materials_(.+)$/, handleMaterialsResend);
 bot.action(/^back_main_(.+)$/, handleBackToMain);
 
+// ─── Ручные вводы: вес, цена продажи, конкуренты ───────────────────────────
+bot.action(/^weight_input:(.+)$/, handleManualWeightStart);
+bot.action(/^manual_price_(.+)$/, handleManualSalePriceStart);
+bot.action(/^manual_competitors_(.+)$/, handleManualCompetitorsStart);
+
 // ─── Быстрые тарифы (inline под экономикой) ──────────────────────────────────
 bot.action(/^(cargo|ff)_(\d+)_(.+)$/, async (ctx) => {
   return handleQuickTariff(ctx);
@@ -185,6 +191,11 @@ bot.on('text', async (ctx) => {
     const wbDatePending = await getAdminWbDatePending(chatId);
     if (wbDatePending) {
       const handled = await handleAdminWbDateInput(ctx, text);
+      if (handled) return;
+    }
+    const manualPending = await getPendingManualInput(chatId);
+    if (manualPending) {
+      const handled = await handleManualInputText(ctx, text);
       if (handled) return;
     }
     const confirmPending = await getPendingConfirm(chatId);

@@ -163,7 +163,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   }
 
   // 1688: полный расчёт. не создаём синтетическую цену продажи.
-  // Если WB-рынок не подтверждён, показываем только себестоимость, без ROI/маржи.
+  // Если цена продажи не задана вручную, показываем только себестоимость, без ROI/маржи.
   const salePrice = wbMedianPrice ?? wbAvgPrice;
   // ROI is allowed only when both market price and real product/manual weight are present.
   // Category-default weight is useful for rough cost orientation, but not for profit/ROI.
@@ -188,7 +188,7 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   if (isSyntheticPrice) {
     disclaimer = rawWeightMissing
       ? 'Вес с упаковкой не подтверждён: цена продажи, прибыль, маржа и ROI не рассчитываются. ' + disclaimer
-      : 'WB-рынок не подтверждён: цена продажи, прибыль, маржа и ROI не рассчитываются. ' + disclaimer;
+      : 'Цена продажи не задана вручную: прибыль, маржа и ROI не рассчитываются. ' + disclaimer;
   }
   // Не дублируем про вес — это показывается в messageBuilder
   if (isCustom) {

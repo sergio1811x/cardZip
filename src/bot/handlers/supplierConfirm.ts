@@ -2,11 +2,8 @@ import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { supabase } from '../../db/supabase';
 import { redis } from '../../lib/redis';
-import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../../core/economicsCalc';
-import { buildConclusion } from '../../core/verdict';
-import { buildRiskFlags } from '../../core/riskFlags';
+import { buildDecisionContext } from '../../core/decisionLayer';
 import { buildMainMessage } from '../../core/messageBuilder';
-import { getUserTariffs } from '../../db/queries/userSettings';
 import type { ProductWithContent } from '../../types';
 
 function confirmKey(chatId: number): string {
@@ -110,39 +107,26 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
       if (extracted.moq && extracted.moq > 0) raw.normalized1688.moq = extracted.moq;
     }
 
-    // Пересчитываем экономику
-    const tariffs = await getUserTariffs(pending.userId).catch(() => null);
-    const wbFiltered = product?.wbFiltered ?? null;
-
-    const economics = await calcEconomics({
-      platform: raw.platform,
-      priceYuan: raw.priceYuan,
-      weightKg: raw.weightKg,
-      categoryHint: raw.categoryName,
-      tariffs: tariffs ?? undefined,
-      ...(wbFiltered?.medianPrice > 0 ? { wbMedianPrice: wbFiltered.medianPrice } : {}),
-    });
-
-    const riskFlags = buildRiskFlags(raw, wbFiltered);
-    const budgets = calcBudgetScenarios(economics.costRub, economics.weightMissing, raw.moq);
-    const maxPurchasePrice = wbFiltered?.medianPrice
-      ? calcMaxPurchasePrice(wbFiltered.medianPrice, raw.weightKg, economics.yuanToRub, tariffs ?? undefined, raw.priceYuan)
-      : null;
-    const conclusion = buildConclusion(raw.platform, economics, wbFiltered, riskFlags);
-
+    // Обновляем закупочный пакет без обязательного WB: решения пересчитываются из raw/product.
     const updatedProduct: ProductWithContent = {
       ...product,
       ...raw,
-      economics,
-      budgets,
-      maxPurchasePrice,
-      conclusion,
-      riskFlags,
-    };
+      manualWeightKg: extracted.weightKg && extracted.weightKg > 0 ? extracted.weightKg : product?.manualWeightKg,
+      supplierAnswer: {
+        ...(product?.supplierAnswer ?? {}),
+        weightKg: extracted.weightKg,
+        priceCny: extracted.priceCny,
+        moq: extracted.moq,
+        composition: extracted.composition,
+        sizes: extracted.sizes,
+        productionDays: extracted.productionDays,
+      },
+    } as any;
+    const decisionContext = buildDecisionContext(updatedProduct);
 
     // Сохраняем обновлённый job
     await supabase.from('jobs').update({
-      result_json: { ...result, rawProduct: raw, product: updatedProduct },
+      result_json: { ...result, rawProduct: raw, product: updatedProduct, decisionContext },
     }).eq('id', pending.jobId);
 
     // Формируем ответ
@@ -154,7 +138,7 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     if (extracted.productionDays) confirmedLines.push(`Срок: ${extracted.productionDays} дн.`);
     if (extracted.sizes) confirmedLines.push(`Размеры: ${extracted.sizes}`);
     confirmedLines.push('');
-    confirmedLines.push('Теперь доступен полный расчёт экономики.');
+    confirmedLines.push('Закупочный пакет обновлён. Если вес подтверждён, пересчитана себестоимость; ROI остаётся только сценарным по вашей цене продажи.');
 
     await ctx.reply(confirmedLines.join('\n'), { parse_mode: 'HTML' });
 

@@ -1,13 +1,7 @@
-import type { RawProduct1688, WbCard } from "../types";
-import {
-  cleanChineseTitle,
-  normalizeSkuText,
-  normalizeMixedProductText,
-  detectPackCount,
-  extractShoeSize,
-} from "./cnNormalize";
+import type { RawProduct1688 } from '../types';
+import { cleanChineseTitle, normalizeSkuText, normalizeMixedProductText, detectPackCount, extractShoeSize } from './cnNormalize';
 
-export type DecisionConfidence = "high" | "medium" | "low";
+export type DecisionConfidence = 'high' | 'medium' | 'low';
 
 export type PriceDecision = {
   displayPriceText: string;
@@ -16,23 +10,23 @@ export type PriceDecision = {
   maxPriceYuan: number | null;
   selectedSkuName?: string;
   selectedSkuPriceYuan?: number;
-  priceSource:
-    "direct" | "promotion" | "sku" | "price_range" | "fallback_min" | "missing";
+  priceSource: 'direct' | 'promotion' | 'selected_sku' | 'sku_range' | 'price_range' | 'fallback_min' | 'missing' | 'sku';
   isEstimated: boolean;
   isSkuDependent: boolean;
   isPackDependent: boolean;
   canCalculateCost: boolean;
-  canCalculateRoi: boolean;
+  canCalculateRoi: false;
   needsSkuConfirmation: boolean;
   reason: string;
 };
 
 export type WeightDecision = {
   weightKg: number | null;
-  source: "provider" | "manual" | "category_default" | "missing";
+  displayText: string;
+  source: 'provider' | 'manual' | 'category_default' | 'missing';
   isEstimated: boolean;
   canUseForCargo: boolean;
-  canUseForRoi: boolean;
+  canUseForRoi: false;
   reason: string;
 };
 
@@ -41,20 +35,30 @@ export type SkuDecision = {
   skuSummary: string;
   skuCount: number;
   shownSkuCount: number;
-  skuVariantsNormalized: Array<{
-    raw: string;
-    label: string;
-    priceYuan: number | null;
-    packCount?: number;
-    size?: string;
-  }>;
+  skuVariantsNormalized: Array<{ raw: string; label: string; priceYuan: number | null; packCount?: number; size?: string; color?: string }>;
   isMultiPack: boolean;
   needsSelection: boolean;
   priceText?: string;
+  recommendedSampleSku?: string;
+  skuRisks: string[];
+};
+
+export type ReadinessDecision = {
+  score: number;
+  status: 'ready_for_sample' | 'needs_supplier_confirmation' | 'needs_market_check' | 'high_risk' | 'not_ready';
+  label: '🟢 Можно заказывать образец' | '🟡 Нужны данные' | '🟡 Нужно проверить рынок' | '🔴 Высокий риск' | '🔴 Не готово к закупке';
+  positiveSignals: string[];
+  blockers: string[];
+  risks: string[];
+  missingData: string[];
+  nextActions: string[];
+  canRecommendSample: boolean;
+  canRecommendBatch: false;
+  reason: string;
 };
 
 export type MarketDecision = {
-  status: "confirmed" | "weak" | "not_confirmed" | "rate_limited";
+  status: 'manual_only' | 'not_required' | 'confirmed' | 'weak' | 'not_confirmed' | 'rate_limited';
   rawCandidatesCount: number;
   confirmedDirectCount: number;
   similarLocalCount: number;
@@ -69,15 +73,26 @@ export type MarketDecision = {
   reason: string;
 };
 
+export type CostDecision = {
+  status: 'not_calculated_no_price' | 'cost_without_cargo' | 'cost_with_manual_weight' | 'scenario_by_manual_sale_price';
+  canShowPurchaseRub: boolean;
+  canShowCostWithoutCargo: boolean;
+  canShowCargo: boolean;
+  canShowRoi: boolean;
+  purchaseRub: number | null;
+  costWithoutCargoRub: number | null;
+  cargoRub: number | null;
+  totalCostRub: number | null;
+  manualSalePriceRub?: number | null;
+  scenarioProfitRub?: number | null;
+  scenarioRoiPercent?: number | null;
+  breakEvenPriceRub?: number | null;
+  warnings: string[];
+  nextAction: string;
+};
+
 export type EconomyDecision = {
-  status:
-    | "not_calculated_no_price"
-    | "preliminary_no_weight"
-    | "preliminary_sku"
-    | "cost_only_no_market"
-    | "estimated_weight"
-    | "weak_market_data"
-    | "full";
+  status: 'not_calculated_no_price' | 'cost_without_cargo' | 'cost_with_manual_weight' | 'scenario_by_manual_sale_price' | 'preliminary_no_weight' | 'preliminary_sku' | 'cost_only_no_market' | 'estimated_weight' | 'weak_market_data' | 'full';
   canShowCost: boolean;
   canShowCargo: boolean;
   canShowMargin: boolean;
@@ -93,1879 +108,241 @@ export type EconomyDecision = {
 
 export type ProductIntelligenceLike = {
   productIdentity?: {
-    marketNameRu?: string;
-    shortNameRu?: string;
-    productKind?: string;
-    categoryType?: string;
-    subCategoryType?: string;
-    categoryPath?: string[];
-    coreObject?: string;
-    formFactor?: string;
-    audience?: string;
-    gender?: string;
-    season?: string;
-    useCases?: string[];
-    materials?: string[];
-    powerType?: string[];
-    visibleFeatures?: string[];
-    importantFeatures?: string[];
-    notConfirmedFeatures?: string[];
-    possibleConfusions?: string[];
+    marketNameRu?: string; shortNameRu?: string; productKind?: string; categoryType?: string; subCategoryType?: string; categoryPath?: string[]; coreObject?: string; formFactor?: string; audience?: string; gender?: string; season?: string; useCases?: string[]; materials?: any[]; material?: any[]; powerType?: string[]; visibleFeatures?: string[]; importantFeatures?: any[]; notConfirmedFeatures?: string[]; possibleConfusions?: string[]; notThis?: string[];
   };
-  cleanTitles?: {
-    titleCnClean?: string;
-    titleRuClean?: string;
-    titleForReport?: string;
-    titleForWb?: string;
-  };
-  wbSearch?: {
-    wbCoreQuery?: string;
-    queryCandidates?: string[];
-    negativeSearchTerms?: string[];
-    tooBroadQueries?: string[];
-    tooNarrowQueries?: string[];
-  };
-  matchingRules?: {
-    mustHaveForDirectAnalog?: string[];
-    allowedDifferences?: string[];
-    directAnalogBlockers?: string[];
-    similarOnlyIf?: string[];
-    rejectIf?: string[];
-  };
-  reportRules?: {
-    buyerMustCheck?: string[];
-    buyerMustNotAsk?: string[];
-    seoAllowedClaims?: string[];
-    seoForbiddenClaims?: string[];
-    importantAttributesToShow?: string[];
-    attributesToHide?: string[];
-    riskFlags?: string[];
-  };
+  cleanTitles?: { titleCnClean?: string; titleRuClean?: string; titleForReport?: string; titleForWb?: string };
+  wbSearch?: { wbCoreQuery?: string; queryCandidates?: string[]; negativeSearchTerms?: string[]; tooBroadQueries?: string[]; tooNarrowQueries?: string[] };
+  matchingRules?: { mustHaveForDirectAnalog?: string[]; allowedDifferences?: string[]; directAnalogBlockers?: string[]; similarOnlyIf?: string[]; rejectIf?: string[] };
+  claimsPolicy?: { allowedClaims?: string[]; claimedButNeedProof?: string[]; forbiddenAsFact?: string[]; safeRewrites?: Array<{ original: string; safe: string }> };
+  reportRules?: { buyerMustCheck?: string[]; buyerMustNotAsk?: string[]; cargoMustCheck?: string[]; seoAllowedClaims?: string[]; seoForbiddenClaims?: string[]; importantAttributesToShow?: string[]; attributesToHide?: string[]; sampleCheckList?: string[]; photoBriefItems?: string[]; infographicIdeas?: string[]; riskFlags?: string[] };
   supplierQuestions?: { ru?: string[]; cn?: string[] };
-  dataQuality?: {
-    missingCriticalFields?: string[];
-    skuRisk?: string;
-    priceRisk?: string;
-    weightRisk?: string;
-    marketRisk?: string;
-    visionConfidence?: DecisionConfidence;
-    textConfidence?: DecisionConfidence;
-    overallConfidence?: DecisionConfidence;
-    reason?: string;
-  };
+  dataQuality?: { missingCriticalFields?: string[]; skuRisk?: string; priceRisk?: string; weightRisk?: string; claimsRisk?: string; supplierRisk?: string; marketRisk?: string; visionConfidence?: DecisionConfidence; textConfidence?: DecisionConfidence; overallConfidence?: DecisionConfidence | string; reason?: string };
 };
 
 const YUAN_FALLBACK = 11.8;
-const USD_TO_RUB = 95;
 const BANK_MARKUP = 0.03;
 const DEFAULT_FULFILLMENT_RUB = 80;
-const DEFAULT_CARGO_USD_PER_KG = 4;
-const DEFAULT_WB_COMMISSION = 0.2;
-const DEFAULT_WB_LOGISTICS_RUB = 100;
-const DEFAULT_TAX = 0.07;
-const DEFAULT_DRR = 0.15;
+const DEFAULT_CARGO_RUB_PER_KG = 400;
+const DEFAULT_MARKETPLACE_COST_RATE = 0.28; // commission + acquiring + tax + logistics baseline for manual scenario
 
-const CATEGORY_DEFAULT_WEIGHT: Record<string, number> = {
-  shoes: 0.8,
-  clothes: 0.3,
-  electronics: 0.5,
-  accessory: 0.2,
-  kitchen: 0.45,
-  home: 0.4,
-  beauty: 0.25,
-  fishing: 0.25,
-  tools: 0.7,
-  other: 0.4,
-};
-
-const RU_FORBIDDEN_BY_CATEGORY: Record<string, string[]> = {
-  shoes: [
-    "рукав",
-    "состав ткани",
-    "плотность ткани",
-    "усадка",
-    "мощность",
-    "напряжение",
-    "аккумулятор",
-    "тип вилки",
-  ],
-  clothes: [
-    "мощность",
-    "напряжение",
-    "аккумулятор",
-    "тип вилки",
-    "длина стельки",
-  ],
-  electronics: [
-    "рукав",
-    "длина стельки",
-    "размерная сетка",
-    "состав ткани",
-    "плотность ткани",
-  ],
-  passive_insect_trap: [
-    "мощность",
-    "напряжение",
-    "220v",
-    "тип вилки",
-    "аккумулятор",
-    "зарядка",
-    "тип лампы",
-    "электрическая",
-    "ультразвуковая",
-  ],
-};
+const CATEGORY_DEFAULT_WEIGHT: Record<string, number> = { shoes: 0.8, clothing: 0.3, clothes: 0.3, electronics: 0.5, accessory: 0.2, kitchen: 0.45, home: 0.4, beauty: 0.25, fishing: 0.25, tools: 0.7, other: 0.4 };
 
 const CATEGORY_BUYER_CHECKS: Record<string, string[]> = {
-  shoes: [
-    "подтвердить материал верха и подошвы",
-    "подтвердить размерную сетку и длину стельки по каждому размеру",
-    "уточнить вес пары с упаковкой для выбранного SKU",
-    "уточнить размеры индивидуальной упаковки",
-    "получить реальные фото пары, подошвы, стельки и упаковки",
-    "проверить запах материала после распаковки",
-    "подтвердить MOQ по цветам и размерам",
-    "проверить маркировку/документы, если товар позиционируется как медицинская обувь",
-  ],
-  clothes: [
-    "подтвердить состав ткани",
-    "уточнить плотность/сезонность материала",
-    "получить размерную сетку и замеры изделия",
-    "проверить усадку после стирки",
-    "получить реальные фото, бирки и упаковку",
-  ],
-  electronics: [
-    "подтвердить точную модель/SKU",
-    "уточнить питание, разъём и комплектацию",
-    "подтвердить мощность/напряжение, если товар электрический",
-    "получить вес с упаковкой и сертификаты/инструкцию",
-  ],
-  passive_insect_trap: [
-    "подтвердить точную комплектацию выбранного SKU",
-    "уточнить материал корпуса и размер одной ловушки",
-    "уточнить вес упаковки выбранной комплектации",
-    "подтвердить, есть ли приманка в комплекте",
-    "уточнить способ крепления или подвешивания",
-    "получить реальные фото товара и упаковки",
-  ],
-  other: [
-    "подтвердить точную комплектацию выбранного SKU",
-    "уточнить материал, размеры и вес с упаковкой",
-    "получить реальные фото товара и упаковки",
-    "подтвердить MOQ и срок отгрузки",
-  ],
+  shoes: ['размерная сетка', 'длина стельки по каждому размеру', 'материал верха', 'материал подошвы', 'вес пары с упаковкой', 'размеры индивидуальной коробки', 'запах материала после распаковки', 'реальные фото пары, подошвы, стельки и упаковки', 'MOQ по цветам и размерам', 'образец'],
+  clothing: ['состав ткани', 'плотность/сезонность материала', 'размерная сетка', 'замеры изделия', 'усадка после стирки', 'цветопередача', 'реальные фото, бирки и упаковка'],
+  clothes: ['состав ткани', 'плотность/сезонность материала', 'размерная сетка', 'замеры изделия', 'усадка после стирки', 'цветопередача', 'реальные фото, бирки и упаковка'],
+  electronics: ['точная модель/SKU', 'тип питания/разъём', 'комплектация', 'мощность/напряжение, если товар электрический', 'батарея, если есть', 'инструкция и сертификаты', 'вес с упаковкой'],
+  beauty: ['состав', 'срок годности', 'документы/декларации', 'маркировка', 'упаковка', 'запах и консистенция образца'],
+  kids: ['сертификаты', 'возрастная маркировка', 'мелкие детали', 'безопасность материалов документально', 'упаковка и инструкция'],
+  passive_insect_trap: ['точная комплектация выбранного SKU', 'материал корпуса', 'размер одной ловушки', 'вес упаковки выбранной комплектации', 'есть ли приманка в комплекте', 'способ крепления/подвешивания', 'реальные фото товара и упаковки'],
+  other: ['точная комплектация выбранного SKU', 'материал', 'размеры', 'вес с упаковкой', 'реальные фото товара и упаковки', 'MOQ и срок отгрузки'],
 };
 
-const SAFE_CLAIM_HINTS: Array<[RegExp, string]> = [
-  [
-    /антибактериальн[а-яё]*|抗菌/gi,
-    "заявленное антибактериальное свойство — подтвердить документами/испытаниями",
-  ],
-  [
-    /противоскользящ[а-яё]*|防滑/gi,
-    "заявленное противоскользящее свойство — проверить на образце",
-  ],
-  [
-    /дышащ[а-яё]*|воздухопроницаем[а-яё]*|透气/gi,
-    "заявленная воздухопроницаемость — проверить на образце",
-  ],
-  [
-    /водонепроницаем[а-яё]*|влагозащит[а-яё]*|防水/gi,
-    "заявленная влагозащита — подтвердить у поставщика",
-  ],
-  [
-    /медицинск[а-яё]*\s+(?:эффект|свойств|сертифик|назначени)|лечебн[а-яё]*|ортопедическ[а-яё]*/gi,
-    "медицинские/лечебные свойства — только при наличии документов",
-  ],
-  [
-    /премиальн[а-яё]*|лучший|топовый/gi,
-    "обещания класса качества без подтверждения",
-  ],
-];
+const CATEGORY_MUST_NOT_ASK: Record<string, string[]> = {
+  shoes: ['рукав', 'мощность', 'напряжение', 'аккумулятор', 'тип вилки', 'усадка после стирки'],
+  clothing: ['мощность', 'напряжение', 'аккумулятор', 'тип вилки', 'длина стельки'],
+  clothes: ['мощность', 'напряжение', 'аккумулятор', 'тип вилки', 'длина стельки'],
+  electronics: ['рукав', 'длина стельки', 'размерная сетка одежды', 'состав ткани'],
+  passive_insect_trap: ['мощность', 'напряжение', '220V', 'тип вилки', 'аккумулятор', 'зарядка', 'тип лампы', 'электрическая лампа', 'ультразвуковая'],
+};
 
-function asRecord(value: unknown): Record<string, any> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, any>)
-    : {};
-}
+function asArray<T = any>(v: unknown): T[] { return Array.isArray(v) ? v as T[] : []; }
+function asRecord(v: unknown): Record<string, any> { return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {}; }
+function num(value: unknown): number | null { if (typeof value === 'number' && Number.isFinite(value)) return value; if (typeof value === 'string') { const n = Number(value.replace(',', '.').replace(/[^\d.-]/g, '')); return Number.isFinite(n) ? n : null; } return null; }
+function positive(value: unknown): number | null { const n = num(value); return n !== null && n > 0 ? Math.round(n * 100) / 100 : null; }
+function cny(value: number | null | undefined): string { if (!value || !Number.isFinite(value) || value <= 0) return 'нужно уточнить'; return `${String(Math.round(value * 100) / 100).replace('.', ',')} ¥`; }
+function money(value: number | null | undefined): string { if (!value || !Number.isFinite(value) || value <= 0) return '—'; return `${Math.round(value).toLocaleString('ru-RU')} ₽`; }
+function rangeText(min: number | null, max: number | null): string { if (!min && !max) return 'нужно уточнить'; if (min && max && min !== max) return `${cny(min).replace(' ¥', '')}–${cny(max).replace(' ¥', '')} ¥`; return cny(min ?? max); }
+function html(value: unknown): string { return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+function clean(value: unknown): string { return String(value ?? '').replace(/\b(?:undefined|null|NaN|Infinity|-Infinity)\b/gi, '—').replace(/0(?:[,.]0+)?\s*[¥￥₽]/gi, 'цена уточняется').replace(/0(?:[,.]0+)?\s*(?:кг|kg)\b/gi, 'вес уточняется').replace(/\s+/g, ' ').trim(); }
+function normalizeFact(value: unknown): string { return clean(normalizeMixedProductText(value)); }
+function uniq(list: string[], limit = 20): string[] { const seen = new Set<string>(); const out: string[] = []; for (const raw of list) { const text = clean(raw); if (!text || /^[-—]$/.test(text)) continue; const key = text.toLowerCase(); if (seen.has(key)) continue; seen.add(key); out.push(text); if (out.length >= limit) break; } return out; }
+function stripNumber(v: unknown): string { return normalizeFact(v).replace(/^\s*(?:\d+[.)]|[-•])\s*/g, '').trim(); }
 
-function asArray<T = any>(value: unknown): T[] {
-  return Array.isArray(value) ? (value as T[]) : [];
-}
-
-function num(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value.replace(",", ".").replace(/[^\d.-]/g, ""));
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
-function positive(value: unknown): number | null {
-  const n = num(value);
-  return n !== null && n > 0 ? Math.round(n * 100) / 100 : null;
-}
-
-function money(value: number | null | undefined, suffix = "₽"): string {
-  if (!value || value <= 0 || !Number.isFinite(value)) return "—";
-  return `${Math.round(value).toLocaleString("ru-RU")} ${suffix}`;
-}
-
-function cny(value: number | null | undefined): string {
-  if (!value || value <= 0 || !Number.isFinite(value)) return "нужно уточнить";
-  return `${String(Math.round(value * 100) / 100).replace(".", ",")} ¥`;
-}
-
-function rangeText(
-  min: number | null,
-  max: number | null,
-  suffix = "¥",
-): string {
-  if (!min && !max) return "нужно уточнить";
-  if (min && max && min !== max)
-    return `${cny(min).replace(" ¥", "")}–${cny(max).replace(" ¥", "")} ${suffix}`;
-  return `${cny(min ?? max).replace(" ¥", "")} ${suffix}`;
-}
-
-function uniq(list: string[], limit = 20): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of list) {
-    const text = String(raw ?? "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!text || /^(?:-|—|undefined|null|nan)$/i.test(text)) continue;
-    const key = text.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(text);
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
-function html(text: unknown): string {
-  return String(text ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function plain(text: unknown): string {
-  return String(text ?? "")
-    .replace(/\b(?:undefined|null|NaN|Infinity|-Infinity)\b/gi, "—")
-    .replace(/0(?:[,.]0+)?\s*[¥￥]/gi, "цена уточняется")
-    .replace(/0(?:[,.]0+)?\s*₽/gi, "цена уточняется")
-    .replace(/0(?:[,.]0+)?\s*(?:кг|kg)\b/gi, "вес уточняется")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeUserFact(value: unknown): string {
-  return plain(normalizeMixedProductText(value));
-}
-
-function cautiousClaimText(value: unknown): string {
-  let text = normalizeUserFact(value);
-  const source = text.toLowerCase();
-  if (
-    /антибактер|противоскольз|воздухопрониц|дышащ|защит[а-яё]* от запах|не вызывает запах|防臭|抗菌|防滑|透气/.test(
-      source,
-    )
-  ) {
-    const parts: string[] = [];
-    if (/защит[а-яё]* от запах|не вызывает запах|防臭|不臭脚/.test(source))
-      parts.push("заявленная защита от запаха");
-    if (/антибактер|抗菌/.test(source))
-      parts.push("заявленное антибактериальное свойство");
-    if (/противоскольз|防滑/.test(source))
-      parts.push("заявленное противоскользящее свойство");
-    if (/воздухопрониц|дышащ|透气/.test(source))
-      parts.push("заявленная воздухопроницаемость");
-    const uniqueParts = uniq(parts, 5);
-    if (uniqueParts.length)
-      return `${uniqueParts.join(", ")} — подтвердить документами/проверить на образце`;
-  }
-  for (const [pattern, replacement] of SAFE_CLAIM_HINTS) {
-    text = text.replace(pattern, replacement);
-  }
-  return text
-    .replace(/(?:заявлен(?:ное|ная|ный|ные)\s+){2,}/gi, "заявленное ")
-    .replace(/(?:—\s*проверить на образце\s*){2,}/gi, "— проверить на образце")
-    .replace(/(?:—\s*подтвердить[^,.;]*){2,}/gi, "— подтвердить")
-    .replace(/\s+\/\s*$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function stripListNumber(value: unknown): string {
-  return normalizeUserFact(value)
-    .replace(/^\s*(?:\d+[.)]|[-•])\s*/g, "")
-    .trim();
-}
-
-function imageCount(product: any): number {
-  const candidates = [
-    product?.images,
-    product?.imageUrls,
-    product?.img_urls,
-    product?.raw1688?.images,
-    product?.normalized1688?.images,
-    product?.normalized1688?.imageUrls,
-  ];
-  for (const value of candidates) {
-    const arr = asArray(value);
-    if (arr.length) return arr.length;
-  }
-  const numeric = positive(
-    product?.photosCount ??
-      product?.raw1688?.photosCount ??
-      product?.normalized1688?.photosCount,
-  );
-  if (numeric) return Math.round(numeric);
-  return product?.mainImageUrl || product?.imageUrl ? 1 : 0;
-}
-
-function collectRawAttributes(
-  product: any,
-  limit = 24,
-): Array<{
-  name: string;
-  value: string;
-  status: "из 1688" | "заявлено поставщиком" | "уточнить";
-}> {
-  const rawAttrs = asArray<any>(
-    product?.normalized1688?.attributes ??
-      product?.attributes ??
-      product?.raw1688?.attributesRaw,
-  );
-  const out: Array<{
-    name: string;
-    value: string;
-    status: "из 1688" | "заявлено поставщиком" | "уточнить";
-  }> = [];
-  for (const attr of rawAttrs) {
-    const rawName = attr?.name ?? attr?.key ?? attr?.attrName ?? "";
-    const rawValue = attr?.value ?? attr?.val ?? attr?.attrValue ?? "";
-    const name = normalizeUserFact(rawName);
-    const value = cautiousClaimText(rawValue);
-    if (!name || !value || name === "—" || value === "—") continue;
-    if (/^(?:id|sku|url|href|debug|raw)$/i.test(name)) continue;
-    out.push({
-      name,
-      value,
-      status: /заявлен|подтверд|проверить|уточнить/i.test(value)
-        ? "заявлено поставщиком"
-        : "из 1688",
-    });
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
-function collectIntelligenceFacts(
-  product: any,
-  intelligence: ProductIntelligenceLike,
-  limit = 20,
-): Array<{
-  name: string;
-  value: string;
-  status: "Product Intelligence" | "заявлено/уточнить";
-}> {
-  const identity = intelligence.productIdentity ?? getIdentity(product);
-  const facts = asRecord(
-    (intelligence as any).facts ?? product?.productContext?.facts,
-  );
-  const pairs: Array<[string, unknown]> = [
-    [
-      "Тип",
-      identity?.productKind ||
-        identity?.coreObject ||
-        titleForReport(product, intelligence),
-    ],
-    ["Форм-фактор", identity?.formFactor],
-    ["Аудитория", identity?.audience],
-    ["Пол", identity?.gender],
-    ["Сезон", identity?.season],
-    ["Материалы", identity?.materials?.join(", ")],
-    ["Питание", identity?.powerType?.join(", ")],
-    ["Сценарии использования", identity?.useCases?.join(", ")],
-    ["Видимые особенности", identity?.visibleFeatures?.join(", ")],
-    ["Важные особенности", identity?.importantFeatures?.join(", ")],
-    ...Object.entries(facts),
-  ];
-  const out: Array<{
-    name: string;
-    value: string;
-    status: "Product Intelligence" | "заявлено/уточнить";
-  }> = [];
-  for (const [rawName, rawValue] of pairs) {
-    const name = normalizeUserFact(rawName);
-    const value = cautiousClaimText(rawValue);
-    if (!name || !value || value === "—") continue;
-    out.push({
-      name,
-      value,
-      status: /заявлен|подтверд|проверить|уточнить/i.test(value)
-        ? "заявлено/уточнить"
-        : "Product Intelligence",
-    });
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
-function mergeFacts(
-  ...groups: Array<Array<{ name: string; value: string; status?: string }>>
-): Array<{ name: string; value: string; status: string }> {
-  const seen = new Set<string>();
-  const out: Array<{ name: string; value: string; status: string }> = [];
-  for (const group of groups) {
-    for (const fact of group) {
-      const name = normalizeUserFact(fact.name);
-      const value = cautiousClaimText(fact.value);
-      if (!name || !value) continue;
-      const key = `${name.toLowerCase()}=${value.toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ name, value, status: fact.status || "уточнить" });
-    }
-  }
-  return out;
+function cautiousClaim(value: unknown): string {
+  const t = normalizeFact(value);
+  const lower = t.toLowerCase();
+  const parts: string[] = [];
+  if (/антибактер|抗菌/.test(lower)) parts.push('заявленное антибактериальное свойство — подтвердить документами/испытаниями');
+  if (/противоскольз|防滑/.test(lower)) parts.push('заявленное противоскользящее свойство — проверить на образце');
+  if (/防臭|не вызывает запах|защит[а-яё]* от запах|不臭脚/.test(lower)) parts.push('заявленная защита от запаха — проверить на образце');
+  if (/водонепрониц|влагозащит|防水/.test(lower)) parts.push('заявленная влагозащита — подтвердить у поставщика');
+  if (/лечебн|ортопед|гипоаллерген/.test(lower)) parts.push('регулируемое спецсвойство — только при документах');
+  if (parts.length) return uniq(parts, 4).join('; ');
+  return t;
 }
 
 function getIntel(product: any): ProductIntelligenceLike {
-  return (product?.intelligence ??
-    product?.productIntelligence ??
-    product?.productContext ??
-    {}) as ProductIntelligenceLike;
+  return asRecord(product?.intelligence ?? product?.productIntelligence ?? product?.productContext?.productIntelligence) as ProductIntelligenceLike;
+}
+function getIdentity(product: any, intel = getIntel(product)) { return asRecord(intel.productIdentity ?? product?.productContext?.identity); }
+function categoryType(product: any, intel = getIntel(product)): string {
+  const raw = String(getIdentity(product, intel).categoryType ?? product?.categoryType ?? product?.productContext?.identity?.categoryType ?? '').toLowerCase();
+  if (raw === 'clothes') return 'clothing';
+  if (raw) return raw;
+  const text = `${product?.titleCn ?? ''} ${product?.titleRu ?? ''} ${product?.categoryName ?? ''}`.toLowerCase();
+  if (/鞋|сабо|сандал|тапоч|шл[её]пан|обув/.test(text)) return 'shoes';
+  if (/плать|брюк|леггинс|футбол|одежд|衣|裤/.test(text)) return 'clothing';
+  if (/usb|аккумулятор|электр|电/.test(text)) return 'electronics';
+  if (/космет|cream|маска|beauty/.test(text)) return 'beauty';
+  if (/детск|孩子|儿童/.test(text)) return 'kids';
+  return 'other';
+}
+function titleForReport(product: any, intel = getIntel(product)): string {
+  return clean(intel.cleanTitles?.titleForReport || intel.productIdentity?.shortNameRu || intel.productIdentity?.marketNameRu || product?.titleRu || product?.seoContent?.titleRu || product?.titleEn || normalizeMixedProductText(product?.titleCn) || 'Товар 1688');
+}
+function imagesCount(product: any): number { for (const src of [product?.images, product?.imageUrls, product?.normalized1688?.images]) { const a = asArray(src); if (a.length) return a.length; } return positive(product?.normalized1688?.imageCount ?? product?.photosCount) ?? (product?.mainImageUrl ? 1 : 0); }
+
+function collectSku(product: any): any[] { return asArray(product?.skus).length ? asArray(product.skus) : asArray(product?.normalized1688?.skuVariants); }
+function skuPrice(s: any): number | null { return positive(s?.priceYuan ?? s?.price ?? s?.discountPrice ?? s?.salePrice); }
+
+export function buildSkuDecision(product: RawProduct1688 | any, intelligence?: ProductIntelligenceLike): SkuDecision {
+  const variantsRaw = collectSku(product);
+  const variants = variantsRaw.map((s, i) => {
+    const raw = String(s?.name ?? s?.label ?? s?.skuName ?? `SKU ${i + 1}`);
+    const label = normalizeSkuText(raw) || normalizeFact(raw) || `SKU ${i + 1}`;
+    return { raw, label, priceYuan: skuPrice(s), packCount: detectPackCount(raw), size: extractShoeSize(raw) };
+  }).filter(v => v.raw || v.label);
+  const prices = variants.map(v => v.priceYuan).filter((p): p is number => !!p);
+  const rawText = variants.map(v => `${v.raw} ${v.label}`).join(' ');
+  const dims: string[] = [];
+  if (/цвет|color|白|黑|红|蓝|绿|黄|粉|хаки|бел|черн|чёрн|розов/i.test(rawText)) dims.push('color');
+  if (/размер|size|码|\b3[5-9]\b|\b4[0-9]\b/i.test(rawText) || categoryType(product, intelligence) === 'shoes') dims.push('size');
+  if (/модель|version|款|型号|经典|普通|高版本/i.test(rawText)) dims.push('model');
+  const isMultiPack = variants.some(v => !!v.packCount);
+  if (isMultiPack) dims.push('packCount');
+  const sizes = uniq(variants.map(v => v.size || '').filter(Boolean), 50).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+  const parts = variants.length ? [`SKU: ${variants.length} вариантов`] : ['SKU: не указаны'];
+  if (dims.length) parts.push(dims.map(d => ({ color: 'цвета', size: 'размеры', model: 'модели', packCount: 'количество штук' } as any)[d] ?? d).join(' × '));
+  if (sizes.length) parts.push(`размеры ${sizes[0]}–${sizes[sizes.length - 1]}`);
+  if (/маломер|偏小一码/.test(rawText)) parts.push('маломерит на 1 размер');
+  if (prices.length) parts.push(`цена по SKU ${rangeText(Math.min(...prices), Math.max(...prices))}`);
+  if (variants.length > 15) parts.push('показаны первые 15');
+  const safeVariants = variants.slice(0, 15);
+  const rec = safeVariants.find(v => /бел|черн|чёрн|хаки|40|39|38/.test(v.label))?.label ?? safeVariants[0]?.label;
+  const skuRisks = uniq([
+    ...(variants.length > 1 ? ['нужно выбрать конкретный SKU перед расчётом'] : []),
+    ...(isMultiPack ? ['цена и вес зависят от комплектации'] : []),
+    ...(/маломер|偏小一码/.test(rawText) ? ['поставщик указывает риск маломерности'] : []),
+  ], 8);
+  return { skuDimensions: dims, skuSummary: parts.join(' · '), skuCount: variants.length, shownSkuCount: safeVariants.length, skuVariantsNormalized: safeVariants, isMultiPack, needsSelection: variants.length > 1, priceText: prices.length ? `Цена по SKU: ${rangeText(Math.min(...prices), Math.max(...prices))}` : undefined, recommendedSampleSku: rec, skuRisks };
 }
 
-function getIdentity(product: any): ProductIntelligenceLike["productIdentity"] {
-  const intel = getIntel(product);
-  return intel.productIdentity ?? (intel as any).identity ?? {};
+export function buildPriceDecision(product: RawProduct1688 | any, sku = buildSkuDecision(product)): PriceDecision {
+  const pricing = asRecord(product?.normalized1688?.pricing);
+  const selectedSkuName = pricing.selectedSkuName || product?.selectedSkuName;
+  const selectedSkuPrice = positive(pricing.selectedSkuPriceYuan ?? product?.selectedSkuPriceYuan);
+  if (selectedSkuPrice) return { displayPriceText: `Цена выбранного SKU: ${cny(selectedSkuPrice)}${selectedSkuName ? ` · ${normalizeSkuText(selectedSkuName) || normalizeFact(selectedSkuName)}` : ''}`, calculationPriceYuan: selectedSkuPrice, minPriceYuan: selectedSkuPrice, maxPriceYuan: selectedSkuPrice, selectedSkuName, selectedSkuPriceYuan: selectedSkuPrice, priceSource: 'selected_sku', isEstimated: false, isSkuDependent: false, isPackDependent: sku.isMultiPack, canCalculateCost: true, canCalculateRoi: false, needsSkuConfirmation: false, reason: 'Выбран конкретный SKU с положительной ценой.' };
+  const skuPrices = sku.skuVariantsNormalized.map(v => v.priceYuan).filter((p): p is number => !!p);
+  if (skuPrices.length) { const sorted = skuPrices.slice().sort((a,b)=>a-b); const min = sorted[0]; const max = sorted[sorted.length - 1]; const calc = sorted[Math.floor(sorted.length / 2)]; return { displayPriceText: `${sku.isMultiPack ? 'Цена зависит от комплектации' : 'Цена по SKU'}: ${rangeText(min, max)}. Для точного расчёта выберите цвет/размер/модель.`, calculationPriceYuan: calc, minPriceYuan: min, maxPriceYuan: max, priceSource: 'sku_range', isEstimated: min !== max, isSkuDependent: true, isPackDependent: sku.isMultiPack, canCalculateCost: true, canCalculateRoi: false, needsSkuConfirmation: true, reason: 'Цена взята из диапазона SKU; для точного расчёта нужен выбранный SKU.' }; }
+  const ranges = asArray<any>(product?.priceRange ?? pricing.priceRanges).map(r => ({ minQty: positive(r?.minQty ?? r?.min_quantity) ?? 1, maxQty: positive(r?.maxQty ?? r?.max_quantity), price: positive(r?.price ?? r?.priceYuan) })).filter(r => !!r.price) as Array<{ minQty: number; maxQty: number | null; price: number }>;
+  if (ranges.length) { const prices = ranges.map(r => r.price); const min = Math.min(...prices); const max = Math.max(...prices); const uniqueQty = new Set(ranges.map(r => r.minQty)).size; const details = ranges.slice(0,4).map(r => `${r.minQty}+ шт — ${cny(r.price)}`).join('; '); return { displayPriceText: uniqueQty > 1 ? `Оптовые цены: ${rangeText(min,max)}; ${details}` : `Цена по вариантам: ${rangeText(min,max)}. Оптовые пороги не найдены.`, calculationPriceYuan: min, minPriceYuan: min, maxPriceYuan: max, priceSource: uniqueQty > 1 ? 'price_range' : 'fallback_min', isEstimated: true, isSkuDependent: uniqueQty === 1 || min !== max, isPackDependent: sku.isMultiPack, canCalculateCost: true, canCalculateRoi: false, needsSkuConfirmation: true, reason: uniqueQty > 1 ? 'Есть priceRange с порогами количества.' : 'priceRange похож на цены вариантов, а не на скидки.' }; }
+  const promo = positive(pricing.promotionPriceYuan ?? product?.promotionPrice ?? product?.promotion_price); if (promo) return { displayPriceText: `Цена: ${cny(promo)}`, calculationPriceYuan: promo, minPriceYuan: promo, maxPriceYuan: promo, priceSource: 'promotion', isEstimated: false, isSkuDependent: sku.needsSelection, isPackDependent: sku.isMultiPack, canCalculateCost: true, canCalculateRoi: false, needsSkuConfirmation: sku.needsSelection || sku.isMultiPack, reason: 'Использована промо-цена поставщика.' };
+  const direct = positive(pricing.directPriceYuan ?? product?.priceYuan ?? product?.price); if (direct) return { displayPriceText: `Цена: ${cny(direct)}`, calculationPriceYuan: direct, minPriceYuan: direct, maxPriceYuan: direct, priceSource: 'direct', isEstimated: false, isSkuDependent: sku.needsSelection, isPackDependent: sku.isMultiPack, canCalculateCost: true, canCalculateRoi: false, needsSkuConfirmation: sku.needsSelection || sku.isMultiPack, reason: 'Использована витринная цена поставщика.' };
+  return { displayPriceText: 'Цена: нужно уточнить', calculationPriceYuan: null, minPriceYuan: null, maxPriceYuan: null, priceSource: 'missing', isEstimated: false, isSkuDependent: sku.needsSelection, isPackDependent: sku.isMultiPack, canCalculateCost: false, canCalculateRoi: false, needsSkuConfirmation: sku.needsSelection, reason: 'Нет положительной цены в direct/promotion/SKU/priceRange.' };
 }
 
-function titleForReport(
-  product: any,
-  intelligence?: ProductIntelligenceLike,
-): string {
-  const intel = intelligence ?? getIntel(product);
-  const identity = getIdentity(product);
-  const titles = intel.cleanTitles ?? (intel as any).titles ?? {};
-  return plain(
-    titles.titleForReport ||
-      titles.titleRuClean ||
-      titles.cleanRu ||
-      identity?.marketNameRu ||
-      identity?.shortNameRu ||
-      product?.titleRu ||
-      product?.seoContent?.titleRu ||
-      product?.titleEn ||
-      product?.titleCn ||
-      "Товар 1688",
-  );
+export function buildWeightDecision(product: RawProduct1688 | any, intelligence?: ProductIntelligenceLike, sku = buildSkuDecision(product, intelligence)): WeightDecision {
+  const manual = positive(product?.manualWeightKg ?? product?.supplierAnswer?.weightKg ?? product?.confirmedWeightKg);
+  if (manual) return { weightKg: manual, displayText: `Вес: ${manual} кг, введён вручную`, source: 'manual', isEstimated: false, canUseForCargo: true, canUseForRoi: false, reason: 'Вес введён/подтверждён вручную.' };
+  const provider = positive(product?.normalized1688?.weightKg ?? product?.weightKg ?? product?.shipping_info?.weight);
+  if (provider) return { weightKg: provider, displayText: `Вес: ${provider} кг`, source: 'provider', isEstimated: false, canUseForCargo: true, canUseForRoi: false, reason: 'Вес получен от поставщика/провайдера.' };
+  if (sku.isMultiPack) return { weightKg: null, displayText: 'Вес: нужно уточнить для выбранной комплектации', source: 'missing', isEstimated: false, canUseForCargo: false, canUseForRoi: false, reason: 'Вес не указан; у товара разные комплектации, средний вес категории не применён.' };
+  const fallback = CATEGORY_DEFAULT_WEIGHT[categoryType(product, intelligence)] ?? CATEGORY_DEFAULT_WEIGHT.other;
+  return { weightKg: fallback, displayText: `Вес: ориентир ${fallback} кг по категории, не для ROI`, source: 'category_default', isEstimated: true, canUseForCargo: false, canUseForRoi: false, reason: 'Вес не указан; категорийный вес можно показывать только как ориентир.' };
 }
 
-function categoryType(
-  product: any,
-  intelligence?: ProductIntelligenceLike,
-): string {
-  const identity =
-    (intelligence ?? getIntel(product)).productIdentity ?? getIdentity(product);
-  const raw = String(
-    identity?.subCategoryType ||
-      identity?.categoryType ||
-      product?.categoryType ||
-      product?.categoryName ||
-      "other",
-  ).toLowerCase();
-  if (
-    /пассив|passive|ловушк.*(?:ос|мух|насеком)|insect trap|wasp|fly/.test(
-      raw +
-        " " +
-        String(
-          product?.titleRu ?? product?.titleEn ?? product?.titleCn ?? "",
-        ).toLowerCase(),
-    )
-  )
-    return "passive_insect_trap";
-  if (/shoe|обув|шл[её]пан|тапк|сланц|кроссов|ботин|鞋/.test(raw))
-    return "shoes";
-  if (/cloth|одеж|брюк|леггин|футбол|плать|衣|裤/.test(raw)) return "clothes";
-  if (/electron|электро|usb|power|аккумулятор|battery/.test(raw))
-    return "electronics";
-  return raw || "other";
+export function buildMarketDecision(_product: any): MarketDecision { return { status: 'not_required', rawCandidatesCount: 0, confirmedDirectCount: 0, similarLocalCount: 0, crossBorderCount: 0, categoryOnlyCount: 0, medianPriceRub: null, p25PriceRub: null, p75PriceRub: null, canShowMedianPrice: false, canCalculateRoi: false, confidence: 'low', reason: 'Автоматический WB/Ozon-поиск не входит в обязательный MVP. Рынок проверяется вручную или через будущий модуль конкурентов.' }; }
+
+export function buildCostDecision(input: { priceDecision: PriceDecision; weightDecision: WeightDecision; yuanRate?: number; manualSalePriceRub?: number | null }): CostDecision {
+  const { priceDecision: price, weightDecision: weight } = input;
+  const yuanRate = input.yuanRate && input.yuanRate > 0 ? input.yuanRate : YUAN_FALLBACK;
+  if (!price.canCalculateCost || !price.calculationPriceYuan) return { status: 'not_calculated_no_price', canShowPurchaseRub: false, canShowCostWithoutCargo: false, canShowCargo: false, canShowRoi: false, purchaseRub: null, costWithoutCargoRub: null, cargoRub: null, totalCostRub: null, manualSalePriceRub: input.manualSalePriceRub ?? null, scenarioProfitRub: null, scenarioRoiPercent: null, breakEvenPriceRub: null, warnings: ['Экономика не рассчитана — нет цены товара.'], nextAction: 'Уточнить цену выбранного SKU у поставщика.' };
+  const purchaseRub = Math.round(price.calculationPriceYuan * yuanRate);
+  const bankRub = Math.round(purchaseRub * BANK_MARKUP);
+  const costWithoutCargoRub = purchaseRub + bankRub + DEFAULT_FULFILLMENT_RUB;
+  const cargoRub = weight.canUseForCargo && weight.weightKg ? Math.round(weight.weightKg * DEFAULT_CARGO_RUB_PER_KG) : null;
+  const totalCostRub = cargoRub ? costWithoutCargoRub + cargoRub : null;
+  const sale = positive(input.manualSalePriceRub);
+  const warnings = uniq([...(price.needsSkuConfirmation ? ['цена зависит от выбранного SKU/комплектации'] : []), ...(!weight.canUseForCargo ? ['карго не рассчитано — нужен вес с упаковкой'] : []), ...(weight.isEstimated ? ['вес только ориентировочный по категории'] : [])], 10);
+  if (sale && totalCostRub) { const marketplace = Math.round(sale * DEFAULT_MARKETPLACE_COST_RATE); const profit = sale - totalCostRub - marketplace; const roi = totalCostRub > 0 ? Math.round((profit / totalCostRub) * 100) : null; return { status: 'scenario_by_manual_sale_price', canShowPurchaseRub: true, canShowCostWithoutCargo: true, canShowCargo: true, canShowRoi: true, purchaseRub, costWithoutCargoRub, cargoRub, totalCostRub, manualSalePriceRub: sale, scenarioProfitRub: profit, scenarioRoiPercent: roi, breakEvenPriceRub: Math.round((totalCostRub + marketplace) / Math.max(0.01, 1 - DEFAULT_MARKETPLACE_COST_RATE)), warnings: [...warnings, 'ROI сценарный: рассчитан по цене, введённой пользователем, а не по автоматическому рынку.'], nextAction: 'Проверить цену продажи вручную и подтвердить вес/упаковку перед закупкой.' }; }
+  return { status: cargoRub ? 'cost_with_manual_weight' : 'cost_without_cargo', canShowPurchaseRub: true, canShowCostWithoutCargo: true, canShowCargo: !!cargoRub, canShowRoi: false, purchaseRub, costWithoutCargoRub, cargoRub, totalCostRub, manualSalePriceRub: sale ?? null, scenarioProfitRub: null, scenarioRoiPercent: null, breakEvenPriceRub: null, warnings, nextAction: weight.canUseForCargo ? 'Введите предполагаемую цену продажи или добавьте конкурентов вручную.' : 'Уточните вес с упаковкой, затем пересчитаю себестоимость.' };
 }
 
-function productSkus(product: any): any[] {
-  const normalized = product?.normalized1688;
-  return asArray(normalized?.skuVariants).length
-    ? asArray(normalized?.skuVariants)
-    : asArray(product?.skus ?? product?.skuPrices);
+export function buildEconomyDecision(priceDecision: PriceDecision, weightDecision: WeightDecision, _marketDecision?: MarketDecision, opts: { yuanToRub?: number; manualSalePriceRub?: number | null } = {}): EconomyDecision {
+  const cost = buildCostDecision({ priceDecision, weightDecision, yuanRate: opts.yuanToRub, manualSalePriceRub: opts.manualSalePriceRub });
+  return { status: cost.status, canShowCost: cost.canShowCostWithoutCargo, canShowCargo: cost.canShowCargo, canShowMargin: cost.canShowRoi, canShowRoi: cost.canShowRoi, costRub: cost.totalCostRub ?? cost.costWithoutCargoRub, costWithoutCargoRub: cost.costWithoutCargoRub, cargoRub: cost.cargoRub, profitRub: cost.scenarioProfitRub ?? null, roiPercent: cost.scenarioRoiPercent ?? null, warnings: cost.warnings, nextAction: cost.nextAction };
 }
 
-function uniqVariants<
-  T extends { label?: string; raw?: string; priceYuan?: number | null },
->(variants: T[], limit = 15): T[] {
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const variant of variants) {
-    const key =
-      `${variant.label || variant.raw || ""}|${variant.priceYuan ?? ""}`.toLowerCase();
-    if (!key.trim() || seen.has(key)) continue;
-    seen.add(key);
-    out.push(variant);
-    if (out.length >= limit) break;
-  }
+function collectRawAttributes(product: any, limit = 24): Array<{ name: string; value: string; status: string }> {
+  const attrs = asArray<any>(product?.normalized1688?.attributes ?? product?.attributes ?? product?.raw1688?.attributesRaw);
+  const out: Array<{ name: string; value: string; status: string }> = [];
+  for (const a of attrs) { const name = normalizeFact(a?.name ?? a?.key ?? a?.attrName); const value = cautiousClaim(a?.value ?? a?.val ?? a?.attrValue); if (!name || !value || /^(id|url|debug|raw)$/i.test(name)) continue; out.push({ name, value, status: /заявлен|подтверд|проверить|уточнить/i.test(value) ? 'заявлено поставщиком' : 'из 1688' }); if (out.length >= limit) break; }
   return out;
 }
+function collectIntelFacts(product: any, intel = getIntel(product), limit = 20): Array<{ name: string; value: string; status: string }> {
+  const id = getIdentity(product, intel); const facts = asRecord((intel as any).facts ?? product?.productContext?.facts);
+  const pairs: Array<[string, unknown]> = [['Тип', id.productKind || id.coreObject || titleForReport(product, intel)], ['Форм-фактор', id.formFactor], ['Аудитория', id.audience], ['Пол', id.gender], ['Сезон', id.season], ['Материалы', asArray(id.materials ?? id.material).map((m:any)=> typeof m === 'string' ? m : m?.value).join(', ')], ['Сценарии использования', asArray(id.useCases).join(', ')], ['Видимые особенности', asArray(id.visibleFeatures).join(', ')], ['Важные особенности', asArray(id.importantFeatures).map((v:any)=> typeof v === 'string' ? v : v?.value).join(', ')], ...Object.entries(facts)];
+  const out: Array<{ name: string; value: string; status: string }> = []; for (const [n, v] of pairs) { const name = normalizeFact(n); const value = cautiousClaim(v); if (!name || !value || value === '—') continue; out.push({ name, value, status: /заявлен|подтверд|проверить|уточнить/i.test(value) ? 'заявлено/уточнить' : 'Product Intelligence' }); if (out.length >= limit) break; } return out;
+}
+function mergeFacts(...groups: Array<Array<{ name: string; value: string; status?: string }>>): Array<{ name: string; value: string; status: string }> { const seen = new Set<string>(); const out: Array<{ name: string; value: string; status: string }> = []; for (const g of groups) for (const f of g) { const name = normalizeFact(f.name); const value = cautiousClaim(f.value); const key = `${name.toLowerCase()}:${value.toLowerCase()}`; if (!name || !value || seen.has(key)) continue; seen.add(key); out.push({ name, value, status: f.status ?? 'уточнить' }); } return out; }
 
-export function buildSkuDecision(
-  product: RawProduct1688 | any,
-  intelligence?: ProductIntelligenceLike,
-): SkuDecision {
-  const skus = productSkus(product);
-  const variants = skus
-    .map((raw: any) => {
-      const name = String(
-        raw?.name ?? raw?.label ?? raw?.skuName ?? raw?.title ?? "",
-      ).trim();
-      const normalized = normalizeSkuText(name);
-      const priceYuan = positive(raw?.price ?? raw?.priceYuan ?? raw?.priceCny);
-      const packCount = detectPackCount(name);
-      const size = extractShoeSize(name);
-      return {
-        raw: name,
-        label: normalized || name,
-        priceYuan,
-        packCount,
-        size,
-      };
-    })
-    .filter((v) => v.raw || v.label || v.priceYuan);
-
-  const packCounts = uniq(
-    variants.map((v) => (v.packCount ? `${v.packCount}` : "")).filter(Boolean),
-  );
-  const sizes = uniq(variants.map((v) => v.size ?? "").filter(Boolean));
-  const prices = variants
-    .map((v) => v.priceYuan)
-    .filter((p): p is number => !!p);
-  const isMultiPack =
-    packCounts.length > 1 || variants.some((v) => !!v.packCount);
-  const cat = categoryType(product, intelligence);
-  const dimensions: string[] = [];
-  const rawText = variants.map((v) => v.raw).join(" ");
-  if (
-    /色|цвет|black|white|red|blue|green|роз|черн|бел|красн|син|зел/i.test(
-      rawText,
-    )
-  )
-    dimensions.push("color");
-  if (
-    sizes.length ||
-    /размер|码|size/i.test(rawText) ||
-    cat === "shoes" ||
-    cat === "clothes"
-  )
-    dimensions.push("size");
-  if (/型号|model|款|версия|модель/i.test(rawText)) dimensions.push("model");
-  if (isMultiPack) dimensions.push("packCount");
-
-  let skuSummary = "SKU: не указаны";
-  if (variants.length) {
-    const parts: string[] = [`SKU: ${variants.length} вариантов`];
-    if (dimensions.length)
-      parts.push(
-        dimensions
-          .map(
-            (d) =>
-              ({
-                color: "цвета",
-                size: "размеры",
-                model: "модели",
-                packCount: "количество штук",
-              })[d] ?? d,
-          )
-          .join(" × "),
-      );
-    if (sizes.length) {
-      const numericSizes = sizes
-        .map(Number)
-        .filter(Number.isFinite)
-        .sort((a, b) => a - b);
-      if (numericSizes.length)
-        parts.push(
-          `размеры ${numericSizes[0]}–${numericSizes[numericSizes.length - 1]}`,
-        );
-    }
-    if (/偏小一码|маломер/i.test(rawText)) parts.push("маломерит на 1 размер");
-    if (prices.length) {
-      const min = Math.min(...prices);
-      const max = Math.max(...prices);
-      parts.push(`цена по SKU ${rangeText(min, max)}`);
-    }
-    if (variants.length > 15) parts.push("показаны первые 15");
-    skuSummary = parts.join(" · ");
-  }
-
-  return {
-    skuDimensions: dimensions,
-    skuSummary,
-    skuCount: variants.length,
-    shownSkuCount: Math.min(variants.length, 15),
-    skuVariantsNormalized: uniqVariants(variants, 15),
-    isMultiPack,
-    needsSelection: variants.length > 1,
-    priceText: prices.length
-      ? `Цена по SKU: ${rangeText(Math.min(...prices), Math.max(...prices))}`
-      : undefined,
-  };
+export function buildReadinessDecision(input: { product: any; intelligence: ProductIntelligenceLike; priceDecision: PriceDecision; weightDecision: WeightDecision; skuDecision?: SkuDecision }): ReadinessDecision {
+  const { product, intelligence, priceDecision: price, weightDecision: weight } = input; const sku = input.skuDecision ?? buildSkuDecision(product, intelligence); const facts = mergeFacts(collectIntelFacts(product, intelligence, 8), collectRawAttributes(product, 8));
+  let score = 20; const positiveSignals: string[] = []; const blockers: string[] = []; const risks: string[] = []; const missingData: string[] = [];
+  if (price.canCalculateCost) { score += 15; positiveSignals.push('цена товара распознана'); } else { score -= 20; blockers.push('нет цены товара'); missingData.push('цена выбранного SKU'); }
+  if (positive(product?.moq ?? product?.normalized1688?.moq)) { score += 10; positiveSignals.push('MOQ понятен'); } else { missingData.push('MOQ'); }
+  if (sku.skuCount > 0) { score += 15; positiveSignals.push('SKU разобраны'); } else if (sku.needsSelection) { score -= 20; blockers.push('SKU не разобраны'); }
+  if (product?.supplierName || product?.supplierType) { score += 10; positiveSignals.push('есть данные поставщика'); } else risks.push('поставщик не описан');
+  if (positive(product?.sold ?? product?.normalized1688?.salesCount)) { score += 10; positiveSignals.push('есть продажи/заказы на 1688'); }
+  if (imagesCount(product) > 0) { score += 10; positiveSignals.push('есть фото товара'); } else missingData.push('фото товара');
+  if (facts.length >= 3) { score += 10; positiveSignals.push('есть характеристики/особенности товара'); } else risks.push('мало характеристик в карточке');
+  if (weight.canUseForCargo) { score += 10; positiveSignals.push('есть вес для расчёта карго'); } else { score -= 15; missingData.push('вес с упаковкой'); risks.push('карго нельзя рассчитать точно без веса'); }
+  const claimRisk = uniq([...(intelligence.claimsPolicy?.claimedButNeedProof ?? []), ...(intelligence.reportRules?.seoForbiddenClaims ?? []), ...facts.filter(f => /заявлен|документ|испытан|сертифик|спецсвойств/i.test(f.value)).map(f => `${f.name}: ${f.value}`)], 8);
+  if (claimRisk.length) { score -= 15; risks.push('есть свойства, которые нужно подтвердить документами/образцом'); } else score += 10;
+  if (sku.isMultiPack && !weight.canUseForCargo) { score -= 10; blockers.push('у multi-pack товара нужен вес выбранной комплектации'); }
+  score = Math.max(0, Math.min(100, score));
+  let status: ReadinessDecision['status'] = 'needs_supplier_confirmation'; let label: ReadinessDecision['label'] = '🟡 Нужны данные';
+  if (!price.canCalculateCost) { status = 'not_ready'; label = '🔴 Не готово к закупке'; }
+  else if (score >= 75 && weight.canUseForCargo && !claimRisk.length) { status = 'ready_for_sample'; label = '🟢 Можно заказывать образец'; }
+  else if (score < 45 || blockers.length >= 2) { status = 'high_risk'; label = '🔴 Высокий риск'; }
+  else if (!weight.canUseForCargo || price.needsSkuConfirmation) { status = 'needs_supplier_confirmation'; label = '🟡 Нужны данные'; }
+  else { status = 'needs_market_check'; label = '🟡 Нужно проверить рынок'; }
+  const nextActions = uniq([...(missingData.length ? ['отправить вопросы поставщику и закрыть недостающие данные'] : []), ...(weight.canUseForCargo ? ['ввести предполагаемую цену продажи для сценария'] : ['уточнить вес с упаковкой']), 'подготовить SEO/ТЗ байеру и проверить рынок вручную', ...(score >= 55 ? ['рассмотреть заказ 1 образца после подтверждения SKU'] : [])], 5);
+  return { score, status, label, positiveSignals: uniq(positiveSignals, 8), blockers: uniq(blockers, 8), risks: uniq(risks, 10), missingData: uniq([...missingData, ...(intelligence.dataQuality?.missingCriticalFields ?? [])], 12), nextActions, canRecommendSample: score >= 55 && price.canCalculateCost, canRecommendBatch: false, reason: `${label}. Готовность ${score}/100: ${nextActions[0] ?? 'нужно уточнить данные'}.` };
 }
 
-export function buildPriceDecision(
-  product: RawProduct1688 | any,
-  skuDecision = buildSkuDecision(product),
-): PriceDecision {
-  const normalized = product?.normalized1688;
-  const pricing = normalized?.pricing ?? {};
-  const selectedSkuName = pricing?.selectedSkuName || product?.selectedSkuName;
-  const selectedSkuPrice = positive(
-    pricing?.selectedSkuPriceYuan ?? product?.selectedSkuPriceYuan,
-  );
-  if (selectedSkuPrice) {
-    return {
-      displayPriceText: `Цена выбранного SKU: ${cny(selectedSkuPrice)}${selectedSkuName ? ` · ${normalizeSkuText(selectedSkuName) || normalizeUserFact(selectedSkuName)}` : ""}`,
-      calculationPriceYuan: selectedSkuPrice,
-      minPriceYuan: selectedSkuPrice,
-      maxPriceYuan: selectedSkuPrice,
-      selectedSkuName,
-      selectedSkuPriceYuan: selectedSkuPrice,
-      priceSource: "sku",
-      isEstimated: false,
-      isSkuDependent: false,
-      isPackDependent: skuDecision.isMultiPack,
-      canCalculateCost: true,
-      canCalculateRoi: true,
-      needsSkuConfirmation: false,
-      reason: "Выбран конкретный SKU с положительной ценой.",
-    };
-  }
+export function buildDecisionContext(product: any) { const intelligence = getIntel(product); const sku = buildSkuDecision(product, intelligence); const price = buildPriceDecision(product, sku); const weight = buildWeightDecision(product, intelligence, sku); const market = buildMarketDecision(product); const economy = buildEconomyDecision(price, weight, market, { yuanToRub: product?.economics?.yuanToRub, manualSalePriceRub: product?.manualSalePriceRub ?? product?.manualSalePrice ?? product?.scenarioSalePriceRub }); const cost = buildCostDecision({ priceDecision: price, weightDecision: weight, yuanRate: product?.economics?.yuanToRub, manualSalePriceRub: product?.manualSalePriceRub ?? product?.manualSalePrice ?? product?.scenarioSalePriceRub }); const readiness = buildReadinessDecision({ product, intelligence, priceDecision: price, weightDecision: weight, skuDecision: sku }); return { intelligence, sku, price, weight, market, economy, cost, readiness, status: readiness.label, title: titleForReport(product, intelligence), categoryType: categoryType(product, intelligence) }; }
 
-  const skuPrices = skuDecision.skuVariantsNormalized
-    .map((v) => v.priceYuan)
-    .filter((p): p is number => !!p);
-  if (skuPrices.length) {
-    const min = Math.min(...skuPrices);
-    const max = Math.max(...skuPrices);
-    const median = skuPrices.slice().sort((a, b) => a - b)[
-      Math.floor(skuPrices.length / 2)
-    ];
-    return {
-      displayPriceText: `${skuDecision.isMultiPack ? "Цена зависит от комплектации" : "Цена по SKU"}: ${rangeText(min, max)}. Для точного расчёта подтвердите выбранный вариант.`,
-      calculationPriceYuan: median,
-      minPriceYuan: min,
-      maxPriceYuan: max,
-      priceSource: "sku",
-      isEstimated: min !== max,
-      isSkuDependent: skuPrices.length > 1,
-      isPackDependent: skuDecision.isMultiPack,
-      canCalculateCost: true,
-      canCalculateRoi: false,
-      needsSkuConfirmation: true,
-      reason:
-        "Есть цены SKU, но пользователь не выбрал конкретный SKU; ROI нельзя считать как точный.",
-    };
-  }
+export function buildStatusLine(price: PriceDecision, weight: WeightDecision, _market: MarketDecision, economy: EconomyDecision): string { const readinessLike = (!price.canCalculateCost) ? '🔴 Не готово к закупке' : (!weight.canUseForCargo || price.needsSkuConfirmation) ? '🟡 Нужны данные' : economy.canShowRoi ? '🟡 Сценарий по вашей цене' : '🟡 Нужно проверить рынок'; return readinessLike; }
 
-  const priceRanges = asArray<any>(product?.priceRange ?? pricing?.priceRanges);
-  const validRanges = priceRanges
-    .map((r) => ({
-      minQty: positive(r?.minQty ?? r?.min_quantity) ?? 1,
-      maxQty: positive(r?.maxQty ?? r?.max_quantity),
-      price: positive(r?.price ?? r?.priceYuan),
-    }))
-    .filter((r) => !!r.price) as Array<{
-    minQty: number;
-    maxQty: number | null;
-    price: number;
-  }>;
-  if (validRanges.length) {
-    const prices = validRanges.map((r) => r.price);
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
-    const uniqueQty = new Set(validRanges.map((r) => r.minQty)).size;
-    const source: PriceDecision["priceSource"] =
-      uniqueQty > 1 ? "price_range" : "fallback_min";
-    const tierDetails = validRanges
-      .slice(0, 4)
-      .map((r) => `${r.minQty}+ шт — ${cny(r.price)}`)
-      .join("; ");
-    const text =
-      uniqueQty > 1
-        ? `Оптовые цены: ${rangeText(min, max)} (ориентир); ${tierDetails}`
-        : `Цена по вариантам: ${rangeText(min, max)}. Оптовые пороги не найдены.`;
-    return {
-      displayPriceText: text,
-      calculationPriceYuan: min,
-      minPriceYuan: min,
-      maxPriceYuan: max,
-      priceSource: source,
-      isEstimated: true,
-      isSkuDependent: min !== max || uniqueQty === 1,
-      isPackDependent: skuDecision.isMultiPack,
-      canCalculateCost: true,
-      canCalculateRoi: false,
-      needsSkuConfirmation: true,
-      reason:
-        uniqueQty > 1
-          ? "Есть priceRange с разными порогами количества."
-          : "priceRange похож на цены вариантов, а не на скидки.",
-    };
-  }
+function topQuestions(product: any, x = buildDecisionContext(product), n = 7): string[] { return buildSupplierQuestions(product, x).ru.slice(0, n); }
 
-  const promo = positive(
-    pricing?.promotionPriceYuan ??
-      product?.promotionPrice ??
-      product?.promotion_price,
-  );
-  if (promo) {
-    return {
-      displayPriceText: `Цена: ${cny(promo)}`,
-      calculationPriceYuan: promo,
-      minPriceYuan: promo,
-      maxPriceYuan: promo,
-      priceSource: "promotion",
-      isEstimated: false,
-      isSkuDependent: false,
-      isPackDependent: skuDecision.isMultiPack,
-      canCalculateCost: true,
-      canCalculateRoi: !skuDecision.needsSelection && !skuDecision.isMultiPack,
-      needsSkuConfirmation:
-        skuDecision.needsSelection || skuDecision.isMultiPack,
-      reason: "Использована промо-цена поставщика.",
-    };
-  }
+export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: number }, _wbCategory?: any): string {
+  const x = buildDecisionContext(product); const source = String(product?.platform ?? '1688').toUpperCase(); const moq = positive(product?.normalized1688?.moq ?? product?.moq); const sold = positive(product?.normalized1688?.salesCount ?? product?.sold); const facts = mergeFacts(collectIntelFacts(product, x.intelligence, 8), collectRawAttributes(product, 10)).slice(0, 6);
+  const costLines = x.cost.status === 'not_calculated_no_price' ? ['Экономика не рассчитана — нет цены товара.'] : [ ...(x.cost.purchaseRub ? [`• Закупка: ${cny(x.price.calculationPriceYuan)} ≈ ${money(x.cost.purchaseRub)}`] : []), ...(x.cost.costWithoutCargoRub ? [`• Себестоимость без карго: ${money(x.cost.costWithoutCargoRub)}`] : []), ...(x.cost.cargoRub ? [`• Карго: ${money(x.cost.cargoRub)}`] : ['• Карго не рассчитано — нужен вес с упаковкой.']), ...(x.cost.canShowRoi ? [`• Сценарная прибыль до рекламы: ${money(x.cost.scenarioProfitRub)}`, `• Сценарный ROI: ${x.cost.scenarioRoiPercent}%`, 'Это сценарий по цене, введённой пользователем, не подтверждённая рыночная цена.'] : ['• ROI не считаю — продажная цена/рынок не заданы.']) ];
+  const lines = [`📦 <b>${html(x.title)}</b>`, '', `Источник: ${html(source)}`, `Поставщик: ${html(product?.supplierType || product?.normalized1688?.supplierType || 'не указан')}`, '', '📌 <b>Данные 1688</b>', `• Цена: ${html(x.price.displayPriceText)}`, `• MOQ: ${moq ? `${Math.round(moq).toLocaleString('ru-RU')} шт.` : 'уточняется'}`, `• SKU: ${html(x.sku.skuSummary)}`, `• Фото: ${imagesCount(product) || '—'} шт`, `• Вес: ${html(x.weight.displayText.replace(/^Вес:\s*/i, ''))}`, `• Продано/заказов: ${sold ? Math.round(sold).toLocaleString('ru-RU') : '—'}`, '', `<b>${html(x.readiness.label)}</b>`, `Готовность к проверке: ${x.readiness.score}/100`, '', '✅ <b>Что уже понятно</b>', ...(x.readiness.positiveSignals.length ? x.readiness.positiveSignals.map(s => `• ${html(s)}`) : ['• товар распознан и готов к первичной проверке']), ...(facts.length ? ['', '🧾 <b>Важные свойства из карточки</b>', ...facts.map(f => `• ${html(f.name)}: ${html(f.value)} (${html(f.status)})`)] : []), '', '⚠️ <b>Что мешает закупке</b>', ...(x.readiness.blockers.length || x.readiness.risks.length ? [...x.readiness.blockers, ...x.readiness.risks].slice(0, 7).map(s => `• ${html(s)}`) : ['• нужно вручную проверить рынок/конкурентов перед партией']), '', '💰 <b>Экономика</b>', ...costLines.map(html), ...(x.cost.warnings.length ? ['', ...x.cost.warnings.map(w => `⚠️ ${html(w)}`)] : []), '', '📌 <b>Что уточнить у поставщика</b>', ...topQuestions(product, x).map(q => `• ${html(q)}`), '', '📄 <b>Что уже подготовлено</b>', '• SEO-черновик WB/Ozon', '• ТЗ байеру', '• ТЗ карго', '• ТЗ для инфографики', '• Риск-чеклист', '• Рекомендация по образцу', '', '🎯 <b>Вердикт</b>', html(x.readiness.canRecommendSample ? 'Партию закупать рано. Можно готовить карточку и запросить данные для образца.' : 'Закупать рано. Сначала закрыть недостающие данные у поставщика.'), '', 'Что сделать:', ...x.readiness.nextActions.slice(0, 3).map((a, i) => `${i + 1}. ${html(a)}`) ]; if (typeof statusInfo?.creditsRemaining === 'number') lines.push('', `📦 Осталось: ${statusInfo.creditsRemaining} анализов`); return lines.join('\n').replace(/\n{3,}/g, '\n\n'); }
 
-  const direct = positive(
-    pricing?.directPriceYuan ?? product?.priceYuan ?? product?.price,
-  );
-  if (direct) {
-    return {
-      displayPriceText: `Цена: ${cny(direct)}`,
-      calculationPriceYuan: direct,
-      minPriceYuan: direct,
-      maxPriceYuan: direct,
-      priceSource: "direct",
-      isEstimated: false,
-      isSkuDependent: false,
-      isPackDependent: skuDecision.isMultiPack,
-      canCalculateCost: true,
-      canCalculateRoi: !skuDecision.needsSelection && !skuDecision.isMultiPack,
-      needsSkuConfirmation:
-        skuDecision.needsSelection || skuDecision.isMultiPack,
-      reason: "Использована витринная цена поставщика.",
-    };
-  }
+export function build1688Detail(product: any): string { const x = buildDecisionContext(product); const facts = mergeFacts(collectIntelFacts(product, x.intelligence, 12), collectRawAttributes(product, 16)).slice(0, 14); const skuExamples = x.sku.skuVariantsNormalized.slice(0, 12).map(v => `• ${normalizeSkuText(v.raw || v.label) || v.label}${v.priceYuan ? ` — ${cny(v.priceYuan)}` : ''}`); return ['📦 Данные товара с 1688', '', 'Название CN:', cleanChineseTitle(product?.titleCn ?? product?.normalized1688?.titleCn ?? '') || '—', '', 'Название RU:', x.title, '', 'Цена:', x.price.displayPriceText, '', 'SKU:', x.sku.skuSummary, ...(skuExamples.length ? skuExamples : ['• варианты SKU не распознаны']), '', 'Поставщик:', `• название: ${normalizeFact(product?.supplierName) || 'не указано'}`, `• тип: ${normalizeFact(product?.supplierType) || 'не указан'}`, `• рейтинг: ${normalizeFact(product?.supplierRating) || '—'}`, `• заказов: ${normalizeFact(product?.sold) || '—'}`, `• MOQ: ${positive(product?.moq) ? `${positive(product?.moq)} шт.` : 'уточняется'}`, '', 'Ключевые характеристики:', ...(facts.length ? facts.map(f => `• ${f.name}: ${f.value} (${f.status})`) : ['• характеристики нужно уточнить у поставщика']), '', 'Логистика:', `• вес: ${x.weight.displayText.replace(/^Вес:\s*/i, '')}`, `• фото: ${imagesCount(product) || '—'}`, `• остаток: ${normalizeFact(product?.stock) || '—'}`].join('\n'); }
 
-  return {
-    displayPriceText: "—",
-    calculationPriceYuan: null,
-    minPriceYuan: null,
-    maxPriceYuan: null,
-    priceSource: "missing",
-    isEstimated: false,
-    isSkuDependent: skuDecision.needsSelection,
-    isPackDependent: skuDecision.isMultiPack,
-    canCalculateCost: false,
-    canCalculateRoi: false,
-    needsSkuConfirmation: skuDecision.needsSelection,
-    reason: "Нет положительной цены в direct/promotion/SKU/priceRange.",
-  };
-}
+export function buildSeoDraft(product: any): string { const x = buildDecisionContext(product); const content = product?.seoContent ?? {}; const facts = mergeFacts(collectIntelFacts(product, x.intelligence, 16), collectRawAttributes(product, 24)); const title = normalizeFact(content.titleRu || x.intelligence.cleanTitles?.titleForWb || x.title); const desc = normalizeFact(content.description) || `${x.title}. Черновик карточки собран по данным 1688. Перед публикацией подтвердите выбранный SKU, вес с упаковкой, реальные фото и документы для заявленных свойств.`; const bullets = uniq([...asArray<string>(content.bullets).map(cautiousClaim), ...asArray<string>(x.intelligence.productIdentity?.useCases).map(v => `Подходит для: ${v}`), ...asArray<string>(x.intelligence.productIdentity?.visibleFeatures).map(v => `Особенность: ${v}`), x.sku.skuSummary, 'Перед публикацией подтвердите вес, упаковку и свойства выбранного SKU'], 5); while (bullets.length < 5) bullets.push(['Уточните характеристики выбранного SKU', 'Запросите реальные фото', 'Проверьте комплектацию', 'Подготовьте размерную сетку/габариты', 'Не используйте claims без подтверждения'][bullets.length]); const chars = mergeFacts(Object.entries(asRecord(content.characteristics)).map(([name, value]) => ({ name, value: cautiousClaim(value), status: 'AI-черновик' })), facts).slice(0, 18); const keywords = uniq([...(asArray<string>(content.keywords)), title, ...(x.intelligence.wbSearch?.queryCandidates ?? [])], 14); const clarify = uniq([...(x.readiness.missingData ?? []), ...x.cost.warnings, ...(x.price.needsSkuConfirmation ? ['выбранный SKU и цена'] : []), ...(x.weight.canUseForCargo ? [] : ['вес с упаковкой выбранного SKU'])].map(cautiousClaim), 12); const forbidden = uniq([...(x.intelligence.claimsPolicy?.forbiddenAsFact ?? []), ...(x.intelligence.reportRules?.seoForbiddenClaims ?? []), 'лечебный эффект', 'сертификация без документов', 'безопасность для детей без документов', 'оригинальный бренд без подтверждения'].map(cautiousClaim), 12); return ['# CardZip — Черновик WB/Ozon-карточки', '', '## Название', title, '', '## Описание', desc, '', '## Буллеты для инфографики', ...bullets.map((b, i) => `${i + 1}. ${b}`), '', '## Характеристики', '| Параметр | Значение | Статус |', '|---|---|---|', ...chars.map(f => `| ${f.name} | ${f.value} | ${f.status} |`), '', '## Ключевые слова', keywords.join(', ') || title, '', '## Что использовать осторожно', ...facts.filter(f => /заявлен|подтверд|проверить|уточнить/i.test(f.value)).slice(0, 8).map(f => `- ${f.name}: ${f.value}`), '', '## Требует уточнения', ...(clarify.length ? clarify.map(q => `- ${q}`) : ['- выбранный SKU, упаковка и вес']), '', '## Нельзя писать как факт', ...forbidden.map(q => `- ${q}`), ''].join('\n'); }
 
-export function buildWeightDecision(
-  product: RawProduct1688 | any,
-  intelligence?: ProductIntelligenceLike,
-  skuDecision = buildSkuDecision(product, intelligence),
-): WeightDecision {
-  const manual = positive(
-    product?.manualWeightKg ??
-      product?.supplierAnswer?.weightKg ??
-      product?.confirmedWeightKg,
-  );
-  if (manual)
-    return {
-      weightKg: manual,
-      source: "manual",
-      isEstimated: false,
-      canUseForCargo: true,
-      canUseForRoi: true,
-      reason: "Вес введён/подтверждён вручную.",
-    };
-  const provider = positive(
-    product?.normalized1688?.weightKg ??
-      product?.weightKg ??
-      product?.shipping_info?.weight,
-  );
-  if (provider)
-    return {
-      weightKg: provider,
-      source: "provider",
-      isEstimated: false,
-      canUseForCargo: true,
-      canUseForRoi: true,
-      reason: "Вес получен от поставщика/провайдера.",
-    };
+export function buildSupplierQuestions(product: any, x = buildDecisionContext(product)): { ru: string[]; cn: string[] } { const ru: string[] = []; const cn: string[] = []; if (x.price.calculationPriceYuan) { ru.push(`Подтвердите цену выбранного SKU: ${cny(x.price.calculationPriceYuan)}.`); cn.push(`请确认所选SKU的价格是否为${cny(x.price.calculationPriceYuan).replace(' ¥', '元')}？`); } else { ru.push('Укажите цену выбранного цвета/размера/комплектации.'); cn.push('请告诉我所选颜色/尺码/套装的价格。'); } if (!x.weight.canUseForCargo) { ru.push('Укажите вес с упаковкой именно для выбранного SKU.'); cn.push('请提供所选SKU含包装的重量。'); } ru.push('Укажите габариты индивидуальной упаковки.'); cn.push('请提供单件产品包装尺寸。'); if (x.sku.needsSelection) { ru.push('Подтвердите точную комплектацию выбранного SKU.'); cn.push('请确认所选SKU的准确套装内容。'); } const facts = mergeFacts(collectIntelFacts(product, x.intelligence, 10), collectRawAttributes(product, 10)); if (facts.some(f => /заявлен|сертифик|документ|испытан|антибактер|противоскольз/i.test(f.value + ' ' + f.name))) { ru.push('Какие свойства из карточки подтверждены документами или испытаниями, а какие являются только описанием поставщика?'); cn.push('页面里的功能描述哪些有检测报告或证书，哪些只是产品描述？'); }
+  ru.push('Пришлите реальные фото товара и упаковки выбранного SKU.'); cn.push('请发送所选SKU产品和包装的实拍照片。'); ru.push('Можно ли заказать образец 1–2 шт. перед партией?'); cn.push('批量采购前是否可以先购买1-2个样品？'); const checks = [...(x.intelligence.supplierQuestions?.ru ?? []), ...(x.intelligence.reportRules?.buyerMustCheck ?? []), ...(CATEGORY_BUYER_CHECKS[x.categoryType] ?? CATEGORY_BUYER_CHECKS.other)]; const forbidden = [...(x.intelligence.reportRules?.buyerMustNotAsk ?? []), ...(CATEGORY_MUST_NOT_ASK[x.categoryType] ?? [])].map(s => s.toLowerCase()); const cleanRu = uniq([...ru, ...checks].map(stripNumber), 12).filter(q => !forbidden.some(f => q.toLowerCase().includes(f))); return { ru: cleanRu, cn: uniq([...cn, ...(x.intelligence.supplierQuestions?.cn ?? [])].map(stripNumber), 12) }; }
 
-  const cat = categoryType(product, intelligence);
-  if (skuDecision.isMultiPack) {
-    return {
-      weightKg: null,
-      source: "missing",
-      isEstimated: false,
-      canUseForCargo: false,
-      canUseForRoi: false,
-      reason:
-        "Вес не указан; у товара разные комплектации, средний вес категории не применён.",
-    };
-  }
+export function buildBuyerBrief(product: any, sourceUrl = ''): string { const x = buildDecisionContext(product); const facts = mergeFacts(collectIntelFacts(product, x.intelligence, 12), collectRawAttributes(product, 16)).slice(0, 10); const qs = buildSupplierQuestions(product, x).ru; const skuExamples = x.sku.skuVariantsNormalized.slice(0, 8).map(v => normalizeSkuText(v.raw || v.label) || v.label); return ['# ТЗ для байера / карго', '', '## Ссылка', sourceUrl || '—', '', '## Товар', `Название RU: ${x.title}`, `Название CN clean: ${cleanChineseTitle(product?.titleCn ?? product?.normalized1688?.titleCn ?? '') || '—'}`, `Источник: ${String(product?.platform ?? '1688').toUpperCase()}`, '', '## Что закупаем', `Цена: ${x.price.displayPriceText}`, `SKU: ${x.sku.skuSummary}`, ...(skuExamples.length ? ['Примеры SKU:', ...skuExamples.map(s => `- ${s}`)] : []), `Цвет: ${x.sku.skuDimensions.includes('color') ? 'выбрать конкретный цвет SKU' : 'если есть — уточнить'}`, `Размер: ${x.sku.skuDimensions.includes('size') ? 'выбрать конкретный размер SKU' : 'если применимо — уточнить'}`, `Комплектация: ${x.sku.isMultiPack ? 'зависит от SKU/количества штук' : 'уточнить'}`, `MOQ: ${positive(product?.moq) ? `${positive(product?.moq)} шт.` : 'уточнить'}`, '', '## Поставщик', `Название: ${normalizeFact(product?.supplierName) || 'не указано'}`, `Тип: ${normalizeFact(product?.supplierType) || 'не указан'}`, `Рейтинг: ${normalizeFact(product?.supplierRating) || '—'}`, `Заказы: ${normalizeFact(product?.sold) || '—'}`, '', '## Подтверждённые/заявленные данные из карточки', ...(facts.length ? facts.map(f => `- ${f.name}: ${f.value} (${f.status})`) : ['- данных мало — запросить спецификацию у поставщика']), '', '## Что подтвердить у поставщика', ...qs.map(q => `- ${q}`), '', '## Что проверить на образце', ...(x.intelligence.reportRules?.sampleCheckList?.length ? x.intelligence.reportRules.sampleCheckList.map(q => `- ${q}`) : ['- соответствие выбранному SKU', '- материал и запах после распаковки', '- реальные размеры/комплектацию', '- качество упаковки', '- заявленные свойства только на образце/по документам']), '', '## Фото, которые нужно запросить', '- общий вид выбранного SKU', '- фото упаковки', '- фото маркировки/этикетки', '- фото подошвы/дна/креплений/деталей, если применимо', '', '## Логистика', `Вес: ${x.weight.displayText.replace(/^Вес:\s*/i, '')}`, 'Габариты: уточнить по выбранному SKU', 'Упаковка: индивидуальная/транспортная — уточнить', '', '## Бюджет', `Образец: ${x.price.calculationPriceYuan ? cny(x.price.calculationPriceYuan) : 'не рассчитано'}`, '20 шт: после подтверждения цены/веса/карго', '50 шт: после подтверждения цены/веса/карго', '', '## Риски', ...x.readiness.risks.slice(0, 8).map(r => `- ${r}`), '', '## Что не включено в расчёт', '- финальная стоимость карго без веса/габаритов', '- возвраты, реклама, хранение и комиссии маркетплейса', '- сертификация/маркировка, если потребуется', '- ручная проверка конкурентов и рынка', '', '## Вывод', x.readiness.canRecommendSample ? 'Можно запрашивать данные для образца. Партию не закупать до проверки рынка и веса.' : 'Закупать партию рано: сначала закрыть недостающие данные.'].join('\n'); }
 
-  const fallback =
-    CATEGORY_DEFAULT_WEIGHT[cat] ?? CATEGORY_DEFAULT_WEIGHT.other;
-  return {
-    weightKg: fallback,
-    source: "category_default",
-    isEstimated: true,
-    canUseForCargo: false,
-    canUseForRoi: false,
-    reason:
-      "Вес не указан; категорийный вес можно показывать только как ориентир, не для ROI.",
-  };
-}
+export function buildCargoBrief(product: any, sourceUrl = ''): string { const x = buildDecisionContext(product); const category = x.categoryType; const extra = category === 'electronics' ? ['- есть ли батарейка/аккумулятор', '- мощность и тип зарядки', '- сертификаты/инструкция'] : category === 'beauty' ? ['- состав, срок годности, документы', '- герметичность упаковки'] : category === 'shoes' ? ['- вес пары с коробкой', '- габариты коробки одной пары', '- количество пар в транспортной коробке'] : ['- есть ли жидкость / магнит / порошок / стекло / батарейка']; return ['# ТЗ для расчёта карго', '', '## Ссылка', sourceUrl || '—', '', '## Товар', x.title, '', '## Что нужно запросить', '- вес 1 единицы с упаковкой', '- габариты индивидуальной упаковки', '- количество в транспортной коробке', '- вес транспортной коробки', '- габариты транспортной коробки', '- фото индивидуальной и транспортной упаковки', '- материал товара', '- код ТН ВЭД, если поставщик знает', ...extra, '', '## Текущий статус', `Вес: ${x.weight.displayText.replace(/^Вес:\s*/i, '')}`, `SKU: ${x.sku.skuSummary}`, '', '## Важно', 'Карго не рассчитывается точно без веса и габаритов выбранного SKU.'].join('\n'); }
 
-function quantile(sorted: number[], q: number): number | null {
-  if (!sorted.length) return null;
-  const pos = (sorted.length - 1) * q;
-  const base = Math.floor(pos);
-  const rest = pos - base;
-  const val =
-    sorted[base + 1] !== undefined
-      ? sorted[base] + rest * (sorted[base + 1] - sorted[base])
-      : sorted[base];
-  return Math.round(val);
-}
+export function buildInfographicBrief(product: any): string { const x = buildDecisionContext(product); const ideas = uniq([...(x.intelligence.reportRules?.infographicIdeas ?? []), ...(x.intelligence.reportRules?.photoBriefItems ?? []), 'общий вид товара', ...(x.sku.skuCount > 1 ? ['SKU: цвета/размеры/комплектации'] : []), ...(x.weight.canUseForCargo ? ['вес/упаковка после подтверждения'] : ['запросить фото упаковки и вес']), 'сценарии применения', 'важные особенности с пометкой “заявлено/подтвердить”'], 6); return ['# ТЗ для инфографики', '', '## Главный слайд', `Название: ${x.title}`, 'Акцент: понятный тип товара и основной сценарий применения', '', ...ideas.slice(0,5).flatMap((idea, i) => [`## Слайд ${i + 1} — ${idea}`, 'Что показать: фото/ракурс, подтверждающий этот пункт', `Текст: ${cautiousClaim(idea)}`, '']), '## Что нельзя писать на инфографике', '- лечебный эффект, сертификацию, безопасность, оригинальность бренда и регулируемые свойства как факт без документов', '- ROI/прибыльность без ручного сценария и подтверждённой цены продажи'].join('\n'); }
 
-function normalizeWbCard(card: any): WbCard | null {
-  if (!card || typeof card !== "object") return null;
-  const title = plain(card.title ?? card.name ?? card.productName ?? "");
-  if (!title) return null;
-  const salePriceU = positive(card.salePriceU);
-  const price =
-    positive(card.price ?? card.priceRub ?? card.salePriceRub) ??
-    (salePriceU ? Math.round(salePriceU / 100) : null);
-  return {
-    ...(card as WbCard),
-    title,
-    price: price ?? (card as any).price ?? (card as any).priceRub,
-    url: String(
-      card.url ??
-        (card.nmId || card.id
-          ? `https://www.wildberries.ru/catalog/${card.nmId ?? card.id}/detail.aspx`
-          : ""),
-    ),
-  } as WbCard;
-}
+export function buildRiskChecklist(product: any): string { const x = buildDecisionContext(product); const categoryRisks = CATEGORY_BUYER_CHECKS[x.categoryType] ?? CATEGORY_BUYER_CHECKS.other; return ['# Риск-чеклист товара', '', '## Главные риски', ...(x.readiness.risks.length ? x.readiness.risks.map(r => `- ${r}`) : ['- рынок и конкуренты не проверены вручную']), '', '## Что проверить до образца', ...x.readiness.missingData.map(m => `- ${m}`), '- цену выбранного SKU', '- вес и габариты упаковки', '- реальные фото', '', '## Что проверить на образце', ...categoryRisks.slice(0, 8).map(r => `- ${r}`), '', '## Что проверить перед партией', '- ручную проверку 3–5 конкурентов WB/Ozon', '- финальную себестоимость с карго', '- документы/маркировку для регулируемых claims', '- возвраты/размерную сетку/упаковку', '', '## Красные флаги', ...(x.readiness.blockers.length ? x.readiness.blockers.map(b => `- ${b}`) : ['- поставщик не подтверждает вес/комплектацию', '- claims без документов', '- фото не совпадают со SKU']), '', '## Решение', x.readiness.canRecommendSample ? 'Можно переходить к образцу после подтверждения SKU/веса. Партию не закупать.' : 'Пока не готово к закупке: закрыть недостающие данные.'].join('\n'); }
 
-function normalizeCards(product: any): WbCard[] {
-  const snapshot = product?.marketSnapshot ?? product?.market ?? {};
-  const sources = [
-    product?.wbData?.allCards,
-    product?.wbData?.topExamples,
-    product?.wbFiltered?.allCards,
-    snapshot?.directAnalogs,
-    snapshot?.similarAnalogs,
-    snapshot?.categoryOnly,
-    snapshot?.categoryAnalogs,
-    snapshot?.crossBorderAnalogs,
-    product?.directAnalogs,
-    product?.similarAnalogs,
-  ];
-  const out: WbCard[] = [];
-  for (const src of sources) {
-    for (const rawCard of asArray<WbCard>(src)) {
-      const card = normalizeWbCard(rawCard);
-      if (card) out.push(card);
-    }
-  }
-  const seen = new Set<string>();
-  return out.filter((c) => {
-    const key =
-      c.url ||
-      `${c.title.toLowerCase()}_${positive((c as any).price ?? (c as any).priceRub) ?? ""}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
+export function buildSampleRecommendation(product: any): string { const x = buildDecisionContext(product); const sku = x.sku.recommendedSampleSku || 'базовый/самый массовый SKU'; const categoryTip = x.categoryType === 'shoes' ? 'Для обуви лучше взять средний размер 39/40 или 40/41 и не брать полный размерный ряд.' : x.sku.isMultiPack ? 'Для multi-pack лучше взять минимальную и максимальную комплектацию, чтобы сравнить вес и упаковку.' : 'Для первого образца берите 1–2 единицы, не партию.'; return ['# Рекомендация по образцу', '', '## Лучше взять', `- SKU: ${sku}`, '- 1–2 единицы, не партию', '- вариант без спорных claims, если есть выбор', '', '## Почему', '- дешевле проверить качество', '- можно измерить вес и габариты', '- можно сделать свои фото', '- можно проверить упаковку', '- можно проверить заявленные свойства на образце', '', '## Категорийная рекомендация', categoryTip, '', '## До заказа образца', ...topQuestions(product, x, 5).map(q => `- ${q}`)].join('\n'); }
 
-export function buildMarketDecision(product: any): MarketDecision {
-  if (product?.wb429) {
-    return {
-      status: "rate_limited",
-      rawCandidatesCount: 0,
-      confirmedDirectCount: 0,
-      similarLocalCount: 0,
-      crossBorderCount: 0,
-      categoryOnlyCount: 0,
-      medianPriceRub: null,
-      p25PriceRub: null,
-      p75PriceRub: null,
-      canShowMedianPrice: false,
-      canCalculateRoi: false,
-      confidence: "low",
-      reason: "WB ограничил поиск; рынок не подтверждён.",
-    };
-  }
+export function buildSafeSummary(product: any, reason?: string): string { const x = buildDecisionContext(product); return ['⚠️ <b>Анализ требует уточнения</b>', '', `Товар: ${html(x.title)}`, `Статус: ${html(x.readiness.label)}`, '', `Главный риск: ${html(reason || x.readiness.blockers[0] || x.readiness.risks[0] || 'данные недостаточно подтверждены')}`, 'Следующий шаг: отправьте вопросы поставщику или внесите вес/ответ поставщика — пересчитаю себестоимость.', '', 'Не делать: не закупать партию, пока не подтверждены SKU, вес, упаковка и ручная проверка рынка.', '', 'Кредит не списан.'].join('\n'); }
 
-  const explicit = product?.marketDecision;
-  if (explicit && typeof explicit === "object") {
-    const confirmedDirectCount = Math.max(
-      0,
-      Number(
-        explicit.confirmedDirectCount ?? explicit.directAnalogsCount ?? 0,
-      ) || 0,
-    );
-    const medianPriceRub = positive(
-      explicit.medianPriceRub ?? explicit.displayedMainPriceRub,
-    );
-    const canCalculateRoi =
-      Boolean(explicit.canCalculateRoi) &&
-      confirmedDirectCount >= 5 &&
-      !!medianPriceRub;
-    return {
-      status: canCalculateRoi
-        ? "confirmed"
-        : confirmedDirectCount > 0
-          ? "weak"
-          : explicit.status === "rate_limited"
-            ? "rate_limited"
-            : "not_confirmed",
-      rawCandidatesCount: Math.max(
-        0,
-        Number(explicit.rawCandidatesCount ?? explicit.totalCandidates ?? 0) ||
-          0,
-      ),
-      confirmedDirectCount,
-      similarLocalCount: Math.max(
-        0,
-        Number(
-          explicit.similarLocalCount ?? explicit.similarAnalogsCount ?? 0,
-        ) || 0,
-      ),
-      crossBorderCount: Math.max(
-        0,
-        Number(explicit.crossBorderCount ?? 0) || 0,
-      ),
-      categoryOnlyCount: Math.max(
-        0,
-        Number(
-          explicit.categoryOnlyCount ?? explicit.broadCategoryCount ?? 0,
-        ) || 0,
-      ),
-      medianPriceRub: canCalculateRoi ? medianPriceRub : null,
-      p25PriceRub: canCalculateRoi ? positive(explicit.p25PriceRub) : null,
-      p75PriceRub: canCalculateRoi ? positive(explicit.p75PriceRub) : null,
-      canShowMedianPrice: canCalculateRoi,
-      canCalculateRoi,
-      confidence: canCalculateRoi
-        ? confirmedDirectCount >= 8
-          ? "high"
-          : "medium"
-        : "low",
-      reason:
-        plain(explicit.reason) ||
-        (canCalculateRoi
-          ? `Найдено ${confirmedDirectCount} прямых локальных аналогов 85%+.`
-          : confirmedDirectCount > 0
-            ? `Есть ${confirmedDirectCount} прямых аналогов, но для ROI нужно минимум 5.`
-            : "Прямые локальные аналоги WB не подтверждены."),
-    };
-  }
-
-  const cards = normalizeCards(product);
-  const direct = cards.filter((c: any) => {
-    const conf =
-      positive(c.matchConfidence ?? c.confidence ?? c.similarity) ?? 0;
-    const level = String(c.matchLevel ?? c.matchType ?? "").toLowerCase();
-    const local = !/cross/.test(String(c.marketType ?? "").toLowerCase());
-    return local && conf >= 85 && /direct|analog|прям/.test(level || "direct");
-  });
-  const similar = cards.filter((c: any) => {
-    const conf =
-      positive(c.matchConfidence ?? c.confidence ?? c.similarity) ?? 0;
-    const level = String(c.matchLevel ?? c.matchType ?? "").toLowerCase();
-    return (
-      !/cross/.test(String(c.marketType ?? "").toLowerCase()) &&
-      !direct.includes(c) &&
-      (conf >= 65 || /similar|похож/.test(level))
-    );
-  });
-  const cross = cards.filter((c: any) =>
-    /cross/.test(String(c.marketType ?? "").toLowerCase()),
-  );
-  const categoryOnly = cards.filter((c: any) =>
-    /category|broad|катег/.test(
-      String(c.matchLevel ?? c.matchType ?? "").toLowerCase(),
-    ),
-  );
-  const prices = direct
-    .map((c: any) => positive(c.price ?? c.priceRub))
-    .filter((p): p is number => !!p)
-    .sort((a, b) => a - b);
-  const median = quantile(prices, 0.5);
-  const p25 = quantile(prices, 0.25);
-  const p75 = quantile(prices, 0.75);
-  const confirmedCount = direct.length;
-  if (confirmedCount >= 5 && median) {
-    return {
-      status: "confirmed",
-      rawCandidatesCount: cards.length,
-      confirmedDirectCount: confirmedCount,
-      similarLocalCount: similar.length,
-      crossBorderCount: cross.length,
-      categoryOnlyCount: categoryOnly.length,
-      medianPriceRub: median,
-      p25PriceRub: p25,
-      p75PriceRub: p75,
-      canShowMedianPrice: true,
-      canCalculateRoi: true,
-      confidence: confirmedCount >= 8 ? "high" : "medium",
-      reason: `Найдено ${confirmedCount} прямых локальных аналогов 85%+.`,
-    };
-  }
-  if (confirmedCount > 0) {
-    return {
-      status: "weak",
-      rawCandidatesCount: cards.length,
-      confirmedDirectCount: confirmedCount,
-      similarLocalCount: similar.length,
-      crossBorderCount: cross.length,
-      categoryOnlyCount: categoryOnly.length,
-      medianPriceRub: median,
-      p25PriceRub: p25,
-      p75PriceRub: p75,
-      canShowMedianPrice: false,
-      canCalculateRoi: false,
-      confidence: "low",
-      reason: `Есть ${confirmedCount} прямых аналогов, но для ROI нужно минимум 5.`,
-    };
-  }
-  return {
-    status: "not_confirmed",
-    rawCandidatesCount: cards.length,
-    confirmedDirectCount: 0,
-    similarLocalCount: similar.length,
-    crossBorderCount: cross.length,
-    categoryOnlyCount: categoryOnly.length,
-    medianPriceRub: null,
-    p25PriceRub: null,
-    p75PriceRub: null,
-    canShowMedianPrice: false,
-    canCalculateRoi: false,
-    confidence: "low",
-    reason: "Прямые локальные аналоги WB не подтверждены.",
-  };
-}
-
-export function buildEconomyDecision(
-  priceDecision: PriceDecision,
-  weightDecision: WeightDecision,
-  marketDecision: MarketDecision,
-  opts: {
-    yuanToRub?: number;
-    cargoPerKgUsd?: number;
-    fulfillmentRub?: number;
-    wbCommission?: number;
-    tax?: number;
-    drr?: number;
-  } = {},
-): EconomyDecision {
-  const warnings: string[] = [];
-  if (!priceDecision.canCalculateCost || !priceDecision.calculationPriceYuan) {
-    return {
-      status: "not_calculated_no_price",
-      canShowCost: false,
-      canShowCargo: false,
-      canShowMargin: false,
-      canShowRoi: false,
-      costRub: null,
-      costWithoutCargoRub: null,
-      cargoRub: null,
-      profitRub: null,
-      roiPercent: null,
-      warnings: ["Экономика не рассчитана — нет цены."],
-      nextAction: "Уточнить цену выбранного SKU у поставщика.",
-    };
-  }
-
-  const yuanToRub =
-    opts.yuanToRub && opts.yuanToRub > 0 ? opts.yuanToRub : YUAN_FALLBACK;
-  const purchaseRub = Math.round(
-    priceDecision.calculationPriceYuan * yuanToRub,
-  );
-  const bankRub = Math.round(purchaseRub * BANK_MARKUP);
-  const fulfillmentRub = opts.fulfillmentRub ?? DEFAULT_FULFILLMENT_RUB;
-  const costWithoutCargoRub = purchaseRub + bankRub + fulfillmentRub;
-
-  if (!weightDecision.canUseForCargo) {
-    const reason =
-      weightDecision.source === "category_default"
-        ? "Вес только ориентировочный по категории."
-        : "Вес с упаковкой не указан.";
-    warnings.push(reason);
-    if (priceDecision.isPackDependent)
-      warnings.push(
-        "Карго не рассчитано: вес зависит от выбранной комплектации.",
-      );
-    return {
-      status: "preliminary_no_weight",
-      canShowCost: true,
-      canShowCargo: false,
-      canShowMargin: false,
-      canShowRoi: false,
-      costRub: costWithoutCargoRub,
-      costWithoutCargoRub,
-      cargoRub: null,
-      profitRub: null,
-      roiPercent: null,
-      warnings,
-      nextAction:
-        "Нажмите «💬 Поставщику», уточните вес с упаковкой и внесите ответ — пересчитаю экономику.",
-    };
-  }
-
-  const cargoRub = Math.round(
-    (weightDecision.weightKg ?? 0) *
-      (opts.cargoPerKgUsd ?? DEFAULT_CARGO_USD_PER_KG) *
-      USD_TO_RUB,
-  );
-  const costRub = costWithoutCargoRub + cargoRub;
-
-  if (weightDecision.source === "category_default")
-    warnings.push(
-      "Вес по категории — ориентир, не использовать для закупочного решения.",
-    );
-  if (!priceDecision.canCalculateRoi) {
-    warnings.push(
-      priceDecision.needsSkuConfirmation
-        ? "Цена зависит от выбранного SKU/комплектации — ROI не считаю без подтверждения варианта."
-        : "Цена предварительная — ROI не считаю.",
-    );
-    return {
-      status: "preliminary_sku",
-      canShowCost: true,
-      canShowCargo: true,
-      canShowMargin: false,
-      canShowRoi: false,
-      costRub,
-      costWithoutCargoRub,
-      cargoRub,
-      profitRub: null,
-      roiPercent: null,
-      warnings,
-      nextAction:
-        "Выберите SKU/комплектацию и подтвердите цену у поставщика, затем пересчитайте экономику.",
-    };
-  }
-  if (
-    marketDecision.status === "not_confirmed" ||
-    !marketDecision.medianPriceRub
-  ) {
-    warnings.push(
-      "Себестоимость можно оценить, ROI не считаю — нет подтверждённой цены рынка WB.",
-    );
-    return {
-      status: "cost_only_no_market",
-      canShowCost: true,
-      canShowCargo: true,
-      canShowMargin: false,
-      canShowRoi: false,
-      costRub,
-      costWithoutCargoRub,
-      cargoRub,
-      profitRub: null,
-      roiPercent: null,
-      warnings,
-      nextAction:
-        "Проверить WB-рынок вручную или повторить поиск позже. ROI пока не считать.",
-    };
-  }
-  if (!marketDecision.canCalculateRoi) {
-    warnings.push(
-      "Выборка WB ограничена — использовать как ориентир, не для закупочного решения.",
-    );
-    return {
-      status: "weak_market_data",
-      canShowCost: true,
-      canShowCargo: true,
-      canShowMargin: false,
-      canShowRoi: false,
-      costRub,
-      costWithoutCargoRub,
-      cargoRub,
-      profitRub: null,
-      roiPercent: null,
-      warnings,
-      nextAction:
-        "Нужно минимум 5 прямых локальных аналогов WB с уверенностью 85%+.",
-    };
-  }
-  if (!weightDecision.canUseForRoi) {
-    warnings.push("Вес не подтверждён для ROI.");
-    return {
-      status: "estimated_weight",
-      canShowCost: true,
-      canShowCargo: true,
-      canShowMargin: false,
-      canShowRoi: false,
-      costRub,
-      costWithoutCargoRub,
-      cargoRub,
-      profitRub: null,
-      roiPercent: null,
-      warnings,
-      nextAction: "Уточнить фактический вес выбранного SKU.",
-    };
-  }
-
-  const sell = marketDecision.medianPriceRub;
-  const commission = Math.round(
-    sell * (opts.wbCommission ?? DEFAULT_WB_COMMISSION),
-  );
-  const tax = Math.round(sell * (opts.tax ?? DEFAULT_TAX));
-  const drr = Math.round(sell * (opts.drr ?? DEFAULT_DRR));
-  const profitRub =
-    sell - costRub - commission - DEFAULT_WB_LOGISTICS_RUB - tax - drr;
-  const roiPercent =
-    costRub > 0 ? Math.round((profitRub / costRub) * 100) : null;
-  return {
-    status: "full",
-    canShowCost: true,
-    canShowCargo: true,
-    canShowMargin: true,
-    canShowRoi: true,
-    costRub,
-    costWithoutCargoRub,
-    cargoRub,
-    profitRub,
-    roiPercent,
-    warnings,
-    nextAction:
-      profitRub > 0
-        ? "Можно рассматривать образец после проверки SKU и поставщика."
-        : "Не закупать партию: экономика убыточная или слабая.",
-  };
-}
-
-export function buildStatusLine(
-  price: PriceDecision,
-  weight: WeightDecision,
-  market: MarketDecision,
-  economy: EconomyDecision,
-): string {
-  if (!price.canCalculateCost) return "🟡 Нужны данные";
-  if (!price.canCalculateRoi) return "🟡 Нужны данные";
-  if (!weight.canUseForRoi) return "🟡 Нужны данные";
-  if (!market.canCalculateRoi) return "🟡 Рынок не подтверждён";
-  if (economy.canShowRoi && (economy.profitRub ?? 0) < 0) return "🔴 Убыточно";
-  if (economy.canShowRoi && (economy.profitRub ?? 0) > 0)
-    return "🟢 Можно тестировать";
-  return "🟡 Нужны данные";
-}
-
-export function buildDecisionContext(product: any) {
-  const intelligence = getIntel(product);
-  const sku = buildSkuDecision(product, intelligence);
-  const price = buildPriceDecision(product, sku);
-  const weight = buildWeightDecision(product, intelligence, sku);
-  const market = buildMarketDecision(product);
-  const economy = buildEconomyDecision(price, weight, market, {
-    yuanToRub: product?.economics?.yuanToRub,
-  });
-  const status = buildStatusLine(price, weight, market, economy);
-  return {
-    intelligence,
-    sku,
-    price,
-    weight,
-    market,
-    economy,
-    status,
-    title: titleForReport(product, intelligence),
-    categoryType: categoryType(product, intelligence),
-  };
-}
-
-export function buildMainReport(
-  product: any,
-  statusInfo?: { creditsRemaining?: number },
-  wbCategory?: any,
-): string {
-  const x = buildDecisionContext(product);
-  const source = String(product?.platform ?? "1688").toUpperCase();
-  const supplierType = plain(
-    product?.supplierType ||
-      product?.normalized1688?.supplierType ||
-      "не указан",
-  );
-  const photoCount = imageCount(product);
-  const moq = positive(product?.normalized1688?.moq ?? product?.moq);
-  const sold = positive(product?.normalized1688?.salesCount ?? product?.sold);
-  const weightText =
-    x.weight.source === "missing"
-      ? "вес не указан"
-      : x.weight.source === "category_default"
-        ? `ориентир ${x.weight.weightKg} кг по категории, не для ROI`
-        : `${x.weight.weightKg} кг`;
-
-  const marketSummary =
-    x.market.status === "confirmed"
-      ? `Прямые локальные аналоги: ${x.market.confirmedDirectCount}. Медиана: ${money(x.market.medianPriceRub)} по прямым аналогам.`
-      : x.market.status === "weak"
-        ? `Прямые локальные аналоги: ${x.market.confirmedDirectCount}. Всего похожих карточек: ${x.market.rawCandidatesCount}. Выборка ограничена — использовать как ориентир, не для закупочного решения.`
-        : x.market.status === "rate_limited"
-          ? "WB ограничил поиск. Рыночную цену и ROI не считаю."
-          : `Прямые аналоги на WB не подтверждены. Рыночную цену и ROI не считаю. Всего похожих карточек: ${x.market.rawCandidatesCount}.`;
-
-  const trends = asArray<any>(product?.wbTrends).slice(0, 5);
-  const trendLines = trends.length
-    ? trends.map(
-        (t) =>
-          `• ${html(t.search_words ?? t.query ?? t)}${positive(t.weeks_request_per_day) ? ` — ~${Math.round(t.weeks_request_per_day).toLocaleString("ru-RU")}/день` : ""}`,
-      )
-    : uniq(
-        [
-          ...(x.intelligence.wbSearch?.queryCandidates ?? []),
-          x.intelligence.wbSearch?.wbCoreQuery ?? "",
-          product?.seoContent?.keywords?.[0] ?? "",
-        ].filter(Boolean) as string[],
-        5,
-      ).map((q) => `• ${html(q)}`);
-
-  let economySummary = "";
-  if (x.economy.status === "not_calculated_no_price")
-    economySummary = "Экономика не рассчитана — нет цены выбранного SKU.";
-  else if (x.economy.status === "preliminary_no_weight")
-    economySummary = `Предварительно без карго:\n• Себестоимость без карго: ${money(x.economy.costWithoutCargoRub)}\n• Карго не рассчитано: ${html(x.weight.reason)}\n• ROI не считаю.`;
-  else if (x.economy.status === "preliminary_sku")
-    economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• Карго: ${x.economy.cargoRub ? money(x.economy.cargoRub) : "не рассчитано"}\n• ROI не считаю — нужно подтвердить выбранный SKU/комплектацию.`;
-  else if (
-    x.economy.status === "cost_only_no_market" ||
-    x.economy.status === "weak_market_data"
-  )
-    economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• Карго: ${x.economy.cargoRub ? money(x.economy.cargoRub) : "не рассчитано"}\n• ROI не считаю — WB-рынок не подтверждён.`;
-  else if (x.economy.canShowRoi)
-    economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• Цена рынка WB: ${money(x.market.medianPriceRub)}\n• Прибыль: ${money(x.economy.profitRub)}\n• ROI: ${x.economy.roiPercent}%`;
-  else
-    economySummary = `• Себестоимость: ${money(x.economy.costRub)}\n• ROI не считаю — нет полного набора подтверждённых данных.`;
-
-  const questions = buildSupplierQuestions(product, x).ru.slice(0, 7);
-  const actions = x.economy.canShowRoi
-    ? [
-        "Нажмите «📎 Файлы» — скачайте ТЗ байеру и SEO-черновик.",
-        "Закажите образец, если поставщик подтвердит SKU/упаковку.",
-      ]
-    : [
-        "Нажмите «💬 Поставщику» и отправьте вопросы.",
-        "После ответа нажмите «📥 Внести ответ» — пересчитаю экономику.",
-      ];
-
-  const lines = [
-    `📦 <b>${html(x.title)}</b>`,
-    "",
-    `Источник: ${html(source)}`,
-    `Поставщик: ${html(supplierType)}`,
-    "",
-    "📌 <b>Данные 1688</b>",
-    `• Цена: ${html(x.price.displayPriceText)}`,
-    `• MOQ: ${moq ? `${Math.round(moq).toLocaleString("ru-RU")} шт.` : "уточняется"}`,
-    `• SKU: ${html(x.sku.skuSummary)}`,
-    `• Фото: ${photoCount || "—"} шт`,
-    `• Вес: ${html(weightText)}`,
-    `• Продано/заказов: ${sold ? Math.round(sold).toLocaleString("ru-RU") : "—"}`,
-    "",
-    `<b>${html(x.status)}</b>`,
-    "",
-    "🔎 <b>Рынок WB</b>",
-    html(marketSummary),
-    "",
-    "🔑 <b>Рыночные запросы WB</b>",
-    ...(trendLines.length ? trendLines : ["• запросы не найдены"]),
-    "Это поисковые запросы по близкой нише, не прямые аналоги товара.",
-    "",
-    "💰 <b>Экономика</b>",
-    html(economySummary).replace(/\n/g, "\n"),
-    ...(x.economy.warnings.length
-      ? ["", ...x.economy.warnings.map((w) => `⚠️ ${html(w)}`)]
-      : []),
-    "",
-    "📌 <b>Что уточнить у поставщика</b>",
-    ...questions.map((q) => `• ${html(q)}`),
-    "",
-    "🎯 <b>Вердикт</b>",
-    html(
-      x.economy.canShowRoi && (x.economy.profitRub ?? 0) > 0
-        ? "Можно рассматривать образец. Партию закупать только после подтверждения SKU, упаковки и финальной цены."
-        : "Закупать рано. Сначала подтвердите недостающие данные и прямой рынок WB.",
-    ),
-    "",
-    "Что сделать:",
-    ...actions.map((a, i) => `${i + 1}. ${html(a)}`),
-  ];
-  if (typeof statusInfo?.creditsRemaining === "number")
-    lines.push("", `📦 Осталось: ${statusInfo.creditsRemaining} анализов`);
-  if (wbCategory?.name)
-    lines.push("", `WB категория: ${html(wbCategory.name)}`);
-  return lines.join("\n").replace(/\n{3,}/g, "\n\n");
-}
-
-export function build1688Detail(product: any): string {
-  const x = buildDecisionContext(product);
-  const cn = cleanChineseTitle(
-    product?.titleCn ?? product?.normalized1688?.titleCn ?? "",
-  );
-  const photoCount = imageCount(product);
-  const facts = mergeFacts(
-    collectIntelligenceFacts(product, x.intelligence, 12),
-    collectRawAttributes(product, 16),
-  ).slice(0, 14);
-  const skuExamples = x.sku.skuVariantsNormalized.slice(0, 12).map((v) => {
-    const label = normalizeSkuText(v.raw || v.label) || v.label;
-    return `• ${label}${v.priceYuan ? ` — ${cny(v.priceYuan)}` : ""}`;
-  });
-  const lines = [
-    "📦 Данные товара с 1688",
-    "",
-    "Название CN:",
-    cn || "—",
-    "",
-    "Название RU:",
-    x.title,
-    "",
-    "Цена:",
-    x.price.displayPriceText,
-    "",
-    "SKU:",
-    x.sku.skuSummary,
-    ...(skuExamples.length ? skuExamples : ["• варианты SKU не распознаны"]),
-    "",
-    "Поставщик:",
-    `• название: ${normalizeUserFact(product?.supplierName) || "не указано"}`,
-    `• тип: ${normalizeUserFact(product?.supplierType) || "не указан"}`,
-    `• рейтинг: ${normalizeUserFact(product?.supplierRating) || "—"}`,
-    `• заказов: ${normalizeUserFact(product?.sold) || "—"}`,
-    `• MOQ: ${positive(product?.moq) ? `${positive(product?.moq)} шт.` : "уточняется"}`,
-    "",
-    "Ключевые характеристики:",
-    ...(facts.length
-      ? facts.map(
-          (a) => `• ${a.name}: ${a.value}${a.status ? ` (${a.status})` : ""}`,
-        )
-      : ["• характеристики нужно уточнить у поставщика"]),
-    "",
-    "Логистика:",
-    `• вес: ${x.weight.source === "missing" ? "не указан" : `${x.weight.weightKg} кг${x.weight.isEstimated ? " ориентир" : ""}`}`,
-    `• фото: ${photoCount || "—"}`,
-    `• остаток: ${normalizeUserFact(product?.stock) || "—"}`,
-  ];
-  return lines.join("\n");
-}
-
-export function buildSeoDraft(product: any): string {
-  const x = buildDecisionContext(product);
-  const content = product?.seoContent ?? {};
-  const title = normalizeUserFact(
-    content.titleRu || x.intelligence.cleanTitles?.titleForWb || x.title,
-  );
-  const facts = mergeFacts(
-    collectIntelligenceFacts(product, x.intelligence, 16),
-    collectRawAttributes(product, 24),
-  );
-  const factText = facts
-    .slice(0, 6)
-    .map((f) => `${f.name}: ${f.value}`)
-    .join("; ");
-  const desc =
-    normalizeUserFact(content.description) ||
-    `${x.title}. Черновик карточки собран по данным 1688: ${factText || "характеристики нужно уточнить"}. Перед публикацией подтвердите выбранный SKU, вес с упаковкой, реальные фото и документы для регулируемых claims.`;
-  const baseBullets = [
-    ...asArray<string>(content.bullets).map(cautiousClaimText),
-    ...asArray<string>(x.intelligence.productIdentity?.useCases).map(
-      (v) => `Для сценария: ${v}`,
-    ),
-    ...asArray<string>(x.intelligence.productIdentity?.visibleFeatures).map(
-      (v) => `Видимая особенность: ${v}`,
-    ),
-    ...(x.sku.skuCount > 1 ? [`${x.sku.skuSummary}`] : []),
-    ...(x.weight.isEstimated
-      ? ["Вес нужно подтвердить для расчёта логистики"]
-      : []),
-  ];
-  const bullets = uniq(baseBullets, 5);
-  while (bullets.length < 5)
-    bullets.push(
-      [
-        "Подтвердите характеристики выбранного SKU",
-        "Уточните комплектацию и упаковку",
-        "Проверьте вес с упаковкой",
-        "Запросите реальные фото",
-        "Проверьте требования WB",
-      ][bullets.length],
-    );
-
-  const chars = asRecord(content.characteristics);
-  const contentEntries = Object.entries(chars).map(([k, v]) => ({
-    name: normalizeUserFact(k),
-    value: cautiousClaimText(v),
-    status: "из AI-черновика",
-  }));
-  const charEntries = mergeFacts(contentEntries, facts).slice(0, 18);
-  if (!charEntries.some((f) => /тип/i.test(f.name)))
-    charEntries.unshift({
-      name: "Тип",
-      value: x.title,
-      status: "Product Intelligence",
-    });
-
-  const queries = uniq(
-    [
-      ...(x.intelligence.wbSearch?.queryCandidates ?? []),
-      x.intelligence.wbSearch?.wbCoreQuery ?? "",
-      ...(content.keywords ?? []),
-    ].filter(Boolean) as string[],
-    10,
-  );
-  const clarify = uniq(
-    [
-      ...(x.intelligence.dataQuality?.missingCriticalFields ?? []),
-      ...(x.economy.warnings ?? []),
-      ...(x.price.needsSkuConfirmation ? ["выбранный SKU и его цена"] : []),
-      ...(x.weight.canUseForRoi ? [] : ["вес с упаковкой выбранного SKU"]),
-      ...(x.market.canCalculateRoi
-        ? []
-        : ["прямые локальные аналоги WB и рыночная цена"]),
-    ].map(cautiousClaimText),
-    10,
-  );
-  const forbiddenLines = uniq(
-    [
-      ...(x.intelligence.reportRules?.seoForbiddenClaims ?? []),
-      ...(RU_FORBIDDEN_BY_CATEGORY[x.categoryType] ?? []),
-    ].map(cautiousClaimText),
-    12,
-  );
-  return [
-    "# CardZip — Черновик WB-карточки",
-    "",
-    "## Название для WB",
-    title,
-    "",
-    "## Описание",
-    desc,
-    "",
-    "## Буллеты для инфографики",
-    ...bullets.map((b, i) => `${i + 1}. ${b}`),
-    "",
-    "## Характеристики WB",
-    "| Параметр | Значение | Статус |",
-    "|---|---|---|",
-    ...charEntries.map((f) => `| ${f.name} | ${f.value} | ${f.status} |`),
-    "",
-    "## Ключевые слова",
-    uniq([...asArray<string>(content.keywords), ...queries], 14).join(", ") ||
-      title,
-    "",
-    "## Рекомендуемые поисковые запросы WB",
-    ...(queries.length
-      ? queries.map((q) => `- ${q}`)
-      : ["- требуется подобрать после проверки товара"]),
-    "",
-    "## Требует уточнения перед публикацией",
-    ...(clarify.length
-      ? clarify.map((q) => `- ${q}`)
-      : ["- выбранный SKU, упаковка и вес"]),
-    "",
-    "## Нельзя писать в карточке как факт без подтверждения",
-    ...(forbiddenLines.length
-      ? forbiddenLines.map((q) => `- ${q}`)
-      : [
-          "- медицинские/лечебные свойства, безопасность, сертификация, влагозащита, премиальность или бренд без документов",
-        ]),
-    "",
-  ].join("\n");
-}
-
-export function buildBuyerBrief(product: any, sourceUrl = ""): string {
-  const x = buildDecisionContext(product);
-  const facts = mergeFacts(
-    collectIntelligenceFacts(product, x.intelligence, 12),
-    collectRawAttributes(product, 16),
-  ).slice(0, 10);
-  const mustNot = new Set(
-    [
-      ...(x.intelligence.reportRules?.buyerMustNotAsk ?? []),
-      ...(RU_FORBIDDEN_BY_CATEGORY[x.categoryType] ?? []),
-    ].map((s) => s.toLowerCase()),
-  );
-  const checks = uniq(
-    [
-      ...(x.intelligence.reportRules?.buyerMustCheck ?? []),
-      ...(CATEGORY_BUYER_CHECKS[x.categoryType] ?? CATEGORY_BUYER_CHECKS.other),
-      ...buildSupplierQuestions(product, x).ru,
-    ]
-      .map(stripListNumber)
-      .filter(Boolean),
-    16,
-  ).filter((c) => ![...mustNot].some((f) => c.toLowerCase().includes(f)));
-  const skuExamples = x.sku.skuVariantsNormalized
-    .slice(0, 8)
-    .map((v) => normalizeSkuText(v.raw || v.label) || v.label)
-    .filter(Boolean);
-  return [
-    "# ТЗ для байера / карго",
-    "",
-    "## Ссылка",
-    sourceUrl || "—",
-    "",
-    "## Товар",
-    `Название RU: ${x.title}`,
-    `Название CN clean: ${cleanChineseTitle(product?.titleCn ?? product?.normalized1688?.titleCn ?? "") || "—"}`,
-    `Источник: ${String(product?.platform ?? "1688").toUpperCase()}`,
-    "",
-    "## Что закупаем",
-    `Цена: ${x.price.displayPriceText}`,
-    `SKU: ${x.sku.skuSummary}`,
-    ...(skuExamples.length
-      ? ["Примеры SKU:", ...skuExamples.map((s) => `- ${s}`)]
-      : []),
-    `Цвет: ${x.sku.skuDimensions.includes("color") ? "выбрать конкретный цвет SKU" : "если есть — уточнить"}`,
-    `Размер: ${x.sku.skuDimensions.includes("size") ? "выбрать конкретный размер SKU" : "если применимо — уточнить"}`,
-    `Комплектация: ${x.sku.isMultiPack ? "зависит от SKU/количества штук" : "уточнить"}`,
-    `MOQ: ${positive(product?.moq) ? `${positive(product?.moq)} шт.` : "уточнить"}`,
-    "",
-    "## Подтверждённые/заявленные данные из карточки",
-    ...(facts.length
-      ? facts.map((f) => `- ${f.name}: ${f.value} (${f.status})`)
-      : ["- данных мало — запросить спецификацию у поставщика"]),
-    "",
-    "## Поставщик",
-    `Название: ${normalizeUserFact(product?.supplierName) || "не указано"}`,
-    `Тип: ${normalizeUserFact(product?.supplierType) || "не указан"}`,
-    `Рейтинг: ${normalizeUserFact(product?.supplierRating) || "—"}`,
-    `Заказы: ${normalizeUserFact(product?.sold) || "—"}`,
-    "",
-    "## Что подтвердить у поставщика",
-    ...checks.map((c) => `- ${c}`),
-    "",
-    "## Что проверить на образце",
-    "- фактическое соответствие выбранному SKU и фото из карточки",
-    "- реальные размеры, посадку/эргономику, если применимо",
-    "- качество материала, запах после распаковки и дефекты литья/сборки",
-    "- упаковку, маркировку и комплектность",
-    "- claims из карточки: только как заявленные, подтвердить документами/испытаниями",
-    "",
-    "## Логистика",
-    `Вес: ${x.weight.source === "missing" ? "нужен вес с упаковкой выбранного SKU" : `${x.weight.weightKg} кг${x.weight.isEstimated ? " ориентир, не для ROI" : ""}`}`,
-    "Габариты: уточнить по выбранному SKU",
-    "Упаковка: индивидуальная/транспортная — уточнить",
-    "",
-    "## Бюджет",
-    `Образец: ${x.price.calculationPriceYuan ? cny(x.price.calculationPriceYuan) : "не рассчитано"}`,
-    "20 шт: после подтверждения цены/веса/карго",
-    "50 шт: после подтверждения цены/веса/карго",
-    "",
-    "## Что не включено в расчёт",
-    "- финальная стоимость карго без веса/габаритов",
-    "- возвраты, реклама, хранение и комиссии WB по фактической категории",
-    "- сертификация/маркировка/декларации, если потребуется",
-    "- риск отличия SKU, цвета, размера или комплектации от карточки 1688",
-    "",
-    "## Вывод",
-    x.economy.canShowRoi
-      ? "Можно обсуждать образец после подтверждения SKU, упаковки и документов."
-      : "Закупать партию рано: сначала закрыть недостающие данные и проверить прямой рынок WB.",
-  ].join("\n");
-}
-
-export function buildSupplierQuestions(
-  product: any,
-  x = buildDecisionContext(product),
-): { ru: string[]; cn: string[] } {
-  const baseRu: string[] = [];
-  const baseCn: string[] = [];
-  if (x.price.calculationPriceYuan) {
-    baseRu.push(
-      `Подтвердите цену выбранного SKU: ${cny(x.price.calculationPriceYuan)}.`,
-    );
-    baseCn.push(
-      `请确认所选SKU的价格是否为${cny(x.price.calculationPriceYuan).replace(" ¥", "元")}？`,
-    );
-  } else {
-    baseRu.push("Укажите цену выбранного цвета/размера/комплектации.");
-    baseCn.push("请告诉我所选颜色/尺码/套装的价格。");
-  }
-  if (!x.weight.canUseForRoi) {
-    baseRu.push("Укажите вес с упаковкой именно для выбранного SKU.");
-    baseCn.push("请提供所选SKU含包装的重量。");
-  }
-  if (x.sku.needsSelection) {
-    baseRu.push("Подтвердите точную комплектацию выбранного SKU.");
-    baseCn.push("请确认所选SKU的准确套装内容。");
-  }
-  const facts = mergeFacts(
-    collectIntelligenceFacts(product, x.intelligence, 8),
-    collectRawAttributes(product, 8),
-  );
-  const hasClaimLike = facts.some((f) =>
-    /заявлен|антибактер|противоскольз|сертификац|медицин/i.test(
-      f.value + " " + f.name,
-    ),
-  );
-  if (hasClaimLike) {
-    baseRu.push(
-      "Какие свойства из карточки подтверждены документами или испытаниями, а какие являются только описанием поставщика?",
-    );
-    baseCn.push("页面里的功能描述哪些有检测报告或证书，哪些只是产品描述？");
-  }
-  const categoryChecks =
-    CATEGORY_BUYER_CHECKS[x.categoryType] ?? CATEGORY_BUYER_CHECKS.other;
-  const ru = uniq(
-    [
-      ...baseRu,
-      ...(x.intelligence.supplierQuestions?.ru ?? []),
-      ...(x.intelligence.reportRules?.buyerMustCheck ?? []),
-      ...categoryChecks,
-    ]
-      .map(stripListNumber)
-      .filter(Boolean),
-    12,
-  );
-  const cn = uniq(
-    [...baseCn, ...(x.intelligence.supplierQuestions?.cn ?? [])]
-      .map(stripListNumber)
-      .filter(Boolean),
-    12,
-  );
-  const forbidden = new Set(
-    [
-      ...(x.intelligence.reportRules?.buyerMustNotAsk ?? []),
-      ...(RU_FORBIDDEN_BY_CATEGORY[x.categoryType] ?? []),
-    ].map((s) => s.toLowerCase()),
-  );
-  return {
-    ru: ru.filter(
-      (q) => ![...forbidden].some((f) => q.toLowerCase().includes(f)),
-    ),
-    cn,
-  };
-}
-
-export function buildSafeSummary(product: any, reason?: string): string {
-  const x = buildDecisionContext(product);
-  return [
-    "⚠️ <b>Анализ требует уточнения</b>",
-    "",
-    `Товар: ${html(x.title)}`,
-    `Статус: ${html(x.status)}`,
-    "",
-    `Главный риск: ${html(reason || x.economy.warnings[0] || x.market.reason || "данные недостаточно подтверждены")}`,
-    `Следующий шаг: ${html(x.economy.nextAction)}`,
-    "",
-    "Не делать: не считать ROI/маржу и не закупать партию, пока не подтверждены SKU, вес с упаковкой, цена партии и прямой рынок WB.",
-    "",
-    "Кредит не списан.",
-  ].join("\n");
-}
-
-export function validateGeneratedText(input: {
-  productIntelligence?: ProductIntelligenceLike;
-  generatedText: string;
-  reportType:
-    "main" | "detail1688" | "seo" | "buyerBrief" | "supplierQuestions";
-  categoryType?: string;
-  marketDecision?: MarketDecision;
-  weightDecision?: WeightDecision;
-}): { ok: boolean; errors: string[]; fixedText: string } {
-  const errors: string[] = [];
-  let fixed = String(input.generatedText ?? "");
-  fixed = fixed
-    .replace(/\b(?:undefined|null|NaN|Infinity|-Infinity)\b/gi, "—")
-    .replace(/0(?:[,.]0+)?\s*[¥￥]/gi, "цена уточняется")
-    .replace(/0(?:[,.]0+)?\s*₽/gi, "цена уточняется")
-    .replace(/0(?:[,.]0+)?\s*(?:кг|kg)\b/gi, "вес уточняется");
-  if (
-    /\b(?:undefined|null|NaN|Infinity|-Infinity)\b/i.test(input.generatedText)
-  )
-    errors.push("technical garbage");
-  if (/0(?:[,.]0+)?\s*[¥￥₽]/i.test(input.generatedText))
-    errors.push("zero price");
-  if (/0(?:[,.]0+)?\s*(?:кг|kg)\b/i.test(input.generatedText))
-    errors.push("zero weight");
-  const forbidden = uniq(
-    [
-      ...(input.productIntelligence?.reportRules?.buyerMustNotAsk ?? []),
-      ...(input.productIntelligence?.reportRules?.seoForbiddenClaims ?? []),
-      ...(RU_FORBIDDEN_BY_CATEGORY[input.categoryType ?? ""] ?? []),
-    ],
-    50,
-  );
-  for (const f of forbidden) {
-    if (!f) continue;
-    const re = new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g, "\$&"), "ig");
-    if (re.test(fixed)) {
-      errors.push(`forbidden: ${f}`);
-      if (
-        input.reportType === "buyerBrief" ||
-        input.reportType === "supplierQuestions"
-      ) {
-        fixed = fixed
-          .split("\n")
-          .filter((line) => !re.test(line))
-          .join("\n");
-      } else {
-        fixed = fixed.replace(re, cautiousClaimText(f));
-      }
-    }
-  }
-  if (input.reportType !== "detail1688" && /[一-鿿]/.test(fixed)) {
-    errors.push("raw chinese");
-    fixed = fixed
-      .split("\n")
-      .map((l) => normalizeMixedProductText(l))
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (
-    input.marketDecision &&
-    !input.marketDecision.canCalculateRoi &&
-    /\bROI\b[^\n\d]*\d|марж[ауы]\D*\d|прибыл[ьи]\D*\d/i.test(fixed)
-  ) {
-    errors.push("roi without confirmed market");
-    fixed = fixed
-      .split("\n")
-      .filter(
-        (l) => !/\bROI\b[^\n\d]*\d|марж[ауы]\D*\d|прибыл[ьи]\D*\d/i.test(l),
-      )
-      .join("\n");
-  }
-  fixed = fixed
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return { ok: errors.length === 0, errors, fixedText: fixed };
-}
+export function validateGeneratedText(input: { productIntelligence?: ProductIntelligenceLike; generatedText: string; reportType: 'main' | 'detail1688' | 'seo' | 'buyerBrief' | 'supplierQuestions'; categoryType?: string; marketDecision?: MarketDecision; weightDecision?: WeightDecision }): { ok: boolean; errors: string[]; fixedText: string } { const errors: string[] = []; let fixed = String(input.generatedText ?? ''); if (/\b(?:undefined|null|NaN|Infinity|-Infinity)\b/i.test(fixed)) errors.push('technical garbage'); if (/0(?:[,.]0+)?\s*[¥￥₽]/i.test(fixed)) errors.push('zero price'); if (/0(?:[,.]0+)?\s*(?:кг|kg)\b/i.test(fixed)) errors.push('zero weight'); fixed = fixed.replace(/\b(?:undefined|null|NaN|Infinity|-Infinity)\b/gi, '—').replace(/0(?:[,.]0+)?\s*[¥￥]/gi, 'цена уточняется').replace(/0(?:[,.]0+)?\s*₽/gi, 'цена уточняется').replace(/0(?:[,.]0+)?\s*(?:кг|kg)\b/gi, 'вес уточняется').replace(/""/g, '—'); if (input.reportType !== 'detail1688' && /[一-鿿]/.test(fixed)) { errors.push('raw chinese normalized'); fixed = fixed.split('\n').map(line => normalizeMixedProductText(line)).filter(Boolean).join('\n'); }
+  // Never block a useful report just because WB/ROI is absent. Only remove numeric ROI when it is presented without user scenario context.
+  if (/\bROI\b[^\n]*(?:\d|%)/i.test(fixed) && !/сценар|введ[её]нн|по\s+вашей\s+цене|manual/i.test(fixed)) { errors.push('roi without manual scenario'); fixed = fixed.split('\n').filter(line => !/\bROI\b[^\n]*(?:\d|%)/i.test(line)).join('\n'); }
+  fixed = fixed.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim(); return { ok: errors.length === 0, errors, fixedText: fixed }; }

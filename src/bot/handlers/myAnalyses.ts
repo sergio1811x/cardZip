@@ -2,7 +2,7 @@ import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { getUserAnalyses } from '../../db/queries/jobs';
 import { track } from '../../services/analyticsService';
-import type { ProductWithContent } from '../../types';
+import { buildDecisionContext } from '../../core/decisionLayer';
 
 const PAGE_SIZE = 5;
 
@@ -23,21 +23,25 @@ export async function handleMyAnalyses(ctx: Context, page = 0): Promise<void> {
 
   const lines = items.map((a, i) => {
     const num = page * PAGE_SIZE + i + 1;
-    const product = (a.result_json as any)?.product as ProductWithContent | undefined;
-    const title = product?.titleRu || extractDomain(a.input_url);
+    const result = a.result_json as any;
+    const product = result?.product ?? result?.rawProduct;
+    const x = product ? buildDecisionContext(product) : null;
+    const title = x?.intelligence.cleanTitles?.titleForReport || product?.titleRu || extractDomain(a.input_url);
     const date = new Date(a.created_at).toLocaleDateString('ru-RU');
-    const price = product?.priceYuan ? `${product.priceYuan} ¥` : '';
-    const platform = product?.platform?.toUpperCase() ?? '';
+    const price = x?.price?.displayPriceText ? ` · ${stripPricePrefix(x.price.displayPriceText)}` : '';
+    const readiness = x?.readiness ? ` · ${x.readiness.score}/100` : '';
 
     return `${num}. <b>${escHtml(truncate(title, 40))}</b>\n` +
-      `   ${platform} ${price ? '· ' + price : ''} · ${date}`;
+      `   ${date}${price}${readiness}`;
   });
 
-  let text = `📊 <b>Мои анализы</b> (последние 30 дней)\n\n${lines.join('\n\n')}`;
+  const text = `📊 <b>Мои анализы</b> (последние 30 дней)\n\n${lines.join('\n\n')}`;
 
   const buttons = items.map((a, i) => {
-    const product = (a.result_json as any)?.product as ProductWithContent | undefined;
-    const label = truncate(product?.titleRu || `Анализ ${i + 1}`, 30);
+    const result = a.result_json as any;
+    const product = result?.product ?? result?.rawProduct;
+    const title = product ? (buildDecisionContext(product).intelligence.cleanTitles?.titleForReport ?? `Анализ ${i + 1}`) : `Анализ ${i + 1}`;
+    const label = truncate(title || `Анализ ${i + 1}`, 30);
     return [Markup.button.callback(`📋 ${label}`, `analysis_${a.id}`)];
   });
 
@@ -79,34 +83,39 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
     return;
   }
 
-  const product = (job.result_json as any)?.product as ProductWithContent | undefined;
+  const result = job.result_json as any;
+  const product = result?.product ?? result?.rawProduct;
   if (!product) {
     await ctx.answerCbQuery('Данные недоступны');
     return;
   }
 
+  const x = buildDecisionContext(product);
   const date = new Date(job.created_at).toLocaleDateString('ru-RU');
-  const eco = product.economics;
 
-  let text = `📋 <b>${escHtml(product.titleRu || 'Товар')}</b>\n\n`;
+  let text = `📋 <b>${escHtml(x.intelligence.cleanTitles?.titleForReport || 'Товар')}</b>\n\n`;
   text += `🔗 ${escHtml(job.input_url)}\n`;
-  text += `📅 ${date}\n`;
-  text += `🏷 ${product.platform?.toUpperCase() ?? ''}\n\n`;
+  text += `📅 ${date}\n\n`;
+  text += `Цена: ${escHtml(x.price.displayPriceText)}\n`;
+  text += `SKU: ${escHtml(x.sku.skuSummary)}\n`;
+  text += `Вес: ${escHtml(x.weight.displayText)}\n`;
+  text += `${escHtml(x.readiness.label)} · готовность ${x.readiness.score}/100\n`;
 
-  if (product.priceYuan) text += `Цена: ${product.priceYuan} ¥\n`;
-  if (product.weightKg) text += `Вес: ${product.weightKg} кг\n`;
-
-  if (eco) {
-    if (eco.costRub) text += `Себестоимость: ${fP(eco.costRub)}\n`;
-    if (eco.grossProfitRub) text += `Прибыль: ${fP(eco.grossProfitRub)}\n`;
-    if (eco.roiPercent) text += `ROI: ${eco.roiPercent}%\n`;
+  if (x.cost.costWithoutCargoRub) {
+    text += `Себестоимость без карго: ${fmtRub(x.cost.costWithoutCargoRub)}\n`;
+  }
+  if (x.cost.canShowRoi) {
+    text += `Сценарный ROI: ${x.cost.scenarioRoiPercent}% по цене пользователя\n`;
+  } else {
+    text += 'ROI не рассчитан автоматически — это закупочный пакет, не обещание прибыли.\n';
   }
 
-  if (product.conclusion) {
-    text += `\n${product.conclusion.icon} ${escHtml(product.conclusion.headline)}\n`;
+  if (x.readiness.nextActions.length) {
+    text += '\nЧто сделать:\n' + x.readiness.nextActions.slice(0, 3).map((a, i) => `${i + 1}. ${escHtml(a)}`).join('\n');
   }
 
   const buttons = [];
+  buttons.push([Markup.button.callback('📦 Данные 1688', `product_detail_${job.id}`), Markup.button.callback('💰 Экономика', `econ_detail_${job.id}`)]);
   buttons.push([Markup.button.callback('📎 Файлы', `materials_${job.id}`)]);
   buttons.push([Markup.button.callback('⬅️ К списку', 'my_analyses')]);
 
@@ -119,9 +128,8 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
   }).catch(() => ctx.reply(text, { parse_mode: 'HTML', ...keyboard }));
 }
 
-
 function escHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function truncate(str: string, max: number): string {
@@ -132,6 +140,10 @@ function extractDomain(url: string): string {
   try { return new URL(url).hostname; } catch { return url.slice(0, 30); }
 }
 
-function fP(n: number): string {
+function fmtRub(n: number): string {
   return Math.round(n).toLocaleString('ru-RU') + ' ₽';
+}
+
+function stripPricePrefix(s: string): string {
+  return s.replace(/^Цена:\s*/i, '').replace(/^Цена по SKU:\s*/i, '').replace(/^Цена выбранного SKU:\s*/i, '').slice(0, 28);
 }

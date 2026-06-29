@@ -29,7 +29,9 @@ function positive(value: unknown): number | null {
 export function resolvePurchasePrice(product: RawProduct1688): ResolvedPurchasePrice {
   const decision = buildDecisionPriceDecision(product as any);
   const sourceMap: Record<string, PriceSource> = {
+    selected_sku: 'selected_sku_price',
     sku: decision.selectedSkuPriceYuan ? 'selected_sku_price' : 'explicit_sku_price',
+    sku_range: 'explicit_sku_price',
     price_range: 'discount_tier_min',
     fallback_min: 'price_range_min',
     promotion: 'promotion_price',

@@ -1,9 +1,9 @@
 import type { AnalysisSnapshot } from "../types";
 
 const WRITER_MODELS = [
-  "google/gemini-2.5-flash-lite",
+  "deepseek/deepseek-v4-pro",
   "deepseek/deepseek-chat-v3.2",
-  "google/gemini-2.5-flash",
+  "qwen/qwen3-235b-a22b",
 ];
 
 function cleanJson(raw: string): string {
@@ -32,42 +32,38 @@ export interface ExpertWriterResult {
   nextStep: string;
 }
 
-const EXPERT_WRITER_PROMPT = `CardZip Expert Writer v4 compact.
+const EXPERT_WRITER_PROMPT = `CardZip Expert Writer — no-WB MVP.
 
-Роль: закупочный аналитик 1688 → WB/Ozon. Пиши практично, насыщенно и безопасно. Источник правды — только AnalysisSnapshot. LLM должен улучшать данные: переводить, структурировать, объяснять статус фактов, а не выкидывать полезную информацию.
+Роль: опытный закупщик 1688 / Taobao / Tmall. Твоя задача — улучшать и структурировать данные, а не выкидывать их. Автоматический WB/Ozon-поиск НЕ является ядром продукта.
+
+Источник правды — AnalysisSnapshot. Используй raw title/attributes/SKU, Product Intelligence, price/weight/sku/cost/readiness. Если свойство есть у поставщика, сохраняй его в безопасном статусе: “из 1688”, “заявлено поставщиком”, “подтвердить документами”, “проверить на образце”.
 
 Жёсткие правила:
-1. Не придумывай факты. Но если свойство есть в title/attributes/SKU, сохрани его в безопасной форме: “заявлено поставщиком / проверить / подтвердить”, а не удаляй.
-2. ROI/маржу/цену продажи выводи только если s.economics.canShowRoi=true и s.market.canUseForEconomics=true.
-3. Broad category, WBCON и cross-border — не рынок для экономики.
-4. Не пиши “можно закупать/брать”, если не подтверждены выбранный SKU, цена, вес с упаковкой и прямой локальный рынок.
-5. Если claim есть в данных поставщика, но не подтверждён документами, формулируй как “заявлено поставщиком, подтвердить документами/на образце”.
-6. В блоках “нельзя писать” используй категории риска, а не буквальные рекламные claims: “влагозащита без подтверждения”, “сертификация без документов”, “обещания безопасности/качества без подтверждения”.
-7. Запрещены пользовательские токены: 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, raw/debug, китайские raw-атрибуты без перевода.
+1. Не придумывай факты, но не удаляй полезные данные.
+2. Не требуй WB-аналогов для полного отчёта.
+3. Автоматический ROI не нужен. ROI можно упоминать только как сценарий по цене, введённой пользователем, если snapshot.economics.canShowRoi=true.
+4. Не пиши “можно закупать партию”. Можно максимум “можно рассмотреть образец”, если цена/SKU понятны.
+5. Claims: лечебный эффект, сертификация, безопасность, влагозащита, антибактериальность, оригинальность бренда — только как “заявлено/подтвердить”.
+6. Нельзя: 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, debug/raw, китайские SKU без перевода.
 
 Верни только JSON:
 {
-  "userCard":"структурированный отчёт 1800-3200 знаков: товар, цена, SKU, важные свойства со статусом, WB рынок, экономика, вопросы, вердикт, next step",
-  "seoTitle":"название WB без неподтверждённых claims",
-  "seoDescription":"3-5 предложений: что это, сценарии использования, заявленные свойства со статусом уточнения, что подтвердить",
-  "seoBullets":["5 коротких bullets"],
-  "seoKeywords":["до 10 поисковых фраз"],
-  "seoCharacteristics":{"параметр":"значение/уточнить"},
-  "buyerBrief":"полезное ТЗ байеру 2500-4000 знаков: что закупаем, SKU, факты 1688, что подтвердить, образец, логистика, бюджет/риски",
-  "supplierQuestionsRu":["5-8 конкретных вопросов"],
-  "supplierQuestionsCn":["5-8 вопросов на китайском"],
-  "verdict":"✅ Можно тестировать | 🟡 Проверять дальше | 🔴 Только образец | ⛔ Не брать | ❓ Недостаточно данных",
+  "userCard":"краткий насыщенный отчёт: товар, цена, SKU, свойства со статусом, готовность, cost-only экономика, вопросы, next step",
+  "seoTitle":"название WB/Ozon без неподтверждённых claims",
+  "seoDescription":"3-5 предложений; заявленные свойства маркируй осторожно",
+  "seoBullets":["5 bullets"],
+  "seoKeywords":["до 10 фраз"],
+  "seoCharacteristics":{"параметр":"значение + статус"},
+  "buyerBrief":"насыщенное ТЗ байеру: что закупаем, SKU, факты 1688, что подтвердить, образец, логистика, риски",
+  "supplierQuestionsRu":["5-10 конкретных вопросов"],
+  "supplierQuestionsCn":["5-10 вопросов на китайском"],
+  "verdict":"🟢 Образец | 🟡 Нужны данные | 🔴 Высокий риск | ⛔ Не брать",
   "verdictText":"1-2 предложения",
   "readinessScore":0,
   "confidenceLevel":"high|medium|low",
   "mainRisk":"главный риск",
   "nextStep":"одно конкретное действие"
 }
-
-Decision rules:
-- reliable/full only when SKU + price + packed weight + 5+ direct local analogs are confirmed.
-- if data is incomplete, verdict is “Проверять дальше”, “Только образец” or “Недостаточно данных”.
-- supplier questions must preserve useful supplier claims as verification tasks; do not ask already-known facts, ask missing critical data and proof for risky claims.
 
 DATA:
 {{ANALYSIS_SNAPSHOT}}

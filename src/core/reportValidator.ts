@@ -139,9 +139,9 @@ const BASE_CLAIM_POLICIES: ClaimPolicy[] = [
       /medical\s+(?:effect|claim|device|certification)|therapy|hypoallergenic|antibacterial/gi,
     ],
     evidencePattern:
-      /медиц|лечеб|ортопед|гипоаллерген|антибактериальн|medical|therapy|сертифик|регистрационн/i,
-    replacement: "медицинские/лечебные свойства не подтверждены",
-    negativeContextReplacement: "медицинские/лечебные claims без документов",
+      /лечеб|ортопед|гипоаллерген|антибактериальн|medical\s+(?:effect|claim|device|certification)|therapy|сертифик|регистрационн/i,
+    replacement: "заявленное спецсвойство — подтвердить документами/испытаниями",
+    negativeContextReplacement: "спецсвойство без документов",
   },
   {
     id: "quality_grade",
@@ -287,7 +287,8 @@ function sanitizeArtifacts(
           .filter(
             (line) =>
               isNegativeEconomyContext(line) ||
-              (!ROI_PATTERN.test(line) && !MARKET_PRICE_PATTERN.test(line)),
+              isScenarioEconomyContext(line) ||
+              (!ROI_PATTERN.test(line) && (!MARKET_PRICE_PATTERN.test(line) || isScenarioEconomyContext(line))),
           )
           .join("\n")
           .trim();
@@ -464,8 +465,7 @@ function inferSafeSummary(
   if (!hasPrice) missing.push("цена выбранного SKU/партии");
   if (!hasWeight) missing.push("вес с упаковкой");
   if (skuNeedsSelection) missing.push("выбранный SKU");
-  if (!marketConfirmed || directAnalogsCount <= 0)
-    missing.push("прямые аналоги и рыночная цена");
+  /* WB/Ozon market is optional in no-WB MVP; do not add it as blocking missing data. */
 
   const mainRisk =
     criticalIssues[0]?.problem ||
@@ -484,7 +484,7 @@ function inferSafeSummary(
       ? `Запросить у поставщика: ${missing.slice(0, 4).join(", ")}.`
       : "Сверить выбранный SKU, упаковку и прямые аналоги вручную перед закупкой.",
     doNotDo:
-      "Не считать ROI/маржу и не закупать партию, пока не подтверждены SKU, вес с упаковкой, цена партии и прямой рынок.",
+      "Не закупать партию, пока не подтверждены SKU, вес с упаковкой, упаковка и ручная проверка рынка.",
   };
 }
 
@@ -493,6 +493,41 @@ function textHasClaim(text: string, policy: ClaimPolicy): boolean {
     pattern.lastIndex = 0;
     return pattern.test(text);
   });
+}
+
+function isBenignMedicalProductContext(line: string): boolean {
+  const text = line.toLowerCase();
+  // Category/use-case phrases such as “медицинские сабо” or
+  // “обувь для медработников” are product positioning, not health claims.
+  const productNoun =
+    /(?:сабо|обув[ьиь]|тапочк|туфл|сланц|халат|форма|одежд|маск|перчатк|шапочк|костюм|комплект|носок|сумк)/i;
+  const medicalAudience =
+    /(?:медицинск|медработник|медперсонал|врач|медсестр|клиник|больниц|салон|лаборатор)/i;
+  const realClaim =
+    /(?:лечебн|ортопед|гипоаллерген|антибактериальн|издели[ея]\s+медицинск|регистрационн|сертифик|декларац|протокол|эффект|терап)/i;
+  return medicalAudience.test(text) && productNoun.test(text) && !realClaim.test(text);
+}
+
+function isSafeClaimContext(line: string, policy?: ClaimPolicy): boolean {
+  const text = String(line ?? "");
+  if (!text.trim()) return true;
+  if (isVerificationQuestionContext(text) || isNegativeClaimContext(text)) return true;
+  if (/(?:заявлен[а-яё]*|по\s+заявлени[юя]|нужно\s+подтвердить|требует\s+(?:уточнения|проверки|подтверждения)|подтвердить\s+(?:документами|испытаниями|на\s+образце)|уточнить\s+у\s+поставщика|без\s+подтверждения|без\s+документов|проверить\s+на\s+образце)/i.test(text)) {
+    return true;
+  }
+  if (policy?.id === "medical_health" && isBenignMedicalProductContext(text)) return true;
+  return false;
+}
+
+function riskyClaimLines(text: string, policy: ClaimPolicy): string[] {
+  return String(text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !isSafeClaimContext(line, policy) && textHasClaim(line, policy));
+}
+
+function hasRiskyClaim(text: string, policy: ClaimPolicy): boolean {
+  return riskyClaimLines(text, policy).length > 0;
 }
 
 function isVerificationQuestionContext(line: string): boolean {
@@ -597,7 +632,7 @@ function unresolvedAfterSanitizer(
       (item) => item.id === claimId,
     );
     return policy
-      ? textHasClaim(textForClaimScan(sanitizedText), policy)
+      ? hasRiskyClaim(textForClaimScan(sanitizedText), policy)
       : false;
   }
   if (issue.field === "artifacts.price")
@@ -696,9 +731,8 @@ export function runHardValidator(input: {
 
   if (
     directAnalogsCount <= 0 &&
-    (canShowRoi ||
-      canShowMargin ||
-      ROI_PATTERN.test(textForEconomyScan(fullText)))
+    ((canShowRoi || canShowMargin) && !/scenario|manual|сценар|ручн|введ[её]нн|по\s+вашей\s+цене/i.test(`${economicsStatus} ${fullText}`) ||
+      (ROI_PATTERN.test(textForEconomyScan(fullText)) && !/сценар|введ[её]нн|по\s+вашей\s+цене|ручн|manual/i.test(fullText)))
   ) {
     addIssue(
       issues,
@@ -712,7 +746,7 @@ export function runHardValidator(input: {
   if (
     (!marketConfirmed || !canUseForEconomics) &&
     (sellPriceRub !== null ||
-      MARKET_PRICE_PATTERN.test(textForEconomyScan(fullText)))
+      (MARKET_PRICE_PATTERN.test(textForEconomyScan(fullText)) && !/сценар|введ[её]нн|по\s+вашей\s+цене|ручн|manual|предполагаем/i.test(fullText)))
   ) {
     addIssue(
       issues,
@@ -760,10 +794,7 @@ export function runHardValidator(input: {
       positiveNumber(weight.valueKg) === null
         ? "вес с упаковкой не подтверждён"
         : "",
-      !marketConfirmed || directAnalogsCount <= 0
-        ? "прямой рынок не подтверждён"
-        : "",
-      economicsStatus !== "confirmed" ? `экономика ${economicsStatus}` : "",
+      /confirmed|full|scenario/.test(economicsStatus) ? "" : `экономика ${economicsStatus}`, 
     ].filter(Boolean);
 
     if (missingForPurchase.length) {
@@ -818,16 +849,14 @@ export function runHardValidator(input: {
 
   const claimScanText = textForClaimScan(fullText);
   for (const policy of buildClaimPolicies(snapshot)) {
-    if (
-      textHasClaim(claimScanText, policy) &&
-      !hasConfirmedClaim(snapshot, policy)
-    ) {
+    const riskyLines = riskyClaimLines(claimScanText, policy);
+    if (riskyLines.length > 0 && !hasConfirmedClaim(snapshot, policy)) {
       addIssue(
         issues,
         `claim.${policy.id}`,
         policy.severity,
         `Неподтверждённое утверждение в пользовательских материалах: ${policy.label}.`,
-        "Удалить claim или заменить на нейтральное “уточнить/подтвердить у поставщика”.",
+        "Сформулировать как “заявлено поставщиком / подтвердить документами / проверить на образце”.",
       );
     }
   }
@@ -946,7 +975,8 @@ export function validateReport(
   // 6. ROI without direct analogs
   if (
     !context.hasDirectAnalogs &&
-    ROI_PATTERN.test(textForEconomyScan(fixed))
+    ROI_PATTERN.test(textForEconomyScan(fixed)) &&
+    !/сценар|введ[её]нн|по\s+вашей\s+цене|ручн|manual/i.test(fixed)
   ) {
     errors.push("ROI calculated without direct analogs");
     fixed = fixed
@@ -986,6 +1016,11 @@ export function validateReport(
     errors,
     fixedText: fixed,
   };
+}
+
+
+function isScenarioEconomyContext(line: string): boolean {
+  return /(?:сценар|введ[её]нн|по\s+вашей\s+цене|ручн(?:ой|ая)|manual sale|manual price|предполагаем(?:ая|ой)\s+цен)/i.test(String(line ?? ''));
 }
 
 function isSuspiciousCharacteristicMapping(

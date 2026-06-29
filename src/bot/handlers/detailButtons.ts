@@ -2,6 +2,7 @@ import type { Context } from 'telegraf';
 import { Input } from 'telegraf';
 import { supabase } from '../../db/supabase';
 import { buildEconomicsDetail, buildWbDetail, build1688Detail } from '../../core/messageBuilder';
+import { buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation } from '../../core/decisionLayer';
 import { formatSeoText } from '../../core/seoFormatter';
 import { formatOrderBrief } from '../../core/orderBrief';
 import { zipBuilder } from '../../core/zipBuilder';
@@ -113,7 +114,7 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
 
   const chatId = ctx.chat!.id;
   await ctx.telegram.sendMessage(chatId,
-    '📎 <b>Файлы готовы</b>\n\n• SEO-карточка для WB\n• ТЗ байеру / карго\n• Фото товара',
+    '📎 <b>Файлы готовы</b>\n\n• SEO-черновик WB/Ozon\n• ТЗ байеру\n• ТЗ карго\n• ТЗ инфографики\n• Риск-чеклист\n• Рекомендация по образцу\n• Фото товара',
     { parse_mode: 'HTML' }
   );
 
@@ -133,13 +134,13 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
   // SEO-карточка
   if (generatedFiles?.seoText) {
     await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
-      Buffer.from(generatedFiles.seoText, 'utf-8'), `Карточка_WB_${prefix}.md`
+      Buffer.from(generatedFiles.seoText, 'utf-8'), `SEO_черновик_${prefix}.md`
     )).catch(() => {});
   } else if (product?.seoContent) {
     const safeFlags = product.riskFlags ?? {} as any;
     const text = formatSeoText(product, product.seoContent, safeFlags);
     await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
-      Buffer.from(text, 'utf-8'), `Карточка_WB_${prefix}.md`
+      Buffer.from(text, 'utf-8'), `SEO_черновик_${prefix}.md`
     )).catch(() => {});
   }
 
@@ -153,6 +154,40 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
     const text = formatOrderBrief(product, product.seoContent, product.economics, safeFlags, job.input_url, product.budgets, product.conclusion);
     await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
       Buffer.from(text, 'utf-8'), `ТЗ_байеру_${prefix}.md`
+    )).catch(() => {});
+  }
+
+
+
+  // ТЗ карго
+  const cargoText = generatedFiles?.cargoText ?? (product ? buildCargoBrief(product, job.input_url) : null);
+  if (cargoText) {
+    await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
+      Buffer.from(String(cargoText), 'utf-8'), `ТЗ_карго_${prefix}.md`
+    )).catch(() => {});
+  }
+
+  // ТЗ инфографики
+  const infographicText = generatedFiles?.infographicText ?? (product ? buildInfographicBrief(product) : null);
+  if (infographicText) {
+    await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
+      Buffer.from(String(infographicText), 'utf-8'), `ТЗ_инфографики_${prefix}.md`
+    )).catch(() => {});
+  }
+
+  // Риск-чеклист
+  const riskChecklistText = generatedFiles?.riskChecklistText ?? (product ? buildRiskChecklist(product) : null);
+  if (riskChecklistText) {
+    await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
+      Buffer.from(String(riskChecklistText), 'utf-8'), `Риск_чеклист_${prefix}.md`
+    )).catch(() => {});
+  }
+
+  // Рекомендация по образцу
+  const sampleRecommendationText = generatedFiles?.sampleRecommendationText ?? (product ? buildSampleRecommendation(product) : null);
+  if (sampleRecommendationText) {
+    await ctx.telegram.sendDocument(chatId, Input.fromBuffer(
+      Buffer.from(String(sampleRecommendationText), 'utf-8'), `Образец_${prefix}.md`
     )).catch(() => {});
   }
 

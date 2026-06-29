@@ -24,16 +24,8 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
   const ctx = product.productContext ?? {};
   const intel = product.intelligence ?? product.productIntelligence ?? {};
   const decision = buildDecisionContext(product);
-  const eco = product.economics ?? {};
-  const directCount = decision.market.confirmedDirectCount;
-  const similarCount = decision.market.similarLocalCount;
-  const crossBorderCount = decision.market.crossBorderCount;
-  const categoryOnlyCount = decision.market.categoryOnlyCount;
-  const medianPrice = decision.market.canShowMedianPrice ? decision.market.medianPriceRub : null;
-  const marketConfirmed = decision.market.canCalculateRoi && !!medianPrice;
   const purchasePriceCny = positive(decision.price.calculationPriceYuan);
   const weightKg = decision.weight.source === 'category_default' ? null : positive(decision.weight.weightKg);
-  const skuCount = decision.sku.skuCount;
 
   return {
     offerId: product.productId ?? 'unknown_offer',
@@ -59,10 +51,10 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
     },
     purchasePrice: {
       valueCny: purchasePriceCny,
-      minCny: purchasePriceCny,
-      maxCny: purchasePriceCny,
+      minCny: positive(decision.price.minPriceYuan),
+      maxCny: positive(decision.price.maxPriceYuan),
       displayLabel: decision.price.displayPriceText,
-      source: purchasePriceCny ? (decision.price.priceSource === 'sku' ? 'explicit_sku_price' : decision.price.priceSource === 'price_range' || decision.price.priceSource === 'fallback_min' ? 'price_range_min' : decision.price.priceSource === 'promotion' ? 'visible_1688_price' : 'visible_1688_price') : 'unknown',
+      source: purchasePriceCny ? (decision.price.priceSource === 'selected_sku' ? 'explicit_sku_price' : decision.price.priceSource === 'price_range' || decision.price.priceSource === 'fallback_min' ? 'price_range_min' : decision.price.priceSource === 'promotion' ? 'visible_1688_price' : 'visible_1688_price') : 'unknown',
       isSyntheticPrice: decision.price.isEstimated,
       needsSkuConfirmation: decision.price.needsSkuConfirmation,
     },
@@ -70,45 +62,46 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
       valueKg: weightKg,
       packedWeightKg: weightKg,
       source: weightKg ? (decision.weight.source === 'manual' ? 'supplier_answer' : 'parsed') : 'unknown',
-      displayLabel: weightKg ? `${weightKg} кг` : 'вес уточняется',
+      displayLabel: weightKg ? `${weightKg} кг` : decision.weight.displayText,
     },
     sku: {
-      count: skuCount,
+      count: decision.sku.skuCount,
       selectedSkuId: null,
       needsSelection: decision.sku.needsSelection,
-      variants: (product.skus ?? product.normalized1688?.skuVariants ?? []).slice(0, 20).map((s: any, i: number) => ({ id: String(s.id ?? s.name ?? i), label: String(s.name ?? s.label ?? `SKU ${i + 1}`), priceCny: positive(s.price ?? s.priceYuan) })),
+      variants: decision.sku.skuVariantsNormalized.map((s: any, i: number) => ({ id: String(s.raw ?? i), label: String(s.label ?? `SKU ${i + 1}`), priceCny: positive(s.priceYuan) })),
     },
     market: {
-      directAnalogsCount: directCount,
-      similarAnalogsCount: similarCount,
-      broadCategoryCount: categoryOnlyCount,
-      crossBorderCount,
-      marketConfirmed,
-      displayedMainPriceRub: marketConfirmed ? medianPrice : null,
-      displayedMainPriceType: marketConfirmed ? 'median' : 'unknown',
-      canUseForEconomics: marketConfirmed,
-      rejectedReason: marketConfirmed ? undefined : 'Для расчёта ROI нужно минимум 5 прямых локальных аналогов WB с уверенностью 85%+.',
-      directAnalogs: (product.wbData?.allCards ?? []).slice(0, 10).map((c: any) => ({ title: c.title, priceRub: positive(c.price), matchLevel: 'direct', confidence: Number(c.similarity ?? c.matchConfidence ?? 85) || 85 })),
+      directAnalogsCount: 0,
+      similarAnalogsCount: 0,
+      broadCategoryCount: 0,
+      crossBorderCount: 0,
+      marketConfirmed: false,
+      displayedMainPriceRub: null,
+      displayedMainPriceType: 'unknown',
+      canUseForEconomics: false,
+      rejectedReason: 'Автоматический WB/Ozon-поиск не является обязательной частью MVP. Рынок проверяется вручную или через модуль конкурентов.',
+      directAnalogs: [],
     },
     economics: {
-      status: decision.economy.canShowRoi ? 'confirmed' : decision.economy.canShowCost ? 'partial' : 'not_calculated',
+      status: decision.cost.status,
       purchasePriceCny,
-      costRub: positive(decision.economy.costRub ?? eco.costRub),
-      sellPriceRub: decision.economy.canShowRoi ? medianPrice : null,
-      marginRub: decision.economy.canShowMargin ? positive(decision.economy.profitRub ?? eco.grossProfitRub) : null,
-      roiPercent: decision.economy.canShowRoi ? positive(decision.economy.roiPercent ?? eco.roiPercent) : null,
-      assumptions: decision.economy.warnings ?? [],
+      costRub: positive(decision.cost.totalCostRub ?? decision.cost.costWithoutCargoRub),
+      sellPriceRub: decision.cost.manualSalePriceRub ?? null,
+      marginRub: decision.cost.canShowRoi ? positive(decision.cost.scenarioProfitRub) : null,
+      roiPercent: decision.cost.canShowRoi ? positive(decision.cost.scenarioRoiPercent) : null,
+      assumptions: decision.cost.warnings ?? [],
       missing: [
         ...(!purchasePriceCny ? ['цена выбранного SKU'] : []),
         ...(!weightKg ? ['вес с упаковкой'] : []),
-        ...(!marketConfirmed ? ['5+ прямых локальных аналогов WB'] : []),
         ...(decision.price.needsSkuConfirmation ? ['выбранный SKU и цена'] : []),
+        'ручная проверка рынка/конкурентов',
       ],
-      canShowRoi: decision.economy.canShowRoi,
-      canShowMargin: decision.economy.canShowMargin,
-      warning: decision.economy.canShowRoi ? undefined : 'Рыночная цена/SKU/вес не подтверждены. ROI и маржу считать нельзя.',
+      canShowRoi: decision.cost.canShowRoi,
+      canShowMargin: decision.cost.canShowRoi,
+      warning: decision.cost.canShowRoi ? 'Сценарий рассчитан по цене, введённой пользователем.' : 'ROI не считается автоматически без ручной цены продажи/конкурентов.',
     },
-    missingData: intel.dataQuality?.missingCriticalFields ?? ctx.missingCritical ?? [],
+    readiness: decision.readiness,
+    missingData: decision.readiness.missingData,
     conflicts: ctx.conflicts ?? [],
     riskFlags: intel.reportRules?.riskFlags ?? ctx.riskTags ?? [],
   } as AnalysisSnapshot;
