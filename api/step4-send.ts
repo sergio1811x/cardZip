@@ -9,6 +9,7 @@ import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import { runExpertWriter } from '../src/providers/expertWriter';
 import { buildDecisionContext } from '../src/core/decisionLayer';
+import { ensureProductProcurementProfile } from '../src/core/procurementProfile';
 import { redis } from '../src/lib/redis';
 import type { ProductWithContent, AnalysisSnapshot } from '../src/types';
 
@@ -22,8 +23,9 @@ function positive(value: unknown): number | null {
 }
 
 function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>, jobUrl: string): AnalysisSnapshot {
-  const ctx = product.productContext ?? {};
+  const ctx: any = product.productContext ?? {};
   const intel = product.intelligence ?? product.productIntelligence ?? {};
+  const profile = ensureProductProcurementProfile(product, { sourceUrl: jobUrl });
   const decision = buildDecisionContext(product);
   const purchasePriceCny = positive(decision.price.calculationPriceYuan);
   const weightKg = decision.weight.source === 'category_default' ? null : positive(decision.weight.weightKg);
@@ -41,7 +43,7 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
     productContext: { ...ctx, productIntelligence: intel },
     supplier: {
       name: product.supplierName ?? '',
-      type: product.supplierType ?? 'unknown',
+      type: profile.supplier.displayType,
       rating: product.supplierRating ?? '',
       orders: String(product.sold ?? ''),
       moq: {
@@ -105,7 +107,7 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
     missingData: decision.readiness.missingData,
     conflicts: ctx.conflicts ?? [],
     riskFlags: intel.reportRules?.riskFlags ?? ctx.riskTags ?? [],
-  } as AnalysisSnapshot;
+  } as unknown as AnalysisSnapshot;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -143,7 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Update seoContent from writer only with fields that validators can still repair.
       product.seoContent = {
         ...product.seoContent,
-        titleRu: writerResult.seoTitle || product.seoContent?.titleRu,
+        titleRu: product.seoContent?.titleRu,
         description: writerResult.seoDescription || product.seoContent?.description || '',
         bullets: writerResult.seoBullets?.length ? writerResult.seoBullets : product.seoContent?.bullets ?? [],
         keywords: writerResult.seoKeywords?.length ? writerResult.seoKeywords : product.seoContent?.keywords ?? [],
@@ -163,7 +165,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await supabase.from('jobs').update({
       result_json: {
         ...result,
-        product: { ...product, seoContent: product.seoContent },
+        product: { ...product, seoContent: product.seoContent, productProcurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }), procurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }) },
+        productProcurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }),
+        procurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }),
         analysisSnapshot: snapshot,
         writerResult,
         freshStatus: {

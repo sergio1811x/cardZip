@@ -1,0 +1,865 @@
+import type { ProductIntelligence } from '../types';
+import { normalizeMixedProductText } from './cnNormalize';
+
+export type ProductKind =
+  | 'footwear'
+  | 'clothing'
+  | 'towel_kilt'
+  | 'umbrella'
+  | 'sleep_mask'
+  | 'mini_washer'
+  | 'passive_insect_trap'
+  | 'usb_device'
+  | 'small_appliance'
+  | 'kitchen_tool'
+  | 'bag_accessory'
+  | 'generic_product';
+
+export type SelectedSkuDecision = {
+  selectedSkuText: string | null;
+  selectedPriceYuan: number | null;
+  reliable: boolean;
+  reason: string;
+};
+
+export type ProductProcurementProfile = {
+  identity: {
+    productKind: ProductKind;
+    categoryType: string;
+    subCategoryType: string;
+    titleForReport: string;
+    titleForSeo: string;
+    shortTitle: string;
+    coreObject: string;
+    formFactor: string;
+    audience: string;
+    gender: string;
+    season: string;
+    useCases: string[];
+    materials: string[];
+    visibleFeatures: string[];
+    claimedFeatures: string[];
+    unconfirmedFeatures: string[];
+  };
+  sku: {
+    skuSummary: string;
+    selectedSkuText: string | null;
+    selectedSkuReliable: boolean;
+    selectedSkuDecision: SelectedSkuDecision;
+    dimensions: string[];
+    colors: string[];
+    sizes: string[];
+    models: string[];
+    packageTypes: string[];
+    packCounts: string[];
+    skuRisk: string;
+    skuWarnings: string[];
+    normalizedExamples: string[];
+    ambiguousParams: string[];
+  };
+  pricing: {
+    displayPriceText: string;
+    selectedPriceYuan: number | null;
+    minPriceYuan: number | null;
+    maxPriceYuan: number | null;
+    priceSource: string;
+    priceReliable: boolean;
+    priceWarnings: string[];
+  };
+  supplier: {
+    displayType: string;
+    rating: string;
+    orders: string;
+    name: string;
+  };
+  procurement: {
+    status: string;
+    verdict: string;
+    nextAction: string;
+    mustAskSupplier: string[];
+    mustCheckBeforeSample: string[];
+    mustCheckOnSample: string[];
+    redFlags: string[];
+  };
+  cargo: {
+    mustAsk: string[];
+    likelySensitiveCargoIssues: string[];
+  };
+  content: {
+    seoAllowedClaims: string[];
+    seoForbiddenClaims: string[];
+    titleWarnings: string[];
+    infographicIdeas: string[];
+  };
+  dataQuality: {
+    missingCriticalFields: string[];
+    contradictions: string[];
+    confidence: 'high' | 'medium' | 'low';
+    reason: string;
+  };
+};
+
+export type SupplierQuestionsProfileResult = {
+  ru: string[];
+  cn: string[];
+  cnValid: boolean;
+  text: string;
+  label: string;
+  errors: string[];
+};
+
+const YUAN_TO_RUB = 11.8;
+const BANK_MARKUP = 0.03;
+const FULFILLMENT_RUB = 80;
+
+const DANGEROUS_CLAIMS = [
+  'медицинский', 'ортопедический', 'лечебный', 'антибактериальный', 'сертифицированный',
+  'гипоаллергенный', 'безопасный для детей', 'профессиональный', 'оригинальный бренд',
+  '100% водонепроницаемый', 'UPF50+', 'дезинфекция', 'стерилизация',
+];
+
+const KIND_RULES: Record<ProductKind, {
+  mustAskSupplier: string[];
+  beforeSample: string[];
+  onSample: string[];
+  cargo: string[];
+  redFlags: string[];
+  seoAllowed: string[];
+  seoForbidden: string[];
+  infographic: string[];
+  forbiddenCategoryWords: string[];
+}> = {
+  umbrella: {
+    mustAskSupplier: [
+      'Подтвердите цену выбранного SKU.',
+      'Укажите вес с упаковкой выбранного SKU.',
+      'Укажите габариты индивидуальной упаковки.',
+      'Укажите длину зонта в сложенном виде.',
+      'Укажите диаметр купола в раскрытом виде.',
+      'Сколько спиц у выбранного SKU?',
+      'Какой материал купола и спиц?',
+      'Есть ли чехол в комплекте? Пришлите фото открытого/закрытого зонта и упаковки.',
+    ],
+    beforeSample: ['подтвердить цену SKU', 'получить вес и габариты', 'уточнить параметры SKU', 'запросить фото открытого и закрытого зонта', 'уточнить наличие чехла'],
+    onSample: ['работу механизма', 'не заедает ли кнопка', 'прочность спиц', 'люфт ручки', 'качество ткани купола', 'швы', 'водоотталкивание', 'размер в раскрытом виде', 'длину в сложенном виде', 'чехол и упаковку'],
+    cargo: ['длина в сложенном виде', 'упаковка, чтобы не погнулись спицы', 'вес с упаковкой выбранного SKU', 'габариты индивидуальной упаковки'],
+    redFlags: ['не подтверждён материал спиц/купола', 'нет веса с упаковкой', 'механизм заедает', 'UPF50+ заявлен без подтверждения', 'нет фото упаковки'],
+    seoAllowed: ['складной формат', 'автоматический механизм, если подтверждён', 'чехол, если в комплекте', 'цвета и сценарии использования'],
+    seoForbidden: ['UPF50+ без документов', 'ветроустойчивый без теста', '100% защита от дождя', 'премиальный без подтверждения'],
+    infographic: ['Зонт складной автоматический', 'Крючок и ручка крупно', 'Размер в сложенном и раскрытом виде', 'Цвета и купол', 'Чехол и упаковка'],
+    forbiddenCategoryWords: ['подошва', 'стелька', 'размерная сетка', 'срок годности', 'консистенция', 'мощность', 'напряжение', 'тип вилки'],
+  },
+  footwear: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите вес пары с упаковкой.', 'Пришлите размерную сетку и длину стельки.', 'Подтвердите материал верха и подошвы.', 'Укажите размеры коробки одной пары.', 'Есть ли запах EVA/PU после распаковки?', 'Пришлите реальные фото пары и упаковки.', 'Можно ли заказать 1–2 образца?'],
+    beforeSample: ['подтвердить размер и цену SKU', 'получить размерную сетку', 'получить вес пары и габариты коробки', 'запросить фото пары и упаковки'],
+    onSample: ['соответствие размеру', 'длину стельки', 'материал верха', 'материал подошвы', 'запах EVA/PU', 'качество декора', 'склейку/литьё', 'вес пары с упаковкой', 'упаковку'],
+    cargo: ['вес пары с упаковкой', 'размеры коробки одной пары'],
+    redFlags: ['нет размерной сетки', 'сильный запах', 'скользкая подошва', 'плохая склейка/литьё', 'нет реальных фото'],
+    seoAllowed: ['EVA, если подтверждено', 'несколько цветов/размеров', 'для дома/пляжа/дачи, если подходит по товару'],
+    seoForbidden: ['ортопедический без документов', 'медицинский без документов', 'антибактериальный без документов'],
+    infographic: ['Сабо/обувь крупно', 'Материал и подошва', 'Размерная сетка', 'Цвета', 'Упаковка'],
+    forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'аккумулятор', 'рукав', 'усадка после стирки'],
+  },
+  sleep_mask: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите вес с упаковкой.', 'Укажите размер маски.', 'Подтвердите материал лицевой и внутренней части.', 'Какой тип упаковки: OPP или коробка?', 'Регулируется ли ремешок?', 'Подтвердите 3D-форму и затемнение.', 'Пришлите реальные фото выбранного цвета и упаковки.'],
+    beforeSample: ['подтвердить материал', 'получить вес и упаковку', 'уточнить ремешок', 'запросить фото выбранного цвета'],
+    onSample: ['мягкость материала', 'форму 3D-углублений', 'не давит ли на глаза', 'не давит ли на нос', 'качество резинки/ремешка', 'затемнение на свету', 'запах после распаковки', 'швы и края', 'комфорт 10–15 минут', 'упаковку OPP/коробка'],
+    cargo: ['вес с упаковкой', 'габариты индивидуальной упаковки', 'тип упаковки'],
+    redFlags: ['давит на глаза/нос', 'резкий запах', 'слабое затемнение', 'плохие швы', 'не подтверждён материал'],
+    seoAllowed: ['мягкая маска', '3D-форма, если подтверждена', 'регулируемый ремешок, если подтверждён'],
+    seoForbidden: ['лечебный сон', 'гипоаллергенный без документов', '100% затемнение без теста'],
+    infographic: ['Маска для сна', '3D-углубления', 'Ремешок', 'Затемнение', 'Упаковка'],
+    forbiddenCategoryWords: ['срок годности', 'консистенция', 'подошва', 'тип вилки', 'мощность', 'напряжение'],
+  },
+  mini_washer: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите мощность и напряжение.', 'Какой тип вилки?', 'Укажите длину кабеля.', 'Какой реальный объём?', 'Какие режимы работы?', 'Есть ли слив?', 'Пришлите видео работы, инструкцию и фото упаковки.'],
+    beforeSample: ['подтвердить вилку/напряжение', 'получить видео работы', 'уточнить слив', 'получить вес и габариты', 'запросить инструкцию'],
+    onSample: ['включается ли от нужного напряжения', 'не течёт ли корпус', 'как работает слив', 'шум и вибрацию', 'качество пластика', 'фактический объём', 'режимы работы', 'длину кабеля', 'комплектацию', 'инструкцию', 'упаковку после доставки'],
+    cargo: ['вес с упаковкой', 'габариты упаковки', 'есть ли батарейка/аккумулятор', 'тип вилки', 'напряжение', 'сертификаты'],
+    redFlags: ['нет данных по напряжению/вилке', 'нет видео работы', 'протечки', 'сильный шум/вибрация', 'нет инструкции'],
+    seoAllowed: ['портативная стиральная машина', 'режимы работы, если подтверждены', 'объём, если подтверждён'],
+    seoForbidden: ['дезинфекция без документов', 'стерилизация без документов', 'безопасна для детей без документов', 'профессиональная без подтверждения'],
+    infographic: ['Мини-стиральная машина', 'Панель/режимы', 'Слив', 'Комплектация', 'Упаковка'],
+    forbiddenCategoryWords: ['подошва', 'стелька', 'рукав', 'состав ткани в процентах', 'срок годности', 'консистенция'],
+  },
+  clothing: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите состав ткани.', 'Пришлите размерную сетку.', 'Укажите замеры изделия.', 'Есть ли усадка после стирки?', 'Укажите вес с упаковкой.', 'Пришлите реальные фото ткани, бирки и упаковки.', 'Можно ли заказать 1–2 образца?'],
+    beforeSample: ['подтвердить состав', 'получить размерную сетку', 'получить замеры', 'запросить фото ткани/бирки'],
+    onSample: ['состав и плотность ткани', 'посадку', 'швы', 'цветопередачу', 'усадку после стирки', 'бирки', 'упаковку'],
+    cargo: ['вес с упаковкой', 'габариты упаковки', 'количество в коробке'],
+    redFlags: ['нет состава', 'нет размерной сетки', 'сильная усадка', 'плохие швы'],
+    seoAllowed: ['состав, если подтверждён', 'сезонность', 'сценарии носки'],
+    seoForbidden: ['лечебный', 'сертифицированный без документов'],
+    infographic: ['Одежда общий вид', 'Ткань крупно', 'Размеры', 'Детали', 'Упаковка'],
+    forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'аккумулятор', 'подошва'],
+  },
+  towel_kilt: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите состав ткани.', 'Укажите плотность/вес изделия.', 'Укажите размеры.', 'Как фиксируется изделие?', 'Пришлите реальные фото ткани и упаковки.', 'Укажите вес с упаковкой.', 'Можно ли заказать образец?'],
+    beforeSample: ['подтвердить состав', 'получить размеры', 'получить вес', 'запросить фото ткани'],
+    onSample: ['мягкость ткани', 'впитываемость', 'качество фиксации', 'швы', 'размер', 'упаковку'],
+    cargo: ['вес с упаковкой', 'габариты упаковки', 'количество в коробке'],
+    redFlags: ['нет состава ткани', 'плохая фиксация', 'тонкая ткань'],
+    seoAllowed: ['полотенце-килт', 'для душа/бани, если подходит'],
+    seoForbidden: ['мужская юбка-полотенце', 'антибактериальный без документов'],
+    infographic: ['Полотенце-килт', 'Материал', 'Фиксация', 'Размер', 'Упаковка'],
+    forbiddenCategoryWords: ['мужская юбка-полотенце', 'подошва', 'тип вилки', 'мощность'],
+  },
+  passive_insect_trap: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите количество штук в комплекте.', 'Укажите размер одной ловушки.', 'Подтвердите материал.', 'Есть ли приманка в комплекте?', 'Как крепится или размещается товар?', 'Укажите вес и габариты упаковки.', 'Пришлите реальные фото товара и упаковки.'],
+    beforeSample: ['подтвердить комплектацию', 'получить размер', 'получить вес', 'запросить фото упаковки'],
+    onSample: ['размер и материал', 'комплектацию', 'крепление/размещение', 'поверхность/липкость, если применимо', 'упаковку'],
+    cargo: ['вес выбранной комплектации', 'габариты упаковки', 'количество штук в комплекте', 'количество комплектов в коробке', 'фото упаковки'],
+    redFlags: ['непонятная комплектация', 'нет размера/материала', 'появились электрические claims у пассивной ловушки'],
+    seoAllowed: ['пассивная ловушка', 'комплектация', 'способ размещения'],
+    seoForbidden: ['электрическая без подтверждения', 'ультразвуковая без подтверждения', '100% избавляет от насекомых'],
+    infographic: ['Пассивная ловушка', 'Как использовать', 'Комплектация', 'Материал', 'Упаковка'],
+    forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'аккумулятор', 'лампа'],
+  },
+  usb_device: genericRules('USB-товар'),
+  small_appliance: genericRules('малая техника'),
+  kitchen_tool: genericRules('кухонный товар'),
+  bag_accessory: genericRules('аксессуар'),
+  generic_product: genericRules('товар'),
+};
+
+function genericRules(label: string) {
+  return {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите вес с упаковкой.', 'Укажите габариты индивидуальной упаковки.', 'Подтвердите материал.', 'Подтвердите комплектацию.', 'Пришлите реальные фото товара и упаковки.', 'Укажите MOQ и срок отгрузки.', 'Можно ли заказать 1–2 образца?'],
+    beforeSample: ['подтвердить цену SKU', 'получить вес и габариты', 'уточнить материал и комплектацию', 'запросить фото товара и упаковки'],
+    onSample: ['соответствие выбранному SKU', 'качество материала', 'комплектацию', 'размеры', 'вес и упаковку', 'заявленные свойства'],
+    cargo: ['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'вес транспортной коробки', 'габариты транспортной коробки'],
+    redFlags: ['нет веса/габаритов', 'не подтверждён материал', 'нет реальных фото', 'непонятная комплектация'],
+    seoAllowed: [label, 'материал, если подтверждён', 'сценарии применения'],
+    seoForbidden: DANGEROUS_CLAIMS,
+    infographic: ['Главное фото товара', 'Материал и детали', 'Размер/формат', 'Комплектация', 'Упаковка'],
+    forbiddenCategoryWords: [],
+  };
+}
+
+function array<T = any>(v: unknown): T[] { return Array.isArray(v) ? v as T[] : []; }
+function record(v: unknown): Record<string, any> { return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {}; }
+function clean(v: unknown): string { return String(v ?? '').replace(/\b(?:undefined|null|NaN|Infinity|-Infinity)\b/gi, '—').replace(/\s+/g, ' ').trim(); }
+function safeRu(v: unknown): string { return clean(normalizeMixedProductText(v)).replace(/[一-鿿]+/g, '').replace(/\s+/g, ' ').trim(); }
+function num(v: unknown): number | null { if (typeof v === 'number' && Number.isFinite(v)) return v; const n = Number(String(v ?? '').replace(',', '.').replace(/[^\d.-]/g, '')); return Number.isFinite(n) ? n : null; }
+function pos(v: unknown): number | null { const n = num(v); return n && n > 0 ? Math.round(n * 100) / 100 : null; }
+function cny(v: number | null | undefined): string { return v && Number.isFinite(v) && v > 0 ? `${String(Math.round(v * 100) / 100).replace('.', ',')} ¥` : 'нужно уточнить'; }
+function cnyDot(v: number | null | undefined): string { return v && Number.isFinite(v) && v > 0 ? `${String(Math.round(v * 100) / 100)} 元` : '需要确认'; }
+function rub(v: number | null | undefined): string { return v && Number.isFinite(v) && v > 0 ? `${Math.round(v).toLocaleString('ru-RU')} ₽` : 'нужно уточнить'; }
+function uniq(list: Array<string | null | undefined>, limit = 30): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of list) {
+    const text = clean(raw).replace(/^\s*(?:[-•]|\d+[.)])\s*/, '').trim();
+    if (!text || text === '—') continue;
+    const key = text.toLowerCase().replace(/[?.!]+$/g, '').replace(/\s+/g, ' ');
+    if (seen.has(key)) continue;
+    seen.add(key); out.push(text);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export function supplierTypeDisplay(value: unknown): string {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw || /unknown|неизвест|не указан/.test(raw)) return 'не указан';
+  if (/factory|фабрик|工厂|厂家/.test(raw)) return 'фабрика';
+  if (/merchant|провер|实力|供应商/.test(raw)) return 'проверенный продавец';
+  if (/seller|store|shop|продав/.test(raw)) return 'продавец';
+  return safeRu(value) || 'продавец';
+}
+
+function detectKind(product: any, intelligence?: ProductIntelligence | any): ProductKind {
+  const raw = `${intelligence?.productIdentity?.productKind ?? ''} ${intelligence?.productIdentity?.categoryType ?? ''} ${intelligence?.productIdentity?.subCategoryType ?? ''} ${product?.categoryType ?? ''}`.toLowerCase();
+  const text = `${raw} ${product?.titleRu ?? ''} ${product?.titleEn ?? ''} ${product?.titleCn ?? ''} ${product?.categoryName ?? ''}`.toLowerCase();
+  if (/towel|килт|полотенц[еа][ -]?килт/.test(text)) return 'towel_kilt';
+  if (/зонт|umbrella|雨伞|雨傘|伞|傘/.test(text)) return 'umbrella';
+  if (/маск[аи]\s+для\s+сна|sleep\s*mask|眼罩|睡眠/.test(text)) return 'sleep_mask';
+  if (/мини[ -]?стирал|стиральн[а-яё ]*машин|washing\s*machine|洗衣机|內衣洗衣|内衣洗衣/.test(text)) return 'mini_washer';
+  if (/сабо|shoe|footwear|обув|тапоч|шл[её]пан|сандал|鞋|拖鞋|凉鞋/.test(text)) return 'footwear';
+  if (/одежд|clothing|clothes|плать|брюк|футбол|衣|裤/.test(text)) return 'clothing';
+  if (/usb|type-c|type c/.test(text)) return 'usb_device';
+  if (/насеком|insect|ловуш|粘虫|捕虫/.test(text)) return 'passive_insect_trap';
+  if (/кухон|kitchen/.test(text)) return 'kitchen_tool';
+  if (/сумк|bag|кошел|брелок/.test(text)) return 'bag_accessory';
+  if (/электр|220v|вилка|мощность|appliance|прибор/.test(text)) return 'small_appliance';
+  return 'generic_product';
+}
+
+function collectMaterials(product: any, intelligence: any, kind: ProductKind): string[] {
+  const fromIntel = [...array<string>(intelligence?.productIdentity?.material), ...array<string>(intelligence?.productIdentity?.materials)];
+  const attrs = array<any>(product?.attributes ?? product?.normalized1688?.attributes);
+  const fromAttrs = attrs.filter(a => /материал|材质|面料|成分|material/i.test(String(a?.name ?? ''))).map(a => safeRu(a?.value));
+  let items = uniq([...fromIntel, ...fromAttrs].map(safeRu), 6);
+  if (kind === 'umbrella') {
+    const joined = items.join(' ').toLowerCase();
+    const hasMetal = /желез|сплав|металл|iron|alloy|钢|铁|合金/i.test(joined + ' ' + JSON.stringify(product?.attributes ?? ''));
+    items = ['ткань купола', hasMetal ? 'железо/сплав — подтвердить' : 'материал спиц — подтвердить'];
+  }
+  return items.length ? items : ['уточнить у поставщика'];
+}
+
+function collectSkuVariants(product: any): any[] {
+  return array(product?.skus).length ? array(product.skus) : array(product?.normalized1688?.skuVariants);
+}
+
+function skuName(s: any): string {
+  return safeRu(s?.name ?? s?.label ?? s?.skuName ?? s?.propertiesName ?? s?.raw ?? '').replace(/;\s*/g, ' · ');
+}
+
+function skuPrice(s: any): number | null { return pos(s?.priceYuan ?? s?.price ?? s?.discountPrice ?? s?.salePrice); }
+
+function extractColors(labels: string[]): string[] {
+  const colors = ['чёрный','черный','белый','синий','голубой','зелёный','зеленый','жёлтый','желтый','розовый','красный','серый','фиолетовый','хаки','бежевый','коричневый','оранжевый'];
+  return uniq(labels.flatMap(l => colors.filter(c => new RegExp(`(^|[^а-яё])${c}([^а-яё]|$)`, 'i').test(l))).map(c => c === 'черный' ? 'чёрный' : c === 'зеленый' ? 'зелёный' : c === 'желтый' ? 'жёлтый' : c), 12);
+}
+
+function extractAmbiguousParams(labels: string[], kind: ProductKind): string[] {
+  if (kind === 'footwear') return [];
+  const nums = labels.flatMap(l => Array.from(l.matchAll(/\b(?:8|16|40|120|\d{1,3})\b/g)).map(m => m[0]));
+  return uniq(nums.filter(n => !/^20\d{2}$/.test(n)), 10);
+}
+
+function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): ProductProcurementProfile['sku'] {
+  const variants = collectSkuVariants(product);
+  const labels = variants.map(skuName).filter(Boolean);
+  const colors = extractColors(labels);
+  const ambiguousParams = extractAmbiguousParams(labels, kind);
+  const sizeMatches = kind === 'footwear'
+    ? uniq(labels.flatMap(l => Array.from(l.matchAll(/\b(?:3[5-9]|4[0-9])(?:[–-](?:3[5-9]|4[0-9]))?\b/g)).map(m => m[0])), 12)
+    : [];
+  const packageTypes = uniq(labels.filter(l => /opp|пакет|короб|box|袋|盒/i.test(l)).map(l => l.replace(/.*?(OPP|пакет|коробка|box|袋|盒).*/i, '$1')), 8);
+  const packCounts = uniq(labels.flatMap(l => Array.from(l.matchAll(/\b\d+\s*(?:шт|pcs|件|个)\b/gi)).map(m => m[0])), 8);
+  const dims: string[] = [];
+  if (colors.length) dims.push('цвет');
+  if (sizeMatches.length) dims.push('размер');
+  if (ambiguousParams.length) dims.push('параметр SKU');
+  if (!dims.length && variants.length > 1) dims.push('вариант');
+  const count = variants.length || labels.length;
+  const skuSummary = count
+    ? `${count} ${pluralRu(count, 'вариант', 'варианта', 'вариантов')} · ${dims.join(' × ') || 'вариант'}`
+    : 'SKU нужно уточнить';
+  const normalizedExamples = labels.slice(0, 5).map(l => ambiguousParams.length ? l.replace(/\b(8|16|40|120)\b/g, 'Параметр $1') : l);
+  const selected = makeSelectedSkuDecision(product, variants, sourceUrl);
+  return {
+    skuSummary,
+    selectedSkuText: selected.selectedSkuText,
+    selectedSkuReliable: selected.reliable,
+    selectedSkuDecision: selected,
+    dimensions: dims,
+    colors,
+    sizes: sizeMatches,
+    models: [],
+    packageTypes,
+    packCounts,
+    skuRisk: selected.reliable ? 'ok' : count > 1 ? 'needs_selection' : 'unknown',
+    skuWarnings: uniq([
+      !selected.reliable && count > 1 ? 'выбранный SKU не определён' : '',
+      ambiguousParams.length ? `значение параметров SKU ${ambiguousParams.join(' / ')} нужно уточнить` : '',
+    ], 4),
+    normalizedExamples,
+    ambiguousParams,
+  };
+}
+
+export function makeSelectedSkuDecision(product: any, variants = collectSkuVariants(product), sourceUrl?: string): SelectedSkuDecision {
+  const url = String(sourceUrl ?? product?.sourceUrl ?? product?.inputUrl ?? product?.url ?? '');
+  const urlSku = url.match(/[?&](?:skuId|skuid|sku|specId)=([^&#]+)/i)?.[1];
+  if (urlSku) {
+    const found = variants.find((s: any) => String(s?.skuId ?? s?.id ?? s?.specId ?? s?.offerSkuId ?? '') === urlSku);
+    if (found) return { selectedSkuText: skuName(found) || `SKU ${urlSku}`, selectedPriceYuan: skuPrice(found), reliable: true, reason: 'SKU взят из URL и найден в API.' };
+  }
+  if (variants.length === 1) return { selectedSkuText: skuName(variants[0]) || 'единственный SKU', selectedPriceYuan: skuPrice(variants[0]), reliable: true, reason: 'В карточке один SKU.' };
+  const explicit = product?.selectedSku ?? product?.selectedSkuText;
+  if (explicit) return { selectedSkuText: safeRu(explicit), selectedPriceYuan: pos(product?.selectedSkuPriceYuan), reliable: true, reason: 'SKU передан явно.' };
+  return { selectedSkuText: null, selectedPriceYuan: null, reliable: false, reason: variants.length > 1 ? 'В карточке несколько SKU, но выбранный SKU не подтверждён.' : 'SKU не найден в данных.' };
+}
+
+function buildPricing(product: any, selected: SelectedSkuDecision): ProductProcurementProfile['pricing'] {
+  const variants = collectSkuVariants(product);
+  const skuPrices = variants.map(skuPrice).filter((v): v is number => !!v);
+  const min = pos(product?.priceRange?.min ?? product?.minPriceYuan) ?? (skuPrices.length ? Math.min(...skuPrices) : pos(product?.priceYuan ?? product?.price));
+  const max = pos(product?.priceRange?.max ?? product?.maxPriceYuan) ?? (skuPrices.length ? Math.max(...skuPrices) : min);
+  const selectedPrice = selected.selectedPriceYuan ?? (selected.reliable ? pos(product?.priceYuan ?? product?.price) : null);
+  const displayPriceText = selectedPrice
+    ? `Выбранный SKU: ${cny(selectedPrice)}`
+    : min && max && min !== max
+      ? `Цена по SKU: ${String(min).replace('.', ',')}–${String(max).replace('.', ',')} ¥`
+      : min
+        ? `Цена: ${cny(min)}`
+        : 'Цена: нужно уточнить';
+  return {
+    displayPriceText,
+    selectedPriceYuan: selectedPrice,
+    minPriceYuan: min,
+    maxPriceYuan: max,
+    priceSource: selectedPrice ? 'selected_sku' : skuPrices.length ? 'sku_range' : min ? 'price_range' : 'missing',
+    priceReliable: !!selectedPrice || (!!min && !!max),
+    priceWarnings: uniq([!selected.reliable ? 'цена выбранного SKU требует подтверждения' : '', !min ? 'нет цены в данных' : ''], 4),
+  };
+}
+
+function buildQuestions(profileBase: Pick<ProductProcurementProfile, 'identity'|'sku'|'pricing'>, rules: typeof KIND_RULES[ProductKind]): string[] {
+  const priceText = profileBase.sku.selectedSkuReliable && profileBase.pricing.selectedPriceYuan ? cny(profileBase.pricing.selectedPriceYuan) : 'цену выбранного SKU';
+  const params = profileBase.sku.ambiguousParams;
+  const base = rules.mustAskSupplier.map(q => q
+    .replace('Подтвердите цену выбранного SKU.', priceText.includes('¥') ? `Подтвердите цену выбранного SKU: ${priceText}.` : 'Подтвердите цену выбранного SKU.')
+    .replace('Укажите вес с упаковкой.', 'Укажите вес с упаковкой выбранного SKU.')
+  );
+  const merged = params.length ? [
+    ...base.filter(q => !/Что означает параметр|параметр SKU/i.test(q)),
+    `Что означают параметры SKU ${params.join(' / ')}: диаметр, длина, размер, комплектация или другой параметр?`,
+  ] : base;
+  const priority = ['цен', 'вес', 'габарит', 'параметр', 'длин', 'диаметр', 'спиц', 'чехол', 'фото', 'материал', 'комплектац', 'MOQ', 'образец'];
+  return uniq(merged, 14).sort((a, b) => priority.findIndex(p => a.toLowerCase().includes(p)) - priority.findIndex(p => b.toLowerCase().includes(p))).slice(0, 8);
+}
+
+export function buildProductProcurementProfile(product: any, opts: { sourceUrl?: string; intelligence?: ProductIntelligence | any } = {}): ProductProcurementProfile {
+  const intelligence = opts.intelligence ?? product?.procurementProfileSourceIntelligence ?? product?.productIntelligence ?? product?.intelligence ?? product?.productContext?.productIntelligence ?? {};
+  const kind = detectKind(product, intelligence);
+  const rules = KIND_RULES[kind] ?? KIND_RULES.generic_product;
+  const sourceUrl = opts.sourceUrl ?? product?.sourceUrl ?? product?.inputUrl;
+  const sku = buildSkuProfile(product, kind, sourceUrl);
+  const pricing = buildPricing(product, sku.selectedSkuDecision);
+  const materials = collectMaterials(product, intelligence, kind);
+  const identity = record(intelligence?.productIdentity);
+  const cleanTitles = record(intelligence?.cleanTitles);
+  const titleForReport = safeRu(cleanTitles.titleForReport || cleanTitles.titleRuClean || identity.shortNameRu || identity.marketNameRu || product?.titleRu || product?.titleEn || product?.titleCn || 'Товар 1688');
+  const titleForSeo = safeSeoTitle(safeRu(cleanTitles.titleForWb || product?.seoContent?.titleRu || titleForReport), kind);
+  const missing = uniq([...(pricing.priceReliable ? [] : ['цена выбранного SKU']), ...(product?.weightKg ? [] : ['вес с упаковкой']), ...(sku.selectedSkuReliable ? [] : ['выбранный SKU']), ...array<string>(intelligence?.dataQuality?.missingCriticalFields)], 8);
+  const baseProfile = {
+    identity: {
+      productKind: kind,
+      categoryType: safeRu(identity.categoryType || product?.categoryType || kind),
+      subCategoryType: safeRu(identity.subCategoryType || ''),
+      titleForReport,
+      titleForSeo,
+      shortTitle: safeRu(identity.shortNameRu || titleForReport),
+      coreObject: safeRu(identity.coreObject || titleForReport),
+      formFactor: safeRu(identity.formFactor || ''),
+      audience: safeRu(identity.audience || ''),
+      gender: safeRu(identity.gender || ''),
+      season: safeRu(identity.season || ''),
+      useCases: uniq(array<string>(identity.useCases).map(safeRu), 6),
+      materials,
+      visibleFeatures: uniq(array<string>(identity.visibleFeatures).map(safeRu), 8),
+      claimedFeatures: uniq([...array<string>(identity.importantFeatures), ...array<string>(intelligence?.claimsPolicy?.claimedButNeedProof)].map(safeRu), 8),
+      unconfirmedFeatures: uniq([...array<string>(identity.notConfirmedFeatures), ...array<string>(identity.unconfirmedFeatures)].map(safeRu), 8),
+    },
+    sku,
+    pricing,
+  } as Pick<ProductProcurementProfile, 'identity'|'sku'|'pricing'>;
+  const mustAskSupplier = buildQuestions(baseProfile, rules);
+  return {
+    ...baseProfile,
+    supplier: {
+      displayType: supplierTypeDisplay(product?.supplierType),
+      rating: clean(product?.supplierRating ?? product?.rating ?? '—') || '—',
+      orders: clean(product?.sold ?? product?.orders ?? '—') || '—',
+      name: safeRu(product?.supplierName || ''),
+    },
+    procurement: {
+      status: missing.length ? '🟡 Нужны данные поставщика' : '🟢 Готов к заказу образца',
+      verdict: missing.length ? 'Партию закупать рано. Сначала запросите данные у поставщика и закажите 1–2 образца.' : 'Можно готовить заказ образца. Партию закупать только после проверки образца.',
+      nextAction: 'Отправьте вопросы поставщику и скачайте закупочный пакет.',
+      mustAskSupplier,
+      mustCheckBeforeSample: uniq(rules.beforeSample, 8),
+      mustCheckOnSample: uniq(rules.onSample, 12),
+      redFlags: uniq([...rules.redFlags, ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu)], 12),
+    },
+    cargo: {
+      mustAsk: uniq(['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'вес транспортной коробки', 'габариты транспортной коробки', 'фото индивидуальной упаковки', 'фото транспортной коробки', 'материал товара', 'ограничения по перевозке', ...rules.cargo], 14),
+      likelySensitiveCargoIssues: uniq(kind === 'mini_washer' || kind === 'small_appliance' || kind === 'usb_device' ? ['питание/вилка/напряжение', 'аккумулятор или батарейка — уточнить', 'сертификаты для техники'] : [], 6),
+    },
+    content: {
+      seoAllowedClaims: uniq([...rules.seoAllowed, ...array<string>(intelligence?.reportRules?.seoAllowedClaims).map(safeRu)], 12),
+      seoForbiddenClaims: uniq([...rules.seoForbidden, ...array<string>(intelligence?.reportRules?.seoForbiddenClaims).map(safeRu), ...DANGEROUS_CLAIMS], 18),
+      titleWarnings: dangerousClaims(titleForSeo).map(c => `Не писать в названии без подтверждения: ${c}`),
+      infographicIdeas: uniq([...rules.infographic, ...array<string>(intelligence?.reportRules?.infographicIdeas).map(safeRu)], 7),
+    },
+    dataQuality: {
+      missingCriticalFields: missing,
+      contradictions: uniq([...(sku.selectedSkuReliable ? [] : ['выбранный SKU не подтверждён']), ...array<any>(product?.productContext?.conflicts).map((c: any) => safeRu(c.field || c.message || c))], 8),
+      confidence: (['high','medium','low'].includes(String(intelligence?.dataQuality?.overallConfidence)) ? intelligence.dataQuality.overallConfidence : missing.length > 3 ? 'low' : 'medium') as any,
+      reason: safeRu(intelligence?.dataQuality?.reason || 'Профиль собран из Product Intelligence, SKU, цены, поставщика и атрибутов 1688.'),
+    },
+  };
+}
+
+export function ensureProductProcurementProfile(product: any, opts: { sourceUrl?: string } = {}): ProductProcurementProfile {
+  const existing = product?.productProcurementProfile ?? product?.procurementProfile;
+  if (existing?.identity?.productKind && existing?.procurement?.mustAskSupplier?.length) return existing as ProductProcurementProfile;
+  const profile = buildProductProcurementProfile(product, opts);
+  if (product && typeof product === 'object') {
+    product.productProcurementProfile = profile;
+    product.procurementProfile = profile;
+  }
+  return profile;
+}
+
+export function preprocessMainImageForProductIntelligence(product: any): { url: string | null; role: string; note: string } {
+  const images = array<string>(product?.images ?? product?.imageUrls ?? product?.normalized1688?.images).filter(Boolean);
+  const url = clean(product?.mainImageUrl) || images[0] || null;
+  return { url, role: 'main_product_image', note: url ? 'Фото передаётся только для определения типа товара и видимых деталей; цена, вес, MOQ и SKU берутся из API.' : 'Главное фото не найдено.' };
+}
+
+function safeSeoTitle(title: string, kind: ProductKind): string {
+  let out = title || KIND_RULES[kind]?.seoAllowed?.[0] || 'Товар 1688';
+  for (const claim of DANGEROUS_CLAIMS) out = out.replace(new RegExp(claim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '').trim();
+  if (kind === 'umbrella' && /зонт/i.test(out) && !/крюч|чехол/i.test(out)) out = 'Зонт автоматический складной с крючком и чехлом';
+  return out.replace(/\s{2,}/g, ' ').trim() || 'Товар 1688';
+}
+
+function dangerousClaims(text: string): string[] { return DANGEROUS_CLAIMS.filter(c => new RegExp(c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(text)); }
+function pluralRu(n: number, one: string, few: string, many: string): string { const v = Math.abs(n) % 100; const v1 = v % 10; if (v > 10 && v < 20) return many; if (v1 > 1 && v1 < 5) return few; if (v1 === 1) return one; return many; }
+
+export function buildMainReportFromProfile(product: any, statusInfo?: { creditsRemaining?: number }, opts: { sourceUrl?: string } = {}): string {
+  const p = ensureProductProcurementProfile(product, opts);
+  const priceYuan = p.pricing.selectedPriceYuan ?? p.pricing.minPriceYuan;
+  const purchaseRub = priceYuan ? Math.round(priceYuan * YUAN_TO_RUB) : null;
+  const costWithoutCargo = purchaseRub ? Math.round(purchaseRub * (1 + BANK_MARKUP) + FULFILLMENT_RUB) : null;
+  const moq = pos(product?.moq ?? product?.normalized1688?.moq);
+  const weight = pos(product?.weightKg ?? product?.packedWeightKg);
+  const lines = [
+    `📦 <b>${escapeHtml(p.identity.titleForReport)}</b>`,
+    '',
+    'Источник: 1688',
+    `Поставщик: ${escapeHtml(p.supplier.displayType)}${p.supplier.rating && p.supplier.rating !== '—' ? ` · рейтинг ${escapeHtml(p.supplier.rating)}` : ''}${p.supplier.orders && p.supplier.orders !== '—' ? ` · заказов ${escapeHtml(p.supplier.orders)}` : ''}`,
+    '',
+    '📌 <b>Товар</b>',
+    `• Цена: ${escapeHtml(p.pricing.displayPriceText.replace(/^Цена:\s*/i, '').replace(/^Цена по SKU:\s*/i, 'по SKU: '))}`,
+    `• Выбранный SKU: ${escapeHtml(p.sku.selectedSkuText || (p.sku.selectedSkuReliable ? 'не определён' : `не определён. ${p.pricing.minPriceYuan && p.pricing.maxPriceYuan ? `Цена по SKU: ${String(p.pricing.minPriceYuan).replace('.', ',')}${p.pricing.maxPriceYuan !== p.pricing.minPriceYuan ? `–${String(p.pricing.maxPriceYuan).replace('.', ',')}` : ''} ¥.` : 'Нужен выбор SKU.'}`))}`,
+    `• MOQ: ${moq ? `${Math.round(moq)} шт` : 'уточнить'}`,
+    `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
+    p.sku.colors.length ? `• Цвета: ${escapeHtml(p.sku.colors.join(', '))}` : '',
+    p.sku.sizes.length ? `• Размеры: ${escapeHtml(p.sku.sizes.join(', '))}` : (p.sku.ambiguousParams.length ? `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — значение нужно уточнить` : ''),
+    `• Материал: ${escapeHtml(p.identity.materials.join(', '))}${/подтверд/i.test(p.identity.materials.join(' ')) ? '' : ' — подтвердить'}`, 
+    `• Вес: ${weight ? `${weight} кг` : 'не указан'}`,
+    '',
+    '<b>🟡 Статус: нужны данные поставщика</b>',
+    '',
+    '⚠️ <b>Что уточнить</b>',
+    ...p.procurement.mustAskSupplier.slice(0, 5).map(q => `• ${escapeHtml(q)}`),
+    '',
+    '💸 <b>Предварительная себестоимость</b>',
+    `• Закупка: ${priceYuan ? `${cny(priceYuan)} ≈ ${rub(purchaseRub)}` : 'нужно уточнить'}`,
+    `• Без карго: ${costWithoutCargo ? `~${rub(costWithoutCargo)}` : 'нужно уточнить'}`,
+    '• Карго: нужен вес с упаковкой',
+    '',
+    '📁 <b>Закупочный пакет готов</b>',
+    '• вопросы поставщику',
+    '• ТЗ байеру',
+    '• ТЗ карго',
+    '• чек-лист образца',
+    '• SEO-черновик',
+    '• фото товара',
+    '',
+    '🎯 <b>Вывод</b>',
+    escapeHtml(p.procurement.verdict),
+    '',
+    '<b>Что сделать:</b>',
+    '1. Нажмите «💬 Вопросы поставщику».',
+    '2. Отправьте текст поставщику в чат 1688.',
+    '3. Скачайте закупочный пакет.',
+  ].filter(Boolean);
+  if (typeof statusInfo?.creditsRemaining === 'number') lines.push('', `Осталось анализов: ${statusInfo.creditsRemaining}`);
+  return lines.join('\n');
+}
+
+function escapeHtml(v: unknown): string { return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+export function validateProfile(profile: ProductProcurementProfile): { ok: boolean; errors: string[]; fixedProfile: ProductProcurementProfile } {
+  const errors: string[] = [];
+  if (!profile.identity.titleForReport) errors.push('titleForReport empty');
+  if (!profile.identity.productKind) errors.push('productKind empty');
+  if (!profile.procurement.mustAskSupplier.length) errors.push('mustAskSupplier empty');
+  if (!profile.procurement.mustCheckOnSample.length) errors.push('mustCheckOnSample empty');
+  const ruFields = JSON.stringify([profile.identity, profile.procurement, profile.cargo, profile.content]);
+  if (/[一-鿿]/.test(ruFields)) errors.push('raw Chinese in RU fields');
+  if (dangerousClaims(profile.identity.titleForSeo).length) errors.push('dangerous claim in titleForSeo');
+  return { ok: errors.length === 0, errors, fixedProfile: profile };
+}
+
+export function validateMainReport(text: string): { ok: boolean; errors: string[]; fixedText: string } {
+  const errors: string[] = [];
+  let fixed = text;
+  if (/Product Intelligence|AI-черновик|debug/i.test(fixed)) errors.push('internal text');
+  if (/[一-鿿]/.test(fixed)) errors.push('raw Chinese');
+  if (/0(?:[,.]0+)?\s*[₽¥￥]/.test(fixed)) errors.push('zero money');
+  if (/\b(?:seller|factory|merchant)\b/i.test(fixed)) errors.push('english supplier type');
+  if (/ориентир\s+0[,.]\d+\s*кг|category default/i.test(fixed)) errors.push('category default weight');
+  fixed = fixed.replace(/\bseller\b/gi, 'продавец').replace(/\bmerchant\b/gi, 'проверенный продавец').replace(/\bfactory\b/gi, 'фабрика');
+  fixed = fixed.replace(/0(?:[,.]0+)?\s*[₽¥￥]/g, 'нужно уточнить');
+  return { ok: errors.length === 0, errors, fixedText: fixed };
+}
+
+export function validateCnQuestions(ru: string[], cn: string[]): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (!cn.length) errors.push('CN empty');
+  if (cn.length !== ru.length) errors.push('CN count differs');
+  if (cn.length > 10) errors.push('too many CN questions');
+  const joined = cn.join('\n');
+  if (/[А-Яа-яЁё]/.test(joined)) errors.push('Cyrillic in CN');
+  if (/file:\/\//i.test(joined)) errors.push('file url');
+  if (/\b(?:material|размерная сетка|вес|габарит|цвет|поставщик)\b/i.test(joined)) errors.push('language mix');
+  if (/\d+,\d+\s*元/.test(joined)) errors.push('comma decimal');
+  if (/\d+[.)]\s*\d+[.)]/.test(joined)) errors.push('nested numbering');
+  return { ok: errors.length === 0, errors };
+}
+
+function translateQuestionToCn(q: string): string {
+  const lower = q.toLowerCase();
+  const price = q.match(/(\d+(?:[,.]\d+)?)\s*¥/)?.[1]?.replace(',', '.');
+  const params = q.match(/SKU\s+([\d\s/]+)/i)?.[1]?.replace(/\s+/g, ' ').trim();
+  if (/цен/.test(lower)) return `请确认所选SKU的价格${price ? `：${price} 元` : ''}。`;
+  if (/вес/.test(lower)) return '请提供所选SKU含包装的重量。';
+  if (/габарит|размер.*упаков/.test(lower)) return '请提供单件包装尺寸。';
+  if (/параметр/.test(lower)) return `请说明SKU参数${params ? ` ${params}` : ''}分别代表什么：伞面直径、折叠长度、数量规格还是其他参数？`;
+  if (/длин/.test(lower)) return '请提供产品折叠后的长度。';
+  if (/диаметр/.test(lower)) return '请提供展开后的尺寸或直径。';
+  if (/материал/.test(lower)) return '请确认产品材料和关键部件材料。';
+  if (/спиц/.test(lower)) return '请确认所选SKU的伞骨数量。';
+  if (/чехол|фото/.test(lower)) return '是否包含收纳套？请发送产品打开、折叠状态和包装的实拍图。';
+  if (/комплектац/.test(lower)) return '请确认所选SKU的完整配置。';
+  if (/moq|минимальн/.test(lower)) return '请确认最小起订量和发货时间。';
+  if (/образец/.test(lower)) return '是否可以先购买1-2件样品？';
+  return '请确认该问题中的相关产品信息。';
+}
+
+export function buildSupplierQuestionsFromProfile(product: any, opts: { sourceUrl?: string } = {}): SupplierQuestionsProfileResult {
+  const profile = ensureProductProcurementProfile(product, opts);
+  const ru = uniq(profile.procurement.mustAskSupplier, 10).slice(0, 10);
+  const cn = ru.map(translateQuestionToCn);
+  const cnCheck = validateCnQuestions(ru, cn);
+  const label = cnCheck.ok ? '💬 Вопросы поставщику RU/CN' : '💬 Вопросы поставщику RU';
+  const lines = ['# Вопросы поставщику', '', '## Русская версия', '', 'Здравствуйте. Хотим уточнить товар перед заказом:', '', ...ru.map((q, i) => `${i + 1}. ${q}`), ''];
+  if (cnCheck.ok) lines.push('## Китайская версия', '', '您好。下单前想确认以下产品信息：', '', ...cn.map((q, i) => `${i + 1}. ${q}`));
+  else lines.push('## Китайская версия', '', 'Китайская версия не сформирована. Используйте русскую версию или переведите через байера.');
+  return { ru, cn: cnCheck.ok ? cn : [], cnValid: cnCheck.ok, text: lines.join('\n'), label, errors: cnCheck.errors };
+}
+
+
+export function formatSupplierQuestionsText(ru: string[], cn: string[]): SupplierQuestionsProfileResult {
+  const cleanRu = uniq(ru, 10).slice(0, 10);
+  const cnCheck = validateCnQuestions(cleanRu, cn);
+  const lines = ['# Вопросы поставщику', '', '## Русская версия', '', 'Здравствуйте. Хотим уточнить товар перед заказом:', '', ...cleanRu.map((q, i) => `${i + 1}. ${q}`), ''];
+  if (cnCheck.ok) lines.push('## Китайская версия', '', '您好。下单前想确认以下产品信息：', '', ...cn.map((q, i) => `${i + 1}. ${q}`));
+  else lines.push('## Китайская версия', '', 'Китайская версия не сформирована. Используйте русскую версию или переведите через байера.');
+  return { ru: cleanRu, cn: cnCheck.ok ? cn : [], cnValid: cnCheck.ok, text: lines.join('\n'), label: cnCheck.ok ? '💬 Вопросы поставщику RU/CN' : '💬 Вопросы поставщику RU', errors: cnCheck.errors };
+}
+
+export async function translateSupplierQuestionsRuToCn(ru: string[]): Promise<string[]> {
+  const cleanRu = uniq(ru, 10).slice(0, 10);
+  const fallback = cleanRu.map(translateQuestionToCn);
+  const g: any = globalThis as any;
+  const apiKey = g.process?.env?.OPENROUTER_API_KEY;
+  if (!apiKey || typeof g.fetch !== 'function' || !g.AbortSignal) return fallback;
+
+  try {
+    const res = await g.fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: g.process?.env?.CARDZIP_CN_TRANSLATOR_MODEL || 'google/gemini-2.5-flash-lite',
+        max_tokens: 900,
+        temperature: 0,
+        messages: [
+          { role: 'system', content: 'Ты переводчик закупочных вопросов RU→CN для 1688. Верни строго JSON: {"questionsCn":[""]}. Не добавляй и не удаляй вопросы. Не используй русский. Десятичные числа пиши через точку: 12.5 元.' },
+          { role: 'user', content: JSON.stringify({ questionsRu: cleanRu }) },
+        ],
+      }),
+      signal: g.AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return fallback;
+    const data = await res.json() as any;
+    const raw = String(data.choices?.[0]?.message?.content ?? '').replace(/```json\s*/i, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(raw);
+    const cn = Array.isArray(parsed?.questionsCn) ? parsed.questionsCn.map(String) : [];
+    return validateCnQuestions(cleanRu, cn).ok ? cn : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function validateSupplierQuestions(text: string): { ok: boolean; errors: string[]; fixedText: string } {
+  const errors: string[] = [];
+  if (/file:\/\//i.test(text)) errors.push('file url');
+  const ruLines = text.split('\n').filter(l => /^\d+[.)]\s/.test(l) && /[А-Яа-яЁё]/.test(l));
+  if (uniq(ruLines.map(l => l.replace(/^\d+[.)]\s*/, ''))).length !== ruLines.length) errors.push('duplicates');
+  if (ruLines.length > 10) errors.push('too many questions');
+  return { ok: errors.length === 0, errors, fixedText: text };
+}
+
+function list(items: string[], limit = 12): string[] { return uniq(items, limit).map(v => `- ${v}`); }
+
+export function buildBuyerBriefFromProfile(product: any, opts: { sourceUrl?: string } = {}): string {
+  const p = ensureProductProcurementProfile(product, opts);
+  return [
+    '# ТЗ байеру', '',
+    '## 1. Товар',
+    `Название: ${p.identity.titleForReport}`,
+    `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? '—'}`,
+    `Цена: ${p.pricing.displayPriceText}`,
+    `SKU: ${p.sku.selectedSkuText ?? 'не определён'}`,
+    `SKU в карточке: ${p.sku.skuSummary}`,
+    `Цвета: ${p.sku.colors.length ? p.sku.colors.join(', ') : 'уточнить'}`,
+    `Материал: ${p.identity.materials.join(', ')}`,
+    `MOQ: ${pos(product?.moq) ? `${Math.round(pos(product?.moq)!)} шт.` : 'уточнить'}`,
+    '', '## 2. Поставщик',
+    `Название: ${p.supplier.name || 'не указано'}`,
+    `Тип: ${p.supplier.displayType}`,
+    `Рейтинг: ${p.supplier.rating || '—'}`,
+    `Заказы: ${p.supplier.orders || '—'}`,
+    '', '## 3. Что подтвердить у поставщика',
+    ...list(p.procurement.mustAskSupplier, 10),
+    '', '## 4. Что проверить на образце',
+    ...list(p.procurement.mustCheckOnSample, 10),
+    '', '## 5. Фото, которые нужно запросить',
+    '- общий вид выбранного SKU', '- крупно материал и важные детали', '- упаковка и маркировка', '- комплектация в одном кадре', '- фото рядом с линейкой, если размер важен',
+    '', '## 6. Риски',
+    ...list(p.procurement.redFlags, 10),
+    '', '## 7. Решение',
+    p.procurement.verdict,
+  ].join('\n');
+}
+
+export function buildCargoBriefFromProfile(product: any, opts: { sourceUrl?: string } = {}): string {
+  const p = ensureProductProcurementProfile(product, opts);
+  const weight = pos(product?.weightKg ?? product?.packedWeightKg);
+  return [
+    '# ТЗ карго', '',
+    '## Товар',
+    `Название: ${p.identity.titleForReport}`,
+    `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? '—'}`,
+    `SKU: ${p.sku.selectedSkuText ?? 'не определён'}`,
+    `Цена: ${p.pricing.displayPriceText}`,
+    '', '## Что нужно запросить для доставки',
+    ...list(p.cargo.mustAsk, 16),
+    '', '## Дополнительно по этому товару',
+    ...(p.cargo.likelySensitiveCargoIssues.length ? list(p.cargo.likelySensitiveCargoIssues, 8) : ['- специальных ограничений не найдено, но ограничения по перевозке нужно подтвердить у карго']),
+    '', '## Текущий статус',
+    `Вес: ${weight ? `${weight} кг` : 'не указан'}`,
+    'Габариты: не указаны',
+    `SKU: ${p.sku.selectedSkuText ?? 'не определён'}`,
+    '', '## Важно',
+    'Карго не рассчитывается точно без веса и габаритов выбранного SKU.',
+  ].join('\n');
+}
+
+export function buildSampleChecklistFromProfile(product: any, opts: { sourceUrl?: string } = {}): string {
+  const p = ensureProductProcurementProfile(product, opts);
+  const measure = uniq(['вес с упаковкой', 'габариты индивидуальной упаковки', ...p.cargo.mustAsk.filter(v => /длина|диаметр|размер|объ[её]м|вес|габарит/i.test(v))], 8);
+  return [
+    '# Чек-лист образца', '',
+    '## До заказа образца',
+    ...list(p.procurement.mustCheckBeforeSample, 8),
+    '', '## Какой SKU взять',
+    `- ${p.sku.selectedSkuText ?? 'самый массовый/целевой SKU после подтверждения у поставщика'}`,
+    '- Количество: 1–2 единицы, не партия',
+    '', '## Что проверить на образце',
+    ...list(p.procurement.mustCheckOnSample, 12),
+    '', '## Что измерить',
+    ...list(measure, 8),
+    '', '## Какие фото сделать',
+    '- общий вид выбранного SKU', '- товар крупно с разных сторон', '- важные детали/механизм/материал', '- комплектация', '- индивидуальная упаковка и маркировка',
+    '', '## Красные флаги',
+    ...list(p.procurement.redFlags, 10),
+    '', '## Решение после образца',
+    '- брать в тестовую партию', '- доработать SKU/упаковку/контент', '- не брать',
+  ].join('\n');
+}
+
+export function buildSeoDraftFromProfile(product: any, opts: { sourceUrl?: string } = {}): string {
+  const p = ensureProductProcurementProfile(product, opts);
+  const title = safeSeoTitle(p.identity.titleForSeo, p.identity.productKind);
+  const useCases = p.identity.useCases.length ? p.identity.useCases.join(', ') : 'повседневного использования';
+  const material = p.identity.materials.join(', ');
+  const bullets = uniq([
+    `${p.identity.shortTitle || title} для ${useCases}`,
+    material && !/уточнить/.test(material) ? `Материал: ${material}${/подтверд/i.test(material) ? '' : ' — подтвердите у поставщика'}` : 'Материал нужно подтвердить у поставщика',
+    p.sku.colors.length ? `Доступные цвета: ${p.sku.colors.join(', ')}` : 'Цвет и SKU выберите по карточке 1688',
+    p.sku.skuSummary ? `SKU в карточке: ${p.sku.skuSummary}` : 'SKU нужно уточнить перед закупкой',
+    'Перед продажей проверьте образец, вес и упаковку',
+  ], 5).slice(0, 5);
+  while (bullets.length < 5) bullets.push('Характеристику нужно подтвердить перед публикацией');
+  const characteristics = seoCharacteristics(p);
+  return [
+    '# SEO-черновик WB/Ozon', '',
+    '## Название', title, '',
+    '## Описание',
+    `${title} — черновик карточки для WB/Ozon на основе данных 1688. Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.`,
+    '', '## Буллеты',
+    ...bullets.map((b, i) => `${i + 1}. ${b}`),
+    '', '## Характеристики',
+    '| Параметр | Значение | Статус |', '|---|---|---|',
+    ...characteristics.map(c => `| ${c.name} | ${c.value} | ${c.status} |`),
+    '', '## Ключевые слова',
+    uniq([title, p.identity.coreObject, p.identity.shortTitle, ...p.identity.useCases, ...p.sku.colors.map(c => `${p.identity.coreObject} ${c}`)], 12).join(', '),
+    '', '## Что уточнить перед публикацией',
+    ...list([...p.procurement.mustAskSupplier.slice(0, 6), ...p.dataQuality.missingCriticalFields], 10),
+    '', '## Нельзя писать как факт',
+    ...list(p.content.seoForbiddenClaims, 12),
+    '', '## Идеи для инфографики',
+    ...p.content.infographicIdeas.slice(0, 6).map((idea, i) => `${i + 1}. ${idea}`),
+  ].join('\n');
+}
+
+function seoCharacteristics(p: ProductProcurementProfile): Array<{ name: string; value: string; status: string }> {
+  const rows = [
+    { name: 'Тип', value: p.identity.productKind === 'umbrella' ? 'складной автоматический зонт' : p.identity.coreObject || p.identity.shortTitle, status: 'уточнить/подтвердить' },
+    ...(p.sku.colors.length ? [{ name: 'Цвета', value: p.sku.colors.join(', '), status: 'по SKU карточки' }] : []),
+    { name: p.identity.productKind === 'umbrella' ? 'Материал купола' : 'Материал', value: p.identity.productKind === 'umbrella' ? 'уточнить' : p.identity.materials.join(', '), status: 'подтвердить у поставщика' },
+    ...(p.identity.productKind === 'umbrella' ? [{ name: 'Материал спиц', value: 'железо/сплав', status: 'подтвердить у поставщика' }, { name: 'Механизм', value: 'автоматический', status: 'проверить на образце' }, { name: 'Защита от солнца', value: 'UPF50+ заявлено', status: 'не писать без подтверждения' }] : []),
+    { name: 'Вес', value: 'не указан', status: 'нужен вес с упаковкой' },
+    { name: 'SKU', value: p.sku.skuSummary, status: p.sku.selectedSkuReliable ? 'выбран' : 'уточнить выбранный SKU' },
+  ];
+  const seen = new Set<string>();
+  return rows.filter(r => { const k = r.name.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return !!r.value; }).slice(0, 8);
+}
+
+export function buildReadmeFromProfile(product: any, opts: { sourceUrl?: string } = {}): string {
+  return [
+    'CardZip — закупочный пакет', '',
+    'Что внутри:',
+    '1. supplier_questions.txt — вопросы поставщику на русском и китайском.',
+    '2. buyer_brief.md — ТЗ байеру: что закупаем, какой SKU, что проверить.',
+    '3. cargo_brief.md — ТЗ карго: вес, габариты, упаковка и ограничения.',
+    '4. sample_checklist.md — что проверить до образца, на образце и перед партией.',
+    '5. seo_draft.md — черновик карточки WB/Ozon и идеи инфографики.',
+    '6. photos.zip — фото товара с 1688, если удалось скачать.',
+    '', 'Рекомендуемый порядок:',
+    '1. Отправьте supplier_questions.txt поставщику.',
+    '2. Получите вес, габариты, фото и подтверждение SKU.',
+    '3. Передайте buyer_brief.md байеру.',
+    '4. Передайте cargo_brief.md карго.',
+    '5. Закажите 1–2 образца.',
+    '6. Проверьте образец по sample_checklist.md.',
+    '7. Используйте seo_draft.md как черновик карточки.',
+  ].join('\n');
+}
+
+export function validateDocuments(docs: Array<{ filename: string; text: string }>, profile?: ProductProcurementProfile): { ok: boolean; errors: string[]; fixedDocs: Array<{ filename: string; text: string }> } {
+  const errors: string[] = [];
+  const rules = profile ? KIND_RULES[profile.identity.productKind] : undefined;
+  const fixedDocs = docs.map(doc => {
+    let text = doc.text;
+    if (/Product Intelligence|AI-черновик|debug/i.test(text)) { errors.push(`${doc.filename}: internal text`); text = text.replace(/Product Intelligence|AI-черновик|debug/gi, 'данные анализа'); }
+    if (/0(?:[,.]0+)?\s*[₽¥￥]/.test(text)) { errors.push(`${doc.filename}: zero money`); text = text.replace(/0(?:[,.]0+)?\s*[₽¥￥]/g, 'нужно уточнить'); }
+    for (const claim of DANGEROUS_CLAIMS) {
+      const rx = new RegExp(`\\b${claim.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+      if (rx.test(text) && !/нельзя писать|не писать|без документов|подтвердить/i.test(text)) errors.push(`${doc.filename}: dangerous claim ${claim}`);
+    }
+    if (rules?.forbiddenCategoryWords?.length) {
+      for (const word of rules.forbiddenCategoryWords) {
+        const rx = new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        if (rx.test(text)) { errors.push(`${doc.filename}: чужая категория ${word}`); text = text.split('\n').filter(l => !rx.test(l)).join('\n'); }
+      }
+    }
+    if (doc.filename === 'seo_draft.md') {
+      const bulletSection = text.match(/## Буллеты\n([\s\S]*?)(?:\n## |$)/)?.[1] ?? '';
+      const bullets = bulletSection.match(/^\d+\.\s+/gm)?.length ?? 0;
+      if (bullets !== 5) errors.push('seo_draft.md: bullets not 5');
+    }
+    return { ...doc, text: text.replace(/\n{3,}/g, '\n\n').trim() + '\n' };
+  });
+  return { ok: errors.length === 0, errors, fixedDocs };
+}

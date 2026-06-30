@@ -1,4 +1,5 @@
 import { Markup } from 'telegraf';
+import { buildMainReportFromProfile } from './procurementProfile';
 import {
   buildMainReport,
   build1688Detail as render1688Detail,
@@ -28,13 +29,13 @@ function topLevelKeyboard(jobId: string) {
 
 
 export function buildMainMessage(product: any, jobId: string, status: any, _category?: any): { text: string; keyboard: any } {
-  const text = buildMainReport(product, { creditsRemaining: status?.creditsRemaining });
+  const text = buildMainReportFromProfile(product, { creditsRemaining: status?.creditsRemaining });
   const keyboard = topLevelKeyboard(jobId);
   return { text, keyboard };
 }
 
 export function buildMessage1(product: any): string {
-  return buildMainReport(product, undefined, undefined);
+  return buildMainReportFromProfile(product, undefined);
 }
 
 export function buildMessage2(product: any): string {

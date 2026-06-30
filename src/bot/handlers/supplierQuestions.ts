@@ -1,7 +1,7 @@
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import { supabase } from '../../db/supabase';
-import { buildSupplierQuestions, buildDecisionContext } from '../../core/decisionLayer';
+import { buildSupplierQuestionsFromProfile, ensureProductProcurementProfile } from '../../core/procurementProfile';
 
 async function findJob(userId: string, jobId?: string) {
   if (jobId) {
@@ -54,35 +54,30 @@ export async function handleSupplierQuestions(ctx: Context) {
     return;
   }
 
+  const data = job.result_json as any;
+  const product = data.product ?? data.rawProduct ?? {};
+  ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
+  const questionSet = buildSupplierQuestionsFromProfile(product);
+  const firstRow = questionSet.cnValid
+    ? [Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`), Markup.button.callback('📋 Скопировать CN', `sq_cn_${job.id}`)]
+    : [Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`)];
+
   await ctx.reply(
-    '💬 <b>Вопросы поставщику</b>\n\n' +
+    `${questionSet.cnValid ? '💬 <b>Вопросы поставщику RU/CN</b>' : '💬 <b>Вопросы поставщику RU</b>'}\n\n` +
     'Скопируйте текст и отправьте поставщику в чат 1688.\n\n' +
+    (questionSet.cnValid ? 'Китайская версия прошла проверку.\n\n' : 'Китайская версия не сформирована безопасно — используйте русский текст или передайте байеру.\n\n') +
     'После ответа поставщика можно обновить закупочный пакет: я попробую извлечь вес, габариты, цену, MOQ и обновить ТЗ.\n\n' +
-    '<b>Что делать сейчас:</b> откройте русский или китайский текст и отправьте его поставщику.',
+    '<b>Что делать сейчас:</b> откройте текст и отправьте его поставщику.',
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
-        [
-          Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`),
-          Markup.button.callback('📋 Скопировать CN', `sq_cn_${job.id}`),
-        ],
+        firstRow,
         [Markup.button.callback('📥 Обновить по ответу', `supplier_confirm_${job.id}`)],
         [Markup.button.callback('⬅️ Назад', `back_main_${job.id}`), Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`)],
         [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     }
   );
-}
-
-
-
-function cnQuestionsAreSafe(lines: string[]): boolean {
-  const text = lines.join('\n');
-  if (!text.trim()) return false;
-  if (/[а-яё]/i.test(text)) return false;
-  if (/file:\/\//i.test(text)) return false;
-  if (/\d+\.\s*\d+\./.test(text)) return false;
-  return true;
 }
 
 export async function handleSupplierQuestionsLang(ctx: Context) {
@@ -105,12 +100,12 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     }
 
     const data = job.result_json as any;
-    const product = data.product ?? data.rawProduct;
-    const x = buildDecisionContext(product ?? {});
-    const questionSet = buildSupplierQuestions(product ?? {});
-    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 8);
+    const product = data.product ?? data.rawProduct ?? {};
+    const profile = ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
+    const questionSet = buildSupplierQuestionsFromProfile(product);
+    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 10);
 
-    if (lang === 'cn' && !cnQuestionsAreSafe(questions)) {
+    if (lang === 'cn' && !questionSet.cnValid) {
       await ctx.reply('⚠️ Китайская версия не сформирована — используйте русскую версию или переведите через байера.', {
         ...Markup.inlineKeyboard([[Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`)], [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`)]])
       });
@@ -134,16 +129,16 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
         '',
         ...questions.map((q: string, i: number) => `${i + 1}. ${q.replace(/^\d+[.)]\s*/, '')}`),
         '',
-        `Товар: ${x.title}`,
+        `Товар: ${profile.identity.titleForReport}`,
       ].join('\n');
     }
 
     // Mark the product as waiting for supplier reply once the user opens the ready-to-send text.
     try {
-      const updatedProduct = { ...(product ?? {}), procurementStatus: 'waiting_supplier_reply' };
+      const updatedProduct = { ...(product ?? {}), procurementStatus: 'waiting_supplier_reply', productProcurementProfile: profile, procurementProfile: profile };
       await supabase.from('jobs').update({
         procurement_status: 'waiting_supplier_reply',
-        result_json: { ...data, product: updatedProduct },
+        result_json: { ...data, product: updatedProduct, productProcurementProfile: profile },
       }).eq('id', job.id).eq('user_id', userId);
     } catch {}
 

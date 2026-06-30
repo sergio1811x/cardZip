@@ -1,0 +1,674 @@
+--- cardzip_profile_base/api/step2-ai.ts	2026-06-29 14:33:00.000000000 +0000
++++ cardzip_profile_work/api/step2-ai.ts	2026-06-30 14:44:19.236170804 +0000
+@@ -5,6 +5,7 @@
+ import { canonicalizeProduct } from '../src/providers/productCanonicalizer';
+ import { createStepProgress } from '../src/core/progress';
+ import { cleanChineseTitle } from '../src/core/cnNormalize';
++import { buildProductProcurementProfile, preprocessMainImageForProductIntelligence, validateProfile } from '../src/core/procurementProfile';
+ import { triggerPipelineStep } from '../src/lib/pipelineStep';
+ import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
+ 
+@@ -107,7 +108,11 @@
+       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'ai')
+       : null;
+ 
+-    // Single LLM call: Product Canonicalizer (replaces SEO + Understanding + Intelligence)
++    // Main image preprocessing: pass only main photo metadata to Product Intelligence.
++    // Price, MOQ, weight and SKU are still taken only from provider/API fields.
++    const mainImageForProductIntelligence = preprocessMainImageForProductIntelligence(raw);
++
++    // Single product-intelligence call: Product Canonicalizer with image-aware input.
+     const productContext = await canonicalizeProduct({
+       offerId: raw.productId,
+       titleCn: raw.titleCn,
+@@ -119,12 +124,15 @@
+       price: raw.priceYuan,
+       priceRange: raw.priceRange,
+       weightKg: raw.weightKg,
+-      mainImageUrl: raw.mainImageUrl,
++      mainImageUrl: mainImageForProductIntelligence.url ?? raw.mainImageUrl,
+       sold: raw.sold,
+       stock: raw.stock,
+     }).catch(() => null);
+ 
+     const productIntelligence = toProductIntelligence(raw, productContext);
++    const productProcurementProfile = buildProductProcurementProfile({ ...raw, intelligence: productIntelligence, productContext, sourceUrl: job.input_url }, { sourceUrl: job.input_url, intelligence: productIntelligence });
++    const profileValidation = validateProfile(productProcurementProfile);
++    if (!profileValidation.ok) console.warn('[step2-ai] profile validator:', profileValidation.errors.join('; '));
+ 
+     // Backward-compatible fields from productContext
+     const wbCoreQuery = productContext?.wbSearch?.coreQuery ?? '';
+@@ -152,6 +160,9 @@
+         productContext,
+         productIntelligence,
+         intelligence: productIntelligence,
++        productProcurementProfile: profileValidation.fixedProfile,
++        procurementProfile: profileValidation.fixedProfile,
++        mainImageForProductIntelligence,
+         wbCoreQuery,
+         categoryType,
+         validatedQueries,
+--- cardzip_profile_base/api/step3-market.ts	2026-06-30 12:12:42.000000000 +0000
++++ cardzip_profile_work/api/step3-market.ts	2026-06-30 14:44:29.921534804 +0000
+@@ -6,6 +6,7 @@
+ import { triggerPipelineStep } from '../src/lib/pipelineStep';
+ import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
+ import { buildDecisionContext } from '../src/core/decisionLayer';
++import { buildProductProcurementProfile, validateProfile } from '../src/core/procurementProfile';
+ 
+ export const config = { maxDuration: 30 };
+ 
+@@ -32,6 +33,9 @@
+       titleRu: seoContent.titleRu ?? result.productIntelligence?.cleanTitles?.titleForReport ?? raw?.titleEn ?? raw?.titleCn,
+       seoContent,
+       intelligence: result.productIntelligence ?? result.intelligence,
++      productProcurementProfile: result.productProcurementProfile ?? result.procurementProfile,
++      procurementProfile: result.productProcurementProfile ?? result.procurementProfile,
++      sourceUrl: job.input_url,
+       productContext: result.productContext,
+       wbData: null,
+       wbFiltered: null,
+@@ -68,6 +72,11 @@
+         disclaimers: ['Продажную цену и рынок пользователь проверяет отдельно.'],
+       },
+     };
++    const profile = buildProductProcurementProfile(product, { sourceUrl: job.input_url, intelligence: product.intelligence });
++    const profileValidation = validateProfile(profile);
++    if (!profileValidation.ok) console.warn('[step3] profile validator:', profileValidation.errors.join('; '));
++    product.productProcurementProfile = profileValidation.fixedProfile;
++    product.procurementProfile = profileValidation.fixedProfile;
+     const decision = buildDecisionContext(product);
+ 
+     const progress = job.tg_message_id ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market') : null;
+@@ -79,6 +88,8 @@
+       result_json: {
+         ...result,
+         product,
++        productProcurementProfile: profileValidation.fixedProfile,
++        procurementProfile: profileValidation.fixedProfile,
+         decisionContext: {
+           price: decision.price,
+           sku: decision.sku,
+--- cardzip_profile_base/api/step4-send.ts	2026-06-30 12:12:42.000000000 +0000
++++ cardzip_profile_work/api/step4-send.ts	2026-06-30 14:47:12.096006299 +0000
+@@ -9,6 +9,7 @@
+ import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
+ import { runExpertWriter } from '../src/providers/expertWriter';
+ import { buildDecisionContext } from '../src/core/decisionLayer';
++import { ensureProductProcurementProfile } from '../src/core/procurementProfile';
+ import { redis } from '../src/lib/redis';
+ import type { ProductWithContent, AnalysisSnapshot } from '../src/types';
+ 
+@@ -22,8 +23,9 @@
+ }
+ 
+ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>, jobUrl: string): AnalysisSnapshot {
+-  const ctx = product.productContext ?? {};
++  const ctx: any = product.productContext ?? {};
+   const intel = product.intelligence ?? product.productIntelligence ?? {};
++  const profile = ensureProductProcurementProfile(product, { sourceUrl: jobUrl });
+   const decision = buildDecisionContext(product);
+   const purchasePriceCny = positive(decision.price.calculationPriceYuan);
+   const weightKg = decision.weight.source === 'category_default' ? null : positive(decision.weight.weightKg);
+@@ -41,7 +43,7 @@
+     productContext: { ...ctx, productIntelligence: intel },
+     supplier: {
+       name: product.supplierName ?? '',
+-      type: product.supplierType ?? 'unknown',
++      type: profile.supplier.displayType,
+       rating: product.supplierRating ?? '',
+       orders: String(product.sold ?? ''),
+       moq: {
+@@ -105,7 +107,7 @@
+     missingData: decision.readiness.missingData,
+     conflicts: ctx.conflicts ?? [],
+     riskFlags: intel.reportRules?.riskFlags ?? ctx.riskTags ?? [],
+-  } as AnalysisSnapshot;
++  } as unknown as AnalysisSnapshot;
+ }
+ 
+ export default async function handler(req: VercelRequest, res: VercelResponse) {
+@@ -143,7 +145,7 @@
+       // Update seoContent from writer only with fields that validators can still repair.
+       product.seoContent = {
+         ...product.seoContent,
+-        titleRu: writerResult.seoTitle || product.seoContent?.titleRu,
++        titleRu: product.seoContent?.titleRu,
+         description: writerResult.seoDescription || product.seoContent?.description || '',
+         bullets: writerResult.seoBullets?.length ? writerResult.seoBullets : product.seoContent?.bullets ?? [],
+         keywords: writerResult.seoKeywords?.length ? writerResult.seoKeywords : product.seoContent?.keywords ?? [],
+@@ -163,7 +165,9 @@
+     await supabase.from('jobs').update({
+       result_json: {
+         ...result,
+-        product: { ...product, seoContent: product.seoContent },
++        product: { ...product, seoContent: product.seoContent, productProcurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }), procurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }) },
++        productProcurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }),
++        procurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }),
+         analysisSnapshot: snapshot,
+         writerResult,
+         freshStatus: {
+--- cardzip_profile_base/api/step5-qa.ts	2026-06-30 12:12:56.000000000 +0000
++++ cardzip_profile_work/api/step5-qa.ts	2026-06-30 14:50:18.449713435 +0000
+@@ -6,9 +6,8 @@
+ import { getStatus, tryConsumeCredit } from '../src/services/subscriptionService';
+ import { buildMainMessage, buildSafeSummary } from '../src/core/messageBuilder';
+ import { runHardValidator, validateReport } from '../src/core/reportValidator';
+-import { validateGeneratedText, buildDecisionContext, buildSupplierQuestions, buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildSampleChecklist } from '../src/core/decisionLayer';
+-import { formatSeoText } from '../src/core/seoFormatter';
+-import { formatOrderBrief } from '../src/core/orderBrief';
++import { buildDecisionContext } from '../src/core/decisionLayer';
++import { ensureProductProcurementProfile, buildSupplierQuestionsFromProfile, translateSupplierQuestionsRuToCn, formatSupplierQuestionsText, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateMainReport, validateProfile } from '../src/core/procurementProfile';
+ import { upsertProduct } from '../src/db/queries/products';
+ import { buildCacheKey } from '../src/lib/cache';
+ import { acquireStepLock } from '../src/lib/stepLock';
+@@ -96,70 +95,59 @@
+     const product = {
+       ...(result.product as ProductWithContent),
+       intelligence: result.productIntelligence ?? result.intelligence ?? (result.product as any)?.intelligence,
++      productProcurementProfile: result.productProcurementProfile ?? result.procurementProfile ?? (result.product as any)?.productProcurementProfile,
++      procurementProfile: result.productProcurementProfile ?? result.procurementProfile ?? (result.product as any)?.procurementProfile,
++      sourceUrl: job.input_url,
+       analysisSnapshot: result.analysisSnapshot,
+     } as ProductWithContent & Record<string, any>;
++    const profile = ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
++    const profileValidation = validateProfile(profile);
++    if (!profileValidation.ok) console.warn('[step5] profile validator:', profileValidation.errors.join('; '));
++    product.productProcurementProfile = profileValidation.fixedProfile;
++    product.procurementProfile = profileValidation.fixedProfile;
+     const decisionContext = buildDecisionContext(product);
+ 
+-    const safeRiskFlags = product.riskFlags ?? {
+-      hasBrand: false, isElectrical: false, isChildren: false,
+-      isCosmetic: false, isFood: false, isMedical: false,
+-      supplierOrdersLow: false, supplierTypeUnknown: false,
+-      weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: true,
+-    };
+-
+-    // Generate and validate all user-facing files before allowing full send.
+-    let seoText = formatSeoText(product, product.seoContent ?? {}, safeRiskFlags);
+-    let briefText = formatOrderBrief(
+-      product, product.seoContent ?? {}, product.economics,
+-      safeRiskFlags, job.input_url, product.budgets, product.conclusion,
+-    );
+-    const writerResult = result.writerResult ?? null;
+-    if (writerResult?.buyerBrief && String(writerResult.buyerBrief).length > 1200 && String(writerResult.buyerBrief).length > briefText.length * 0.9) {
+-      // Use LLM-enriched buyer brief only when it is actually richer; code validator still repairs it below.
+-      briefText = String(writerResult.buyerBrief);
+-    }
+-    let cargoText = buildCargoBrief(product, job.input_url);
+-    let infographicText = buildInfographicBrief(product);
+-    let riskChecklistText = buildRiskChecklist(product);
+-    let sampleRecommendationText = buildSampleRecommendation(product);
+-    let sampleChecklistText = buildSampleChecklist(product);
+-    const supplierQuestions = buildSupplierQuestions(product, decisionContext).ru;
+-    const writerQuestions = Array.isArray(writerResult?.supplierQuestionsRu) ? writerResult.supplierQuestionsRu : [];
+-    const seenSupplierQuestions = new Set<string>();
+-    const supplierQs = [...supplierQuestions, ...writerQuestions]
+-      .map((q: string) => String(q ?? '').replace(/^\s*\d+[.)]\s*/, '').trim())
+-      .filter((q: string) => {
+-        if (!q) return false;
+-        const key = q.toLowerCase();
+-        if (seenSupplierQuestions.has(key)) return false;
+-        seenSupplierQuestions.add(key);
+-        return true;
+-      })
+-      .slice(0, 12)
+-      .map((q: string, i: number) => `${i + 1}. ${q}`)
+-      .join('\n');
++    // Generate every user-facing document from the single ProductProcurementProfile.
++    // No document builder is allowed to re-detect productKind or infer category from raw attributes.
++    const supplierQuestionSet = buildSupplierQuestionsFromProfile(product, { sourceUrl: job.input_url });
++    const translatedCn = await translateSupplierQuestionsRuToCn(supplierQuestionSet.ru).catch(() => supplierQuestionSet.cn);
++    let supplierText = formatSupplierQuestionsText(supplierQuestionSet.ru, translatedCn).text;
++    let briefText = buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url });
++    let cargoText = buildCargoBriefFromProfile(product, { sourceUrl: job.input_url });
++    let sampleChecklistText = buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url });
++    let seoText = buildSeoDraftFromProfile(product, { sourceUrl: job.input_url });
++    let readmeText = buildReadmeFromProfile(product, { sourceUrl: job.input_url });
++    let infographicText = '';
++    let riskChecklistText = '';
++    let sampleRecommendationText = sampleChecklistText;
+ 
+     progress?.step('validate');
+-    const seoValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: seoText, reportType: 'seo', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+-    const briefValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: briefText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+-    const supplierValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: supplierQs, reportType: 'supplierQuestions', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+-    const cargoValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: cargoText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+-    const infographicValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: infographicText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+-    const riskValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: riskChecklistText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+-    const sampleValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: sampleChecklistText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+-    seoText = seoValidation.fixedText || seoText;
+-    briefText = briefValidation.fixedText || briefText;
+-    let supplierText = supplierValidation.fixedText || supplierQs;
+-    cargoText = cargoValidation.fixedText || cargoText;
+-    infographicText = infographicValidation.fixedText || infographicText;
+-    riskChecklistText = riskValidation.fixedText || riskChecklistText;
+-    sampleChecklistText = sampleValidation.fixedText || sampleChecklistText;
+-
+-    const fileErrors = [...seoValidation.errors, ...briefValidation.errors, ...supplierValidation.errors, ...cargoValidation.errors, ...infographicValidation.errors, ...riskValidation.errors, ...sampleValidation.errors];
+-    if (fileErrors.length) console.warn('[step5] file validators repaired:', fileErrors.join(', '));
++    const docsValidation = validateDocuments([
++      { filename: 'supplier_questions.txt', text: supplierText },
++      { filename: 'buyer_brief.md', text: briefText },
++      { filename: 'cargo_brief.md', text: cargoText },
++      { filename: 'sample_checklist.md', text: sampleChecklistText },
++      { filename: 'seo_draft.md', text: seoText },
++      { filename: 'README.txt', text: readmeText },
++    ], profileValidation.fixedProfile);
++    if (docsValidation.errors.length) console.warn('[step5] profile document validators repaired:', docsValidation.errors.join('; '));
++    for (const doc of docsValidation.fixedDocs) {
++      if (doc.filename === 'supplier_questions.txt') supplierText = doc.text;
++      if (doc.filename === 'buyer_brief.md') briefText = doc.text;
++      if (doc.filename === 'cargo_brief.md') cargoText = doc.text;
++      if (doc.filename === 'sample_checklist.md') sampleChecklistText = doc.text;
++      if (doc.filename === 'seo_draft.md') seoText = doc.text;
++      if (doc.filename === 'README.txt') readmeText = doc.text;
++    }
+ 
+     await supabase.from('jobs').update({
+-      result_json: { ...result, product, generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, infographicText, riskChecklistText, sampleRecommendationText } },
++      result_json: {
++        ...result,
++        product,
++        productProcurementProfile: profileValidation.fixedProfile,
++        procurementProfile: profileValidation.fixedProfile,
++        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, readmeText },
++      },
+     }).eq('id', jobId);
+ 
+     const wbCategory = null;
+@@ -172,7 +160,10 @@
+       canGenerate: true,
+       isTrial: currentStatus.isTrial ?? false,
+     };
+-    const { text: mainText, keyboard } = buildMainMessage(product, job.id, statusBeforeCharge as any, wbCategory);
++    const { text: mainTextRaw, keyboard } = buildMainMessage(product, job.id, statusBeforeCharge as any, wbCategory);
++    const mainProfileValidation = validateMainReport(mainTextRaw);
++    if (mainProfileValidation.errors.length) console.warn('[step5] main profile validator repaired:', mainProfileValidation.errors.join('; '));
++    const mainText = mainProfileValidation.fixedText;
+ 
+     const softValidation = validateReport(mainText, (product as any).categoryType ?? decisionContext.categoryType ?? 'other', {
+       hasPrice: !!decisionContext.price.calculationPriceYuan,
+@@ -276,7 +267,9 @@
+       result_json: {
+         ...result,
+         product: productWithProcurementState,
+-        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, infographicText, riskChecklistText, sampleRecommendationText },
++        productProcurementProfile: profileValidation.fixedProfile,
++        procurementProfile: profileValidation.fixedProfile,
++        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, readmeText },
+         finalUserCard: finalText,
+         qaResult,
+       },
+--- cardzip_profile_base/src/core/messageBuilder.ts	2026-06-30 12:16:29.000000000 +0000
++++ cardzip_profile_work/src/core/messageBuilder.ts	2026-06-30 14:42:34.567310376 +0000
+@@ -1,4 +1,5 @@
+ import { Markup } from 'telegraf';
++import { buildMainReportFromProfile } from './procurementProfile';
+ import {
+   buildMainReport,
+   build1688Detail as render1688Detail,
+@@ -28,13 +29,13 @@
+ 
+ 
+ export function buildMainMessage(product: any, jobId: string, status: any, _category?: any): { text: string; keyboard: any } {
+-  const text = buildMainReport(product, { creditsRemaining: status?.creditsRemaining });
++  const text = buildMainReportFromProfile(product, { creditsRemaining: status?.creditsRemaining });
+   const keyboard = topLevelKeyboard(jobId);
+   return { text, keyboard };
+ }
+ 
+ export function buildMessage1(product: any): string {
+-  return buildMainReport(product, undefined, undefined);
++  return buildMainReportFromProfile(product, undefined);
+ }
+ 
+ export function buildMessage2(product: any): string {
+--- cardzip_profile_base/src/bot/handlers/detailButtons.ts	2026-06-30 14:06:57.000000000 +0000
++++ cardzip_profile_work/src/bot/handlers/detailButtons.ts	2026-06-30 14:43:12.512752107 +0000
+@@ -3,9 +3,8 @@
+ import AdmZip from 'adm-zip';
+ import { supabase } from '../../db/supabase';
+ import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail, buildMainMessage } from '../../core/messageBuilder';
+-import { buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildSampleChecklist, buildSupplierQuestions, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
+-import { formatSeoText } from '../../core/seoFormatter';
+-import { formatOrderBrief } from '../../core/orderBrief';
++import { buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
++import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, ensureProductProcurementProfile } from '../../core/procurementProfile';
+ import { zipBuilder } from '../../core/zipBuilder';
+ import type { ProductWithContent } from '../../types';
+ 
+@@ -112,40 +111,12 @@
+ 
+ function buildSupplierQuestionsText(product?: ProductWithContent): string {
+   if (!product) return '# Вопросы поставщику\n\nРусская версия не найдена.';
+-  const questions = buildSupplierQuestions(product);
+-  const ru = questions.ru.slice(0, 8).map((q, i) => `${i + 1}. ${q}`);
+-  const cnRaw = questions.cn.slice(0, 8);
+-  const cn = cnRaw.map((q, i) => `${i + 1}. ${q}`);
+-  const lines = ['# Вопросы поставщику', '', '## Русская версия', '', 'Здравствуйте. Хотим уточнить товар перед заказом:', '', ...ru];
+-  if (cnBlockIsSafe(cnRaw)) {
+-    lines.push('', '## Китайская версия', '', ...cn);
+-  } else {
+-    lines.push('', '## Китайская версия', '', 'Китайская версия не сформирована — используйте русскую версию или переведите через байера.');
+-  }
+-  return lines.join('\n');
++  return buildSupplierQuestionsFromProfile(product).text;
+ }
+ 
+-function buildReadmeText(hasPhotos: boolean): string {
+-  return [
+-    'CardZip — закупочный пакет',
+-    '',
+-    'Что внутри:',
+-    '1. supplier_questions.txt — вопросы поставщику на русском и китайском.',
+-    '2. buyer_brief.md — ТЗ байеру: что закупаем, цена, SKU и что проверить.',
+-    '3. cargo_brief.md — ТЗ карго: вес, габариты, упаковка и ограничения.',
+-    '4. sample_checklist.md — что проверить до образца, на образце и перед партией.',
+-    '5. seo_draft.md — черновик карточки WB/Ozon и идеи инфографики.',
+-    `6. photos.zip — ${hasPhotos ? 'фото товара с 1688.' : 'фото не удалось скачать; используйте фото из карточки 1688 вручную.'}`,
+-    '',
+-    'Рекомендуемый порядок:',
+-    '1. Отправьте supplier_questions.txt поставщику.',
+-    '2. Получите вес, габариты, фото и подтверждение SKU.',
+-    '3. Передайте buyer_brief.md байеру.',
+-    '4. Передайте cargo_brief.md карго.',
+-    '5. Закажите 1–2 образца.',
+-    '6. Проверьте образец по sample_checklist.md.',
+-    '7. Используйте seo_draft.md как черновик карточки.',
+-  ].join('\n');
++function buildReadmeText(product: any, hasPhotos: boolean): string {
++  const base = buildReadmeFromProfile(product);
++  return hasPhotos ? base : `${base}\n\nФото не удалось скачать. Используйте фото из карточки 1688 вручную.\n`;
+ }
+ 
+ function buildMaterials(job: any): { product?: ProductWithContent; prefix: string; docs: Array<{ filename: string; text: string; title: string; description: string }>; imageUrls: string[] } {
+@@ -154,25 +125,31 @@
+   const generatedFiles = result?.generatedFiles ?? {};
+   const offerId = String(product?.productId ?? result?.offerId ?? job.id ?? Date.now()).replace(/[^a-zA-Z0-9_-]/g, '').slice(-12) || Date.now().toString().slice(-8);
+   const prefix = `cardzip_${offerId}_${safePrefix(product, offerId)}`.replace(/_+/g, '_').replace(/_$/g, '');
+-  const safeFlags = (product?.riskFlags ?? {}) as any;
+   const imageUrls = (result?.imageUrls ?? product?.imageUrls ?? product?.images ?? []) as string[];
+ 
++  if (product) ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
+   const supplierText = product ? buildSupplierQuestionsText(product) : (generatedFiles?.supplierQuestions ?? generatedFiles?.supplierText ?? '');
+-  const buyerText = product ? formatOrderBrief(product, product.seoContent ?? {}, product.economics, safeFlags, job.input_url, product.budgets, product.conclusion) : (generatedFiles?.briefText ?? '');
+-  const cargoText = product ? buildCargoBrief(product, job.input_url) : (generatedFiles?.cargoText ?? '');
+-  const sampleText = product ? buildSampleChecklist(product) : (generatedFiles?.sampleChecklistText ?? generatedFiles?.sampleRecommendationText ?? generatedFiles?.riskChecklistText ?? '');
+-  const seoText = product ? formatSeoText(product, product.seoContent ?? {}, safeFlags) : (generatedFiles?.seoText ?? '');
+-  const readmeText = buildReadmeText(imageUrls.length > 0);
+-
+-  const docs = [
+-    { filename: 'supplier_questions.txt', text: cleanDoc(product, String(supplierText), 'supplierQuestions'), title: '💬 Вопросы поставщику — supplier_questions.txt', description: 'Текст на русском и китайском: цена, вес, SKU, упаковка, фото.' },
+-    { filename: 'buyer_brief.md', text: cleanDoc(product, String(buyerText), 'buyerBrief'), title: '📄 ТЗ байеру — buyer_brief.md', description: 'Что закупаем, какой SKU, какие риски и что проверить.' },
+-    { filename: 'cargo_brief.md', text: cleanDoc(product, String(cargoText), 'buyerBrief'), title: '🚚 ТЗ карго — cargo_brief.md', description: 'Вес, габариты, упаковка и ограничения для расчёта доставки.' },
+-    { filename: 'sample_checklist.md', text: cleanDoc(product, String(sampleText), 'buyerBrief'), title: '🧪 Чек-лист образца — sample_checklist.md', description: 'Что проверить перед партией: механизм, спицы, купол, упаковку.' },
+-    { filename: 'seo_draft.md', text: cleanDoc(product, String(seoText), 'seo'), title: '📝 SEO-черновик — seo_draft.md', description: 'Название, описание, характеристики и идеи инфографики.' },
++  const buyerText = product ? buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.briefText ?? '');
++  const cargoText = product ? buildCargoBriefFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.cargoText ?? '');
++  const sampleText = product ? buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.sampleChecklistText ?? generatedFiles?.sampleRecommendationText ?? generatedFiles?.riskChecklistText ?? '');
++  const seoText = product ? buildSeoDraftFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.seoText ?? '');
++  const readmeText = product ? buildReadmeText(product, imageUrls.length > 0) : 'CardZip — закупочный пакет';
++
++  let docs = [
++    { filename: 'supplier_questions.txt', text: String(supplierText), title: '💬 Вопросы поставщику — supplier_questions.txt', description: 'Текст на русском и китайском: цена, вес, SKU, упаковка, фото.' },
++    { filename: 'buyer_brief.md', text: String(buyerText), title: '📄 ТЗ байеру — buyer_brief.md', description: 'Что закупаем, какой SKU, какие риски и что проверить.' },
++    { filename: 'cargo_brief.md', text: String(cargoText), title: '🚚 ТЗ карго — cargo_brief.md', description: 'Вес, габариты, упаковка и ограничения для расчёта доставки.' },
++    { filename: 'sample_checklist.md', text: String(sampleText), title: '🧪 Чек-лист образца — sample_checklist.md', description: 'Что проверить перед партией: механизм, спицы, купол, упаковку.' },
++    { filename: 'seo_draft.md', text: String(seoText), title: '📝 SEO-черновик — seo_draft.md', description: 'Название, описание, характеристики и идеи инфографики.' },
+     { filename: 'README.txt', text: readmeText, title: 'ℹ️ README.txt', description: 'Что внутри пакета и порядок работы.' },
+   ].filter(d => d.text && d.text.trim().length > 0);
+ 
++  if (product) {
++    const checked = validateDocuments(docs, ensureProductProcurementProfile(product, { sourceUrl: job.input_url }));
++    if (checked.errors.length) console.warn('[materials-validator]', checked.errors.join('; '));
++    docs = checked.fixedDocs.map((fixed) => ({ ...docs.find((d) => d.filename === fixed.filename)!, text: fixed.text }));
++  }
++
+   return { product, prefix, docs, imageUrls };
+ }
+ 
+--- cardzip_profile_base/src/bot/handlers/supplierQuestions.ts	2026-06-30 14:07:17.000000000 +0000
++++ cardzip_profile_work/src/bot/handlers/supplierQuestions.ts	2026-06-30 14:44:09.174733028 +0000
+@@ -1,7 +1,7 @@
+ import { Markup } from 'telegraf';
+ import type { Context } from 'telegraf';
+ import { supabase } from '../../db/supabase';
+-import { buildSupplierQuestions, buildDecisionContext } from '../../core/decisionLayer';
++import { buildSupplierQuestionsFromProfile, ensureProductProcurementProfile } from '../../core/procurementProfile';
+ 
+ async function findJob(userId: string, jobId?: string) {
+   if (jobId) {
+@@ -54,18 +54,24 @@
+     return;
+   }
+ 
++  const data = job.result_json as any;
++  const product = data.product ?? data.rawProduct ?? {};
++  ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
++  const questionSet = buildSupplierQuestionsFromProfile(product);
++  const firstRow = questionSet.cnValid
++    ? [Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`), Markup.button.callback('📋 Скопировать CN', `sq_cn_${job.id}`)]
++    : [Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`)];
++
+   await ctx.reply(
+-    '💬 <b>Вопросы поставщику</b>\n\n' +
++    `${questionSet.cnValid ? '💬 <b>Вопросы поставщику RU/CN</b>' : '💬 <b>Вопросы поставщику RU</b>'}\n\n` +
+     'Скопируйте текст и отправьте поставщику в чат 1688.\n\n' +
++    (questionSet.cnValid ? 'Китайская версия прошла проверку.\n\n' : 'Китайская версия не сформирована безопасно — используйте русский текст или передайте байеру.\n\n') +
+     'После ответа поставщика можно обновить закупочный пакет: я попробую извлечь вес, габариты, цену, MOQ и обновить ТЗ.\n\n' +
+-    '<b>Что делать сейчас:</b> откройте русский или китайский текст и отправьте его поставщику.',
++    '<b>Что делать сейчас:</b> откройте текст и отправьте его поставщику.',
+     {
+       parse_mode: 'HTML',
+       ...Markup.inlineKeyboard([
+-        [
+-          Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`),
+-          Markup.button.callback('📋 Скопировать CN', `sq_cn_${job.id}`),
+-        ],
++        firstRow,
+         [Markup.button.callback('📥 Обновить по ответу', `supplier_confirm_${job.id}`)],
+         [Markup.button.callback('⬅️ Назад', `back_main_${job.id}`), Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`)],
+         [Markup.button.callback('🔄 Новый товар', 'new_search')],
+@@ -74,17 +80,6 @@
+   );
+ }
+ 
+-
+-
+-function cnQuestionsAreSafe(lines: string[]): boolean {
+-  const text = lines.join('\n');
+-  if (!text.trim()) return false;
+-  if (/[а-яё]/i.test(text)) return false;
+-  if (/file:\/\//i.test(text)) return false;
+-  if (/\d+\.\s*\d+\./.test(text)) return false;
+-  return true;
+-}
+-
+ export async function handleSupplierQuestionsLang(ctx: Context) {
+   const userId = (ctx as any).dbUserId as string | undefined;
+   if (!userId) {
+@@ -105,12 +100,12 @@
+     }
+ 
+     const data = job.result_json as any;
+-    const product = data.product ?? data.rawProduct;
+-    const x = buildDecisionContext(product ?? {});
+-    const questionSet = buildSupplierQuestions(product ?? {});
+-    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 8);
++    const product = data.product ?? data.rawProduct ?? {};
++    const profile = ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
++    const questionSet = buildSupplierQuestionsFromProfile(product);
++    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 10);
+ 
+-    if (lang === 'cn' && !cnQuestionsAreSafe(questions)) {
++    if (lang === 'cn' && !questionSet.cnValid) {
+       await ctx.reply('⚠️ Китайская версия не сформирована — используйте русскую версию или переведите через байера.', {
+         ...Markup.inlineKeyboard([[Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`)], [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`)]])
+       });
+@@ -134,16 +129,16 @@
+         '',
+         ...questions.map((q: string, i: number) => `${i + 1}. ${q.replace(/^\d+[.)]\s*/, '')}`),
+         '',
+-        `Товар: ${x.title}`,
++        `Товар: ${profile.identity.titleForReport}`,
+       ].join('\n');
+     }
+ 
+     // Mark the product as waiting for supplier reply once the user opens the ready-to-send text.
+     try {
+-      const updatedProduct = { ...(product ?? {}), procurementStatus: 'waiting_supplier_reply' };
++      const updatedProduct = { ...(product ?? {}), procurementStatus: 'waiting_supplier_reply', productProcurementProfile: profile, procurementProfile: profile };
+       await supabase.from('jobs').update({
+         procurement_status: 'waiting_supplier_reply',
+-        result_json: { ...data, product: updatedProduct },
++        result_json: { ...data, product: updatedProduct, productProcurementProfile: profile },
+       }).eq('id', job.id).eq('user_id', userId);
+     } catch {}
+ 
+--- cardzip_profile_base/src/bot/handlers/supplierConfirm.ts	2026-06-30 14:07:17.000000000 +0000
++++ cardzip_profile_work/src/bot/handlers/supplierConfirm.ts	2026-06-30 14:48:54.125251189 +0000
+@@ -3,6 +3,7 @@
+ import { supabase } from '../../db/supabase';
+ import { redis } from '../../lib/redis';
+ import { buildDecisionContext } from '../../core/decisionLayer';
++import { buildProductProcurementProfile, validateProfile } from '../../core/procurementProfile';
+ import { buildMainMessage } from '../../core/messageBuilder';
+ import type { ProductWithContent } from '../../types';
+ 
+@@ -196,6 +197,11 @@
+         productionDays: extracted.productionDays,
+       },
+     } as any;
++    const updatedProfile = buildProductProcurementProfile(updatedProduct, { sourceUrl: result.input_url ?? (job as any).input_url, intelligence: (updatedProduct as any).intelligence });
++    const profileValidation = validateProfile(updatedProfile);
++    if (!profileValidation.ok) console.warn('[supplier-confirm-profile]', profileValidation.errors.join('; '));
++    (updatedProduct as any).productProcurementProfile = profileValidation.fixedProfile;
++    (updatedProduct as any).procurementProfile = profileValidation.fixedProfile;
+     const decisionContext = buildDecisionContext(updatedProduct);
+     (updatedProduct as any).procurementStatus = 'supplier_reply_added';
+ 
+@@ -213,7 +219,7 @@
+         sample_checked: false,
+         test_batch_ready: false,
+       },
+-      result_json: { ...result, rawProduct: raw, product: updatedProduct, decisionContext },
++      result_json: { ...result, rawProduct: raw, product: updatedProduct, decisionContext, productProcurementProfile: profileValidation.fixedProfile, procurementProfile: profileValidation.fixedProfile },
+     }).eq('id', pending.jobId);
+ 
+     // Формируем ответ
+--- cardzip_profile_base/src/types/index.ts	2026-06-29 08:29:53.000000000 +0000
++++ cardzip_profile_work/src/types/index.ts	2026-06-30 14:42:27.808988741 +0000
+@@ -256,6 +256,65 @@
+   safeUserSummary?: string;
+ }
+ 
++
++export interface SelectedSkuDecision {
++  selectedSkuText: string | null;
++  selectedPriceYuan: number | null;
++  reliable: boolean;
++  reason: string;
++}
++
++export interface ProductProcurementProfile {
++  identity: {
++    productKind: string;
++    categoryType: string;
++    subCategoryType: string;
++    titleForReport: string;
++    titleForSeo: string;
++    shortTitle: string;
++    coreObject: string;
++    formFactor: string;
++    audience: string;
++    gender: string;
++    season: string;
++    useCases: string[];
++    materials: string[];
++    visibleFeatures: string[];
++    claimedFeatures: string[];
++    unconfirmedFeatures: string[];
++  };
++  sku: {
++    skuSummary: string;
++    selectedSkuText: string | null;
++    selectedSkuReliable: boolean;
++    selectedSkuDecision: SelectedSkuDecision;
++    dimensions: string[];
++    colors: string[];
++    sizes: string[];
++    models: string[];
++    packageTypes: string[];
++    packCounts: string[];
++    skuRisk: string;
++    skuWarnings: string[];
++    normalizedExamples: string[];
++    ambiguousParams: string[];
++  };
++  pricing: {
++    displayPriceText: string;
++    selectedPriceYuan: number | null;
++    minPriceYuan: number | null;
++    maxPriceYuan: number | null;
++    priceSource: string;
++    priceReliable: boolean;
++    priceWarnings: string[];
++  };
++  supplier: { displayType: string; rating: string; orders: string; name: string; };
++  procurement: { status: string; verdict: string; nextAction: string; mustAskSupplier: string[]; mustCheckBeforeSample: string[]; mustCheckOnSample: string[]; redFlags: string[]; };
++  cargo: { mustAsk: string[]; likelySensitiveCargoIssues: string[]; };
++  content: { seoAllowedClaims: string[]; seoForbiddenClaims: string[]; titleWarnings: string[]; infographicIdeas: string[]; };
++  dataQuality: { missingCriticalFields: string[]; contradictions: string[]; confidence: string; reason: string; };
++}
++
+ // ─── Product Intelligence ───────────────────────────────────────────────────
+ 
+ export interface ProductIntelligence {
+@@ -366,6 +425,8 @@
+   };
+   evidence?: FieldEvidence[];
+   intelligence?: ProductIntelligence;
++  productProcurementProfile?: ProductProcurementProfile;
++  procurementProfile?: ProductProcurementProfile;
+   productContext?: ProductContext;
+   cachedAt?: Date;
+ }
+@@ -460,6 +521,8 @@
+   platform?: Platform;
+   categoryType?: string;
+   intelligence?: ProductIntelligence;
++  productProcurementProfile?: ProductProcurementProfile;
++  procurementProfile?: ProductProcurementProfile;
+   productContext?: ProductContext;
+ }
+ 
+--- cardzip_profile_base/src/providers/productCanonicalizer.ts	2026-06-29 21:53:38.000000000 +0000
++++ cardzip_profile_work/src/providers/productCanonicalizer.ts	2026-06-30 14:47:31.913390277 +0000
+@@ -504,12 +504,12 @@
+ 
+ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
+ 
+-Роль: эксперт по товарам 1688. Цель — единый ProductContext для закупочного пакета: отчёт, SKU, вопросы, SEO, байер/карго, риски. WB-поиск — только optional keywords, не ядро.
++Роль: эксперт по товарам 1688. Цель — единый ProductContext/ProductProcurementProfile для закупочного пакета: отчёт, SKU, вопросы, SEO, байер/карго, риски. WB-поиск — только optional keywords, не ядро. Остальные генераторы будут строиться только от этого профиля и не должны заново угадывать товар.
+ 
+ Верни СТРОГО JSON без markdown:
+ {
+   "identity": {
+-    "productType": "конкретный тип товара на русском",
++    "productType": "productKind: footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product",
+     "coreObject": "базовый объект без маркетинга",
+     "categoryType": "shoes|clothes|electronics|home|beauty|accessory|kitchen|fishing|tools|other",
+     "useCases": ["сценарий"],
+@@ -565,8 +565,8 @@
+ - Сохраняй максимум полезных атрибутов в facts, но помечай сомнительное: “заявлено поставщиком / подтвердить”.
+ - Если атрибут замаплен неверно (“цвет: противоскользящий”), занеси в conflicts и не выводи как факт.
+ - SKU раскрывай как цвет × размер × модель/комплектация; распознавай pack-count, молнию, утяжку, манжету, размерные примечания.
+-- Фото используй только для типа, формы и явной комплектации. Не делай по фото claims о качестве, материале, сертификации.
+-- SupplierQuestions: 7-10 вопросов по выбранному SKU, весу, упаковке, комплектации, фото и доказательствам claims.
++- Главное фото используй только для типа товара, формы и видимых деталей. Не извлекай с фото цену, вес, MOQ, остатки или SKU. Цена, MOQ и SKU берутся только из provider/API данных. Не делай по фото claims о качестве, материале, сертификации.
++- SupplierQuestions: 7-10 вопросов по выбранному SKU, весу, упаковке, комплектации, фото и доказательствам claims. Вопросы должны быть источником для profile.procurement.mustAskSupplier; не дублируй вопросы.
+ - “медицинские сабо/одежда для медработников” можно как тип товара; лечебный эффект — нельзя как факт.
+ - Для обуви не спрашивай мощность/220V/аккумулятор/рукав. Для техники не спрашивай стельку/размерную сетку/рукав. Для одежды не спрашивай питание/вилку.
+ - dataQuality.score 1-10: снижай за отсутствие веса, SKU selection, цены, фото, упаковки.

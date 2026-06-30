@@ -504,12 +504,12 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
 
 const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
 
-Роль: эксперт по товарам 1688. Цель — единый ProductContext для закупочного пакета: отчёт, SKU, вопросы, SEO, байер/карго, риски. WB-поиск — только optional keywords, не ядро.
+Роль: эксперт по товарам 1688. Цель — единый ProductContext/ProductProcurementProfile для закупочного пакета: отчёт, SKU, вопросы, SEO, байер/карго, риски. WB-поиск — только optional keywords, не ядро. Остальные генераторы будут строиться только от этого профиля и не должны заново угадывать товар.
 
 Верни СТРОГО JSON без markdown:
 {
   "identity": {
-    "productType": "конкретный тип товара на русском",
+    "productType": "productKind: footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product",
     "coreObject": "базовый объект без маркетинга",
     "categoryType": "shoes|clothes|electronics|home|beauty|accessory|kitchen|fishing|tools|other",
     "useCases": ["сценарий"],
@@ -565,8 +565,8 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
 - Сохраняй максимум полезных атрибутов в facts, но помечай сомнительное: “заявлено поставщиком / подтвердить”.
 - Если атрибут замаплен неверно (“цвет: противоскользящий”), занеси в conflicts и не выводи как факт.
 - SKU раскрывай как цвет × размер × модель/комплектация; распознавай pack-count, молнию, утяжку, манжету, размерные примечания.
-- Фото используй только для типа, формы и явной комплектации. Не делай по фото claims о качестве, материале, сертификации.
-- SupplierQuestions: 7-10 вопросов по выбранному SKU, весу, упаковке, комплектации, фото и доказательствам claims.
+- Главное фото используй только для типа товара, формы и видимых деталей. Не извлекай с фото цену, вес, MOQ, остатки или SKU. Цена, MOQ и SKU берутся только из provider/API данных. Не делай по фото claims о качестве, материале, сертификации.
+- SupplierQuestions: 7-10 вопросов по выбранному SKU, весу, упаковке, комплектации, фото и доказательствам claims. Вопросы должны быть источником для profile.procurement.mustAskSupplier; не дублируй вопросы.
 - “медицинские сабо/одежда для медработников” можно как тип товара; лечебный эффект — нельзя как факт.
 - Для обуви не спрашивай мощность/220V/аккумулятор/рукав. Для техники не спрашивай стельку/размерную сетку/рукав. Для одежды не спрашивай питание/вилку.
 - dataQuality.score 1-10: снижай за отсутствие веса, SKU selection, цены, фото, упаковки.

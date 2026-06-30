@@ -5,6 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { canonicalizeProduct } from '../src/providers/productCanonicalizer';
 import { createStepProgress } from '../src/core/progress';
 import { cleanChineseTitle } from '../src/core/cnNormalize';
+import { buildProductProcurementProfile, preprocessMainImageForProductIntelligence, validateProfile } from '../src/core/procurementProfile';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 
@@ -107,7 +108,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'ai')
       : null;
 
-    // Single LLM call: Product Canonicalizer (replaces SEO + Understanding + Intelligence)
+    // Main image preprocessing: pass only main photo metadata to Product Intelligence.
+    // Price, MOQ, weight and SKU are still taken only from provider/API fields.
+    const mainImageForProductIntelligence = preprocessMainImageForProductIntelligence(raw);
+
+    // Single product-intelligence call: Product Canonicalizer with image-aware input.
     const productContext = await canonicalizeProduct({
       offerId: raw.productId,
       titleCn: raw.titleCn,
@@ -119,12 +124,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       price: raw.priceYuan,
       priceRange: raw.priceRange,
       weightKg: raw.weightKg,
-      mainImageUrl: raw.mainImageUrl,
+      mainImageUrl: mainImageForProductIntelligence.url ?? raw.mainImageUrl,
       sold: raw.sold,
       stock: raw.stock,
     }).catch(() => null);
 
     const productIntelligence = toProductIntelligence(raw, productContext);
+    const productProcurementProfile = buildProductProcurementProfile({ ...raw, intelligence: productIntelligence, productContext, sourceUrl: job.input_url }, { sourceUrl: job.input_url, intelligence: productIntelligence });
+    const profileValidation = validateProfile(productProcurementProfile);
+    if (!profileValidation.ok) console.warn('[step2-ai] profile validator:', profileValidation.errors.join('; '));
 
     // Backward-compatible fields from productContext
     const wbCoreQuery = productContext?.wbSearch?.coreQuery ?? '';
@@ -152,6 +160,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         productContext,
         productIntelligence,
         intelligence: productIntelligence,
+        productProcurementProfile: profileValidation.fixedProfile,
+        procurementProfile: profileValidation.fixedProfile,
+        mainImageForProductIntelligence,
         wbCoreQuery,
         categoryType,
         validatedQueries,

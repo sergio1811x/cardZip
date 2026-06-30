@@ -256,6 +256,65 @@ export interface QaResult {
   safeUserSummary?: string;
 }
 
+
+export interface SelectedSkuDecision {
+  selectedSkuText: string | null;
+  selectedPriceYuan: number | null;
+  reliable: boolean;
+  reason: string;
+}
+
+export interface ProductProcurementProfile {
+  identity: {
+    productKind: string;
+    categoryType: string;
+    subCategoryType: string;
+    titleForReport: string;
+    titleForSeo: string;
+    shortTitle: string;
+    coreObject: string;
+    formFactor: string;
+    audience: string;
+    gender: string;
+    season: string;
+    useCases: string[];
+    materials: string[];
+    visibleFeatures: string[];
+    claimedFeatures: string[];
+    unconfirmedFeatures: string[];
+  };
+  sku: {
+    skuSummary: string;
+    selectedSkuText: string | null;
+    selectedSkuReliable: boolean;
+    selectedSkuDecision: SelectedSkuDecision;
+    dimensions: string[];
+    colors: string[];
+    sizes: string[];
+    models: string[];
+    packageTypes: string[];
+    packCounts: string[];
+    skuRisk: string;
+    skuWarnings: string[];
+    normalizedExamples: string[];
+    ambiguousParams: string[];
+  };
+  pricing: {
+    displayPriceText: string;
+    selectedPriceYuan: number | null;
+    minPriceYuan: number | null;
+    maxPriceYuan: number | null;
+    priceSource: string;
+    priceReliable: boolean;
+    priceWarnings: string[];
+  };
+  supplier: { displayType: string; rating: string; orders: string; name: string; };
+  procurement: { status: string; verdict: string; nextAction: string; mustAskSupplier: string[]; mustCheckBeforeSample: string[]; mustCheckOnSample: string[]; redFlags: string[]; };
+  cargo: { mustAsk: string[]; likelySensitiveCargoIssues: string[]; };
+  content: { seoAllowedClaims: string[]; seoForbiddenClaims: string[]; titleWarnings: string[]; infographicIdeas: string[]; };
+  dataQuality: { missingCriticalFields: string[]; contradictions: string[]; confidence: string; reason: string; };
+}
+
 // ─── Product Intelligence ───────────────────────────────────────────────────
 
 export interface ProductIntelligence {
@@ -366,6 +425,8 @@ export interface ProductWithContent extends RawProduct1688 {
   };
   evidence?: FieldEvidence[];
   intelligence?: ProductIntelligence;
+  productProcurementProfile?: ProductProcurementProfile;
+  procurementProfile?: ProductProcurementProfile;
   productContext?: ProductContext;
   cachedAt?: Date;
 }
@@ -460,6 +521,8 @@ export interface AiContentRequest {
   platform?: Platform;
   categoryType?: string;
   intelligence?: ProductIntelligence;
+  productProcurementProfile?: ProductProcurementProfile;
+  procurementProfile?: ProductProcurementProfile;
   productContext?: ProductContext;
 }
 

@@ -6,9 +6,8 @@ import { markSent } from '../src/db/queries/jobs';
 import { getStatus, tryConsumeCredit } from '../src/services/subscriptionService';
 import { buildMainMessage, buildSafeSummary } from '../src/core/messageBuilder';
 import { runHardValidator, validateReport } from '../src/core/reportValidator';
-import { validateGeneratedText, buildDecisionContext, buildSupplierQuestions, buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildSampleChecklist } from '../src/core/decisionLayer';
-import { formatSeoText } from '../src/core/seoFormatter';
-import { formatOrderBrief } from '../src/core/orderBrief';
+import { buildDecisionContext } from '../src/core/decisionLayer';
+import { ensureProductProcurementProfile, buildSupplierQuestionsFromProfile, translateSupplierQuestionsRuToCn, formatSupplierQuestionsText, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateMainReport, validateProfile } from '../src/core/procurementProfile';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
 import { acquireStepLock } from '../src/lib/stepLock';
@@ -96,70 +95,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const product = {
       ...(result.product as ProductWithContent),
       intelligence: result.productIntelligence ?? result.intelligence ?? (result.product as any)?.intelligence,
+      productProcurementProfile: result.productProcurementProfile ?? result.procurementProfile ?? (result.product as any)?.productProcurementProfile,
+      procurementProfile: result.productProcurementProfile ?? result.procurementProfile ?? (result.product as any)?.procurementProfile,
+      sourceUrl: job.input_url,
       analysisSnapshot: result.analysisSnapshot,
     } as ProductWithContent & Record<string, any>;
+    const profile = ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
+    const profileValidation = validateProfile(profile);
+    if (!profileValidation.ok) console.warn('[step5] profile validator:', profileValidation.errors.join('; '));
+    product.productProcurementProfile = profileValidation.fixedProfile;
+    product.procurementProfile = profileValidation.fixedProfile;
     const decisionContext = buildDecisionContext(product);
 
-    const safeRiskFlags = product.riskFlags ?? {
-      hasBrand: false, isElectrical: false, isChildren: false,
-      isCosmetic: false, isFood: false, isMedical: false,
-      supplierOrdersLow: false, supplierTypeUnknown: false,
-      weightMissing: false, sizeGridRelevant: false, marketDataUnreliable: true,
-    };
-
-    // Generate and validate all user-facing files before allowing full send.
-    let seoText = formatSeoText(product, product.seoContent ?? {}, safeRiskFlags);
-    let briefText = formatOrderBrief(
-      product, product.seoContent ?? {}, product.economics,
-      safeRiskFlags, job.input_url, product.budgets, product.conclusion,
-    );
-    const writerResult = result.writerResult ?? null;
-    if (writerResult?.buyerBrief && String(writerResult.buyerBrief).length > 1200 && String(writerResult.buyerBrief).length > briefText.length * 0.9) {
-      // Use LLM-enriched buyer brief only when it is actually richer; code validator still repairs it below.
-      briefText = String(writerResult.buyerBrief);
-    }
-    let cargoText = buildCargoBrief(product, job.input_url);
-    let infographicText = buildInfographicBrief(product);
-    let riskChecklistText = buildRiskChecklist(product);
-    let sampleRecommendationText = buildSampleRecommendation(product);
-    let sampleChecklistText = buildSampleChecklist(product);
-    const supplierQuestions = buildSupplierQuestions(product, decisionContext).ru;
-    const writerQuestions = Array.isArray(writerResult?.supplierQuestionsRu) ? writerResult.supplierQuestionsRu : [];
-    const seenSupplierQuestions = new Set<string>();
-    const supplierQs = [...supplierQuestions, ...writerQuestions]
-      .map((q: string) => String(q ?? '').replace(/^\s*\d+[.)]\s*/, '').trim())
-      .filter((q: string) => {
-        if (!q) return false;
-        const key = q.toLowerCase();
-        if (seenSupplierQuestions.has(key)) return false;
-        seenSupplierQuestions.add(key);
-        return true;
-      })
-      .slice(0, 12)
-      .map((q: string, i: number) => `${i + 1}. ${q}`)
-      .join('\n');
+    // Generate every user-facing document from the single ProductProcurementProfile.
+    // No document builder is allowed to re-detect productKind or infer category from raw attributes.
+    const supplierQuestionSet = buildSupplierQuestionsFromProfile(product, { sourceUrl: job.input_url });
+    const translatedCn = await translateSupplierQuestionsRuToCn(supplierQuestionSet.ru).catch(() => supplierQuestionSet.cn);
+    let supplierText = formatSupplierQuestionsText(supplierQuestionSet.ru, translatedCn).text;
+    let briefText = buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url });
+    let cargoText = buildCargoBriefFromProfile(product, { sourceUrl: job.input_url });
+    let sampleChecklistText = buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url });
+    let seoText = buildSeoDraftFromProfile(product, { sourceUrl: job.input_url });
+    let readmeText = buildReadmeFromProfile(product, { sourceUrl: job.input_url });
+    let infographicText = '';
+    let riskChecklistText = '';
+    let sampleRecommendationText = sampleChecklistText;
 
     progress?.step('validate');
-    const seoValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: seoText, reportType: 'seo', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
-    const briefValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: briefText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
-    const supplierValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: supplierQs, reportType: 'supplierQuestions', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
-    const cargoValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: cargoText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
-    const infographicValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: infographicText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
-    const riskValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: riskChecklistText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
-    const sampleValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: sampleChecklistText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
-    seoText = seoValidation.fixedText || seoText;
-    briefText = briefValidation.fixedText || briefText;
-    let supplierText = supplierValidation.fixedText || supplierQs;
-    cargoText = cargoValidation.fixedText || cargoText;
-    infographicText = infographicValidation.fixedText || infographicText;
-    riskChecklistText = riskValidation.fixedText || riskChecklistText;
-    sampleChecklistText = sampleValidation.fixedText || sampleChecklistText;
-
-    const fileErrors = [...seoValidation.errors, ...briefValidation.errors, ...supplierValidation.errors, ...cargoValidation.errors, ...infographicValidation.errors, ...riskValidation.errors, ...sampleValidation.errors];
-    if (fileErrors.length) console.warn('[step5] file validators repaired:', fileErrors.join(', '));
+    const docsValidation = validateDocuments([
+      { filename: 'supplier_questions.txt', text: supplierText },
+      { filename: 'buyer_brief.md', text: briefText },
+      { filename: 'cargo_brief.md', text: cargoText },
+      { filename: 'sample_checklist.md', text: sampleChecklistText },
+      { filename: 'seo_draft.md', text: seoText },
+      { filename: 'README.txt', text: readmeText },
+    ], profileValidation.fixedProfile);
+    if (docsValidation.errors.length) console.warn('[step5] profile document validators repaired:', docsValidation.errors.join('; '));
+    for (const doc of docsValidation.fixedDocs) {
+      if (doc.filename === 'supplier_questions.txt') supplierText = doc.text;
+      if (doc.filename === 'buyer_brief.md') briefText = doc.text;
+      if (doc.filename === 'cargo_brief.md') cargoText = doc.text;
+      if (doc.filename === 'sample_checklist.md') sampleChecklistText = doc.text;
+      if (doc.filename === 'seo_draft.md') seoText = doc.text;
+      if (doc.filename === 'README.txt') readmeText = doc.text;
+    }
 
     await supabase.from('jobs').update({
-      result_json: { ...result, product, generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, infographicText, riskChecklistText, sampleRecommendationText } },
+      result_json: {
+        ...result,
+        product,
+        productProcurementProfile: profileValidation.fixedProfile,
+        procurementProfile: profileValidation.fixedProfile,
+        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, readmeText },
+      },
     }).eq('id', jobId);
 
     const wbCategory = null;
@@ -172,7 +160,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       canGenerate: true,
       isTrial: currentStatus.isTrial ?? false,
     };
-    const { text: mainText, keyboard } = buildMainMessage(product, job.id, statusBeforeCharge as any, wbCategory);
+    const { text: mainTextRaw, keyboard } = buildMainMessage(product, job.id, statusBeforeCharge as any, wbCategory);
+    const mainProfileValidation = validateMainReport(mainTextRaw);
+    if (mainProfileValidation.errors.length) console.warn('[step5] main profile validator repaired:', mainProfileValidation.errors.join('; '));
+    const mainText = mainProfileValidation.fixedText;
 
     const softValidation = validateReport(mainText, (product as any).categoryType ?? decisionContext.categoryType ?? 'other', {
       hasPrice: !!decisionContext.price.calculationPriceYuan,
@@ -276,7 +267,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       result_json: {
         ...result,
         product: productWithProcurementState,
-        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, infographicText, riskChecklistText, sampleRecommendationText },
+        productProcurementProfile: profileValidation.fixedProfile,
+        procurementProfile: profileValidation.fixedProfile,
+        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, readmeText },
         finalUserCard: finalText,
         qaResult,
       },

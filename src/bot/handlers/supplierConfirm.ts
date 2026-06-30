@@ -3,6 +3,7 @@ import { Markup } from 'telegraf';
 import { supabase } from '../../db/supabase';
 import { redis } from '../../lib/redis';
 import { buildDecisionContext } from '../../core/decisionLayer';
+import { buildProductProcurementProfile, validateProfile } from '../../core/procurementProfile';
 import { buildMainMessage } from '../../core/messageBuilder';
 import type { ProductWithContent } from '../../types';
 
@@ -196,6 +197,11 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
         productionDays: extracted.productionDays,
       },
     } as any;
+    const updatedProfile = buildProductProcurementProfile(updatedProduct, { sourceUrl: result.input_url ?? (job as any).input_url, intelligence: (updatedProduct as any).intelligence });
+    const profileValidation = validateProfile(updatedProfile);
+    if (!profileValidation.ok) console.warn('[supplier-confirm-profile]', profileValidation.errors.join('; '));
+    (updatedProduct as any).productProcurementProfile = profileValidation.fixedProfile;
+    (updatedProduct as any).procurementProfile = profileValidation.fixedProfile;
     const decisionContext = buildDecisionContext(updatedProduct);
     (updatedProduct as any).procurementStatus = 'supplier_reply_added';
 
@@ -213,7 +219,7 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
         sample_checked: false,
         test_batch_ready: false,
       },
-      result_json: { ...result, rawProduct: raw, product: updatedProduct, decisionContext },
+      result_json: { ...result, rawProduct: raw, product: updatedProduct, decisionContext, productProcurementProfile: profileValidation.fixedProfile, procurementProfile: profileValidation.fixedProfile },
     }).eq('id', pending.jobId);
 
     // Формируем ответ

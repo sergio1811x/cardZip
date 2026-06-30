@@ -3,9 +3,8 @@ import { Input, Markup } from 'telegraf';
 import AdmZip from 'adm-zip';
 import { supabase } from '../../db/supabase';
 import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail, buildMainMessage } from '../../core/messageBuilder';
-import { buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildSampleChecklist, buildSupplierQuestions, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
-import { formatSeoText } from '../../core/seoFormatter';
-import { formatOrderBrief } from '../../core/orderBrief';
+import { buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
+import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, ensureProductProcurementProfile } from '../../core/procurementProfile';
 import { zipBuilder } from '../../core/zipBuilder';
 import type { ProductWithContent } from '../../types';
 
@@ -112,40 +111,12 @@ function cnBlockIsSafe(lines: string[]): boolean {
 
 function buildSupplierQuestionsText(product?: ProductWithContent): string {
   if (!product) return '# Вопросы поставщику\n\nРусская версия не найдена.';
-  const questions = buildSupplierQuestions(product);
-  const ru = questions.ru.slice(0, 8).map((q, i) => `${i + 1}. ${q}`);
-  const cnRaw = questions.cn.slice(0, 8);
-  const cn = cnRaw.map((q, i) => `${i + 1}. ${q}`);
-  const lines = ['# Вопросы поставщику', '', '## Русская версия', '', 'Здравствуйте. Хотим уточнить товар перед заказом:', '', ...ru];
-  if (cnBlockIsSafe(cnRaw)) {
-    lines.push('', '## Китайская версия', '', ...cn);
-  } else {
-    lines.push('', '## Китайская версия', '', 'Китайская версия не сформирована — используйте русскую версию или переведите через байера.');
-  }
-  return lines.join('\n');
+  return buildSupplierQuestionsFromProfile(product).text;
 }
 
-function buildReadmeText(hasPhotos: boolean): string {
-  return [
-    'CardZip — закупочный пакет',
-    '',
-    'Что внутри:',
-    '1. supplier_questions.txt — вопросы поставщику на русском и китайском.',
-    '2. buyer_brief.md — ТЗ байеру: что закупаем, цена, SKU и что проверить.',
-    '3. cargo_brief.md — ТЗ карго: вес, габариты, упаковка и ограничения.',
-    '4. sample_checklist.md — что проверить до образца, на образце и перед партией.',
-    '5. seo_draft.md — черновик карточки WB/Ozon и идеи инфографики.',
-    `6. photos.zip — ${hasPhotos ? 'фото товара с 1688.' : 'фото не удалось скачать; используйте фото из карточки 1688 вручную.'}`,
-    '',
-    'Рекомендуемый порядок:',
-    '1. Отправьте supplier_questions.txt поставщику.',
-    '2. Получите вес, габариты, фото и подтверждение SKU.',
-    '3. Передайте buyer_brief.md байеру.',
-    '4. Передайте cargo_brief.md карго.',
-    '5. Закажите 1–2 образца.',
-    '6. Проверьте образец по sample_checklist.md.',
-    '7. Используйте seo_draft.md как черновик карточки.',
-  ].join('\n');
+function buildReadmeText(product: any, hasPhotos: boolean): string {
+  const base = buildReadmeFromProfile(product);
+  return hasPhotos ? base : `${base}\n\nФото не удалось скачать. Используйте фото из карточки 1688 вручную.\n`;
 }
 
 function buildMaterials(job: any): { product?: ProductWithContent; prefix: string; docs: Array<{ filename: string; text: string; title: string; description: string }>; imageUrls: string[] } {
@@ -154,24 +125,30 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   const generatedFiles = result?.generatedFiles ?? {};
   const offerId = String(product?.productId ?? result?.offerId ?? job.id ?? Date.now()).replace(/[^a-zA-Z0-9_-]/g, '').slice(-12) || Date.now().toString().slice(-8);
   const prefix = `cardzip_${offerId}_${safePrefix(product, offerId)}`.replace(/_+/g, '_').replace(/_$/g, '');
-  const safeFlags = (product?.riskFlags ?? {}) as any;
   const imageUrls = (result?.imageUrls ?? product?.imageUrls ?? product?.images ?? []) as string[];
 
+  if (product) ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
   const supplierText = product ? buildSupplierQuestionsText(product) : (generatedFiles?.supplierQuestions ?? generatedFiles?.supplierText ?? '');
-  const buyerText = product ? formatOrderBrief(product, product.seoContent ?? {}, product.economics, safeFlags, job.input_url, product.budgets, product.conclusion) : (generatedFiles?.briefText ?? '');
-  const cargoText = product ? buildCargoBrief(product, job.input_url) : (generatedFiles?.cargoText ?? '');
-  const sampleText = product ? buildSampleChecklist(product) : (generatedFiles?.sampleChecklistText ?? generatedFiles?.sampleRecommendationText ?? generatedFiles?.riskChecklistText ?? '');
-  const seoText = product ? formatSeoText(product, product.seoContent ?? {}, safeFlags) : (generatedFiles?.seoText ?? '');
-  const readmeText = buildReadmeText(imageUrls.length > 0);
+  const buyerText = product ? buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.briefText ?? '');
+  const cargoText = product ? buildCargoBriefFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.cargoText ?? '');
+  const sampleText = product ? buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.sampleChecklistText ?? generatedFiles?.sampleRecommendationText ?? generatedFiles?.riskChecklistText ?? '');
+  const seoText = product ? buildSeoDraftFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.seoText ?? '');
+  const readmeText = product ? buildReadmeText(product, imageUrls.length > 0) : 'CardZip — закупочный пакет';
 
-  const docs = [
-    { filename: 'supplier_questions.txt', text: cleanDoc(product, String(supplierText), 'supplierQuestions'), title: '💬 Вопросы поставщику — supplier_questions.txt', description: 'Текст на русском и китайском: цена, вес, SKU, упаковка, фото.' },
-    { filename: 'buyer_brief.md', text: cleanDoc(product, String(buyerText), 'buyerBrief'), title: '📄 ТЗ байеру — buyer_brief.md', description: 'Что закупаем, какой SKU, какие риски и что проверить.' },
-    { filename: 'cargo_brief.md', text: cleanDoc(product, String(cargoText), 'buyerBrief'), title: '🚚 ТЗ карго — cargo_brief.md', description: 'Вес, габариты, упаковка и ограничения для расчёта доставки.' },
-    { filename: 'sample_checklist.md', text: cleanDoc(product, String(sampleText), 'buyerBrief'), title: '🧪 Чек-лист образца — sample_checklist.md', description: 'Что проверить перед партией: механизм, спицы, купол, упаковку.' },
-    { filename: 'seo_draft.md', text: cleanDoc(product, String(seoText), 'seo'), title: '📝 SEO-черновик — seo_draft.md', description: 'Название, описание, характеристики и идеи инфографики.' },
+  let docs = [
+    { filename: 'supplier_questions.txt', text: String(supplierText), title: '💬 Вопросы поставщику — supplier_questions.txt', description: 'Текст на русском и китайском: цена, вес, SKU, упаковка, фото.' },
+    { filename: 'buyer_brief.md', text: String(buyerText), title: '📄 ТЗ байеру — buyer_brief.md', description: 'Что закупаем, какой SKU, какие риски и что проверить.' },
+    { filename: 'cargo_brief.md', text: String(cargoText), title: '🚚 ТЗ карго — cargo_brief.md', description: 'Вес, габариты, упаковка и ограничения для расчёта доставки.' },
+    { filename: 'sample_checklist.md', text: String(sampleText), title: '🧪 Чек-лист образца — sample_checklist.md', description: 'Что проверить перед партией: механизм, спицы, купол, упаковку.' },
+    { filename: 'seo_draft.md', text: String(seoText), title: '📝 SEO-черновик — seo_draft.md', description: 'Название, описание, характеристики и идеи инфографики.' },
     { filename: 'README.txt', text: readmeText, title: 'ℹ️ README.txt', description: 'Что внутри пакета и порядок работы.' },
   ].filter(d => d.text && d.text.trim().length > 0);
+
+  if (product) {
+    const checked = validateDocuments(docs, ensureProductProcurementProfile(product, { sourceUrl: job.input_url }));
+    if (checked.errors.length) console.warn('[materials-validator]', checked.errors.join('; '));
+    docs = checked.fixedDocs.map((fixed) => ({ ...docs.find((d) => d.filename === fixed.filename)!, text: fixed.text }));
+  }
 
   return { product, prefix, docs, imageUrls };
 }

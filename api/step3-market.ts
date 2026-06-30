@@ -6,6 +6,7 @@ import { createStepProgress } from '../src/core/progress';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import { buildDecisionContext } from '../src/core/decisionLayer';
+import { buildProductProcurementProfile, validateProfile } from '../src/core/procurementProfile';
 
 export const config = { maxDuration: 30 };
 
@@ -32,6 +33,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       titleRu: seoContent.titleRu ?? result.productIntelligence?.cleanTitles?.titleForReport ?? raw?.titleEn ?? raw?.titleCn,
       seoContent,
       intelligence: result.productIntelligence ?? result.intelligence,
+      productProcurementProfile: result.productProcurementProfile ?? result.procurementProfile,
+      procurementProfile: result.productProcurementProfile ?? result.procurementProfile,
+      sourceUrl: job.input_url,
       productContext: result.productContext,
       wbData: null,
       wbFiltered: null,
@@ -68,6 +72,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         disclaimers: ['Продажную цену и рынок пользователь проверяет отдельно.'],
       },
     };
+    const profile = buildProductProcurementProfile(product, { sourceUrl: job.input_url, intelligence: product.intelligence });
+    const profileValidation = validateProfile(profile);
+    if (!profileValidation.ok) console.warn('[step3] profile validator:', profileValidation.errors.join('; '));
+    product.productProcurementProfile = profileValidation.fixedProfile;
+    product.procurementProfile = profileValidation.fixedProfile;
     const decision = buildDecisionContext(product);
 
     const progress = job.tg_message_id ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market') : null;
@@ -79,6 +88,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       result_json: {
         ...result,
         product,
+        productProcurementProfile: profileValidation.fixedProfile,
+        procurementProfile: profileValidation.fixedProfile,
         decisionContext: {
           price: decision.price,
           sku: decision.sku,
