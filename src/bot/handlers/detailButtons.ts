@@ -33,9 +33,8 @@ function detailKeyboard(jobId: string) {
 function materialsKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('⬇️ Скачать ZIP', `materials_zip_${jobId}`)],
-    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${jobId}`), Markup.button.callback('📄 Что внутри пакета', `materials_inside_${jobId}`)],
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
-    [Markup.button.callback('🔄 Новый товар', 'new_search')],
+    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${jobId}`), Markup.button.callback('📦 Данные товара', `product_detail_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
   ]);
 }
 
@@ -114,8 +113,8 @@ function cnBlockIsSafe(lines: string[]): boolean {
 function buildSupplierQuestionsText(product?: ProductWithContent): string {
   if (!product) return '# Вопросы поставщику\n\nРусская версия не найдена.';
   const questions = buildSupplierQuestions(product);
-  const ru = questions.ru.slice(0, 10).map((q, i) => `${i + 1}. ${q}`);
-  const cnRaw = questions.cn.slice(0, 10);
+  const ru = questions.ru.slice(0, 8).map((q, i) => `${i + 1}. ${q}`);
+  const cnRaw = questions.cn.slice(0, 8);
   const cn = cnRaw.map((q, i) => `${i + 1}. ${q}`);
   const lines = ['# Вопросы поставщику', '', '## Русская версия', '', 'Здравствуйте. Хотим уточнить товар перед заказом:', '', ...ru];
   if (cnBlockIsSafe(cnRaw)) {
@@ -131,31 +130,21 @@ function buildReadmeText(hasPhotos: boolean): string {
     'CardZip — закупочный пакет',
     '',
     'Что внутри:',
-    '',
-    '1. supplier_questions.txt',
-    'Вопросы поставщику на русском и китайском.',
-    '',
-    '2. buyer_brief.md',
-    'ТЗ байеру: что закупаем, цена, SKU, что проверить.',
-    '',
-    '3. cargo_brief.md',
-    'ТЗ карго: вес, габариты, упаковка, ограничения.',
-    '',
-    '4. sample_checklist.md',
-    'Что проверить до образца, на образце и перед партией.',
-    '',
-    '5. seo_draft.md',
-    'Черновик карточки WB/Ozon и идеи инфографики.',
-    '',
-    '6. photos.zip',
-    hasPhotos ? 'Фото товара с 1688.' : 'Фото не удалось скачать. Используйте фото из карточки 1688 вручную.',
+    '1. supplier_questions.txt — вопросы поставщику на русском и китайском.',
+    '2. buyer_brief.md — ТЗ байеру: что закупаем, цена, SKU и что проверить.',
+    '3. cargo_brief.md — ТЗ карго: вес, габариты, упаковка и ограничения.',
+    '4. sample_checklist.md — что проверить до образца, на образце и перед партией.',
+    '5. seo_draft.md — черновик карточки WB/Ozon и идеи инфографики.',
+    `6. photos.zip — ${hasPhotos ? 'фото товара с 1688.' : 'фото не удалось скачать; используйте фото из карточки 1688 вручную.'}`,
     '',
     'Рекомендуемый порядок:',
-    '1. Отправьте вопросы поставщику.',
-    '2. Получите вес, габариты и реальные фото.',
-    '3. Закажите 1–2 образца.',
-    '4. Проверьте образец по чек-листу.',
-    '5. После образца принимайте решение по партии.',
+    '1. Отправьте supplier_questions.txt поставщику.',
+    '2. Получите вес, габариты, фото и подтверждение SKU.',
+    '3. Передайте buyer_brief.md байеру.',
+    '4. Передайте cargo_brief.md карго.',
+    '5. Закажите 1–2 образца.',
+    '6. Проверьте образец по sample_checklist.md.',
+    '7. Используйте seo_draft.md как черновик карточки.',
   ].join('\n');
 }
 
@@ -176,11 +165,11 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   const readmeText = buildReadmeText(imageUrls.length > 0);
 
   const docs = [
-    { filename: 'supplier_questions.txt', text: cleanDoc(product, String(supplierText), 'supplierQuestions'), title: '💬 supplier_questions.txt', description: 'Вопросы поставщику RU/CN.' },
-    { filename: 'buyer_brief.md', text: cleanDoc(product, String(buyerText), 'buyerBrief'), title: '📄 buyer_brief.md', description: 'ТЗ байеру: товар, SKU, цена, что проверить.' },
-    { filename: 'cargo_brief.md', text: cleanDoc(product, String(cargoText), 'buyerBrief'), title: '🚚 cargo_brief.md', description: 'ТЗ карго: вес, габариты, упаковка и ограничения.' },
-    { filename: 'sample_checklist.md', text: cleanDoc(product, String(sampleText), 'buyerBrief'), title: '🧪 sample_checklist.md', description: 'Образец, риски, красные флаги и решение.' },
-    { filename: 'seo_draft.md', text: cleanDoc(product, String(seoText), 'seo'), title: '📝 seo_draft.md', description: 'SEO-черновик WB/Ozon + идеи инфографики.' },
+    { filename: 'supplier_questions.txt', text: cleanDoc(product, String(supplierText), 'supplierQuestions'), title: '💬 Вопросы поставщику — supplier_questions.txt', description: 'Текст на русском и китайском: цена, вес, SKU, упаковка, фото.' },
+    { filename: 'buyer_brief.md', text: cleanDoc(product, String(buyerText), 'buyerBrief'), title: '📄 ТЗ байеру — buyer_brief.md', description: 'Что закупаем, какой SKU, какие риски и что проверить.' },
+    { filename: 'cargo_brief.md', text: cleanDoc(product, String(cargoText), 'buyerBrief'), title: '🚚 ТЗ карго — cargo_brief.md', description: 'Вес, габариты, упаковка и ограничения для расчёта доставки.' },
+    { filename: 'sample_checklist.md', text: cleanDoc(product, String(sampleText), 'buyerBrief'), title: '🧪 Чек-лист образца — sample_checklist.md', description: 'Что проверить перед партией: механизм, спицы, купол, упаковку.' },
+    { filename: 'seo_draft.md', text: cleanDoc(product, String(seoText), 'seo'), title: '📝 SEO-черновик — seo_draft.md', description: 'Название, описание, характеристики и идеи инфографики.' },
     { filename: 'README.txt', text: readmeText, title: 'ℹ️ README.txt', description: 'Что внутри пакета и порядок работы.' },
   ].filter(d => d.text && d.text.trim().length > 0);
 
@@ -248,8 +237,8 @@ export async function handleProductDetail(ctx: Context): Promise<void> {
   const job = await getJobData(ctx, jobId);
   const product = (job?.result_json as any)?.product as ProductWithContent | undefined;
   if (!product) {
-    await ctx.answerCbQuery('Данные недоступны');
-    return;
+    await ctx.answerCbQuery('Данные недоступны').catch(() => {});
+    return replySectionError(ctx, jobId, 'product_detail:not_found');
   }
 
   await ctx.answerCbQuery();
@@ -308,26 +297,41 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
   }
 
   await ctx.answerCbQuery().catch(() => {});
-  const { docs, imageUrls } = buildMaterials(job);
+  const { imageUrls } = buildMaterials(job);
   const preview = [
-    '📁 <b>Закупочный пакет</b>',
+    '📁 <b>Закупочный пакет готов</b>',
     '',
-    'Здесь собран пакет, который можно отправить поставщику, байеру и карго.',
+    'Я собрал документы для закупки и проверки товара.',
     '',
     '<b>Что внутри:</b>',
-    '• supplier_questions.txt — вопросы поставщику RU/CN',
-    '• buyer_brief.md — ТЗ байеру',
-    '• cargo_brief.md — ТЗ карго',
-    '• sample_checklist.md — чек-лист образца и риски',
-    '• seo_draft.md — SEO-черновик и идеи инфографики',
-    '• README.txt — порядок работы',
-    imageUrls.length ? '• photos.zip — фото товара' : '• photos.zip — фото не найдены, используйте карточку вручную',
     '',
-    '<b>Что делать сейчас:</b>',
+    '💬 <b>Вопросы поставщику</b>',
+    'supplier_questions.txt',
+    'Текст на русском и китайском: цена, вес, SKU, упаковка, фото.',
+    '',
+    '📄 <b>ТЗ байеру</b>',
+    'buyer_brief.md',
+    'Что закупаем, какой SKU, какие риски и что проверить.',
+    '',
+    '🚚 <b>ТЗ карго</b>',
+    'cargo_brief.md',
+    'Вес, габариты, упаковка и ограничения для расчёта доставки.',
+    '',
+    '🧪 <b>Чек-лист образца</b>',
+    'sample_checklist.md',
+    'Что проверить перед партией: механизм, спицы, купол, упаковку.',
+    '',
+    '📝 <b>SEO-черновик</b>',
+    'seo_draft.md',
+    'Название, описание, характеристики и идеи инфографики.',
+    '',
+    '📷 <b>Фото товара</b>',
+    'photos.zip',
+    imageUrls.length ? 'Фото из карточки 1688.' : 'Фото не удалось скачать автоматически — используйте карточку 1688 вручную.',
+    '',
+    '<b>Что сделать сейчас:</b>',
     '1. Сначала отправьте вопросы поставщику.',
-    '2. Затем скачайте ZIP и передайте документы в работу.',
-    '',
-    `Документов: ${docs.filter(d => d.filename !== 'README.txt').length} + README${imageUrls.length ? ' + photos.zip' : ''}`,
+    '2. После ответа передайте пакет байеру/карго.',
   ].join('\n');
   await ctx.reply(preview, {
     parse_mode: 'HTML',
@@ -401,7 +405,7 @@ export async function handleMaterialsZip(ctx: Context): Promise<void> {
   if (!match) return;
   const jobId = match[1];
   const job = await getJobData(ctx, jobId);
-  if (!job) return void await ctx.answerCbQuery('Данные недоступны');
+  if (!job) { await ctx.answerCbQuery('Данные недоступны').catch(() => {}); return replySectionError(ctx, jobId, 'materials_zip:not_found'); }
   await ctx.answerCbQuery('Собираю ZIP').catch(() => {});
   const { docs, prefix, imageUrls } = buildMaterials(job);
   const zip = new AdmZip();
@@ -413,7 +417,7 @@ export async function handleMaterialsZip(ctx: Context): Promise<void> {
     zip.addFile('photos.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки 1688 вручную.\n', 'utf-8'));
   }
   await ctx.telegram.sendDocument(ctx.chat!.id, Input.fromBuffer(zip.toBuffer(), `${prefix}.zip`)).catch(() => {});
-  await ctx.reply('✅ ZIP отправлен. Начните с supplier_questions.txt: отправьте вопросы поставщику, затем используйте пакет для байера и карго.', materialsKeyboard(jobId)).catch(() => {});
+  await ctx.reply('✅ ZIP отправлен. Начните с supplier_questions.txt: отправьте вопросы поставщику, затем передайте buyer_brief.md байеру и cargo_brief.md карго.', materialsKeyboard(jobId)).catch(() => {});
 }
 
 export async function handleMaterialsList(ctx: Context): Promise<void> {

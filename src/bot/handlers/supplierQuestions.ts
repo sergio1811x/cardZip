@@ -4,27 +4,40 @@ import { supabase } from '../../db/supabase';
 import { buildSupplierQuestions, buildDecisionContext } from '../../core/decisionLayer';
 
 async function findJob(userId: string, jobId?: string) {
-  let query = supabase
-    .from('jobs')
-    .select('id, result_json, procurement_status')
-    .eq('user_id', userId)
-    .in('status', ['done', 'sent']);
-
   if (jobId) {
-    const { data } = await query.eq('id', jobId).single();
+    const { data } = await supabase
+      .from('jobs')
+      .select('id, result_json, procurement_status')
+      .eq('user_id', userId)
+      .eq('id', jobId)
+      .single();
     return data;
   }
 
-  const { data } = await query
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
-  return data;
+  // New MVP buttons must always carry analysisId/jobId. Do not silently open
+  // the latest product from a generic callback: it can show the wrong analysis.
+  return null;
 }
 
 function callbackJobId(ctx: Context): string | undefined {
   const match = (ctx as any).match as RegExpMatchArray | undefined;
   return match?.[1] || match?.[2];
+}
+
+async function replyOpenSectionFallback(ctx: Context, jobId?: string) {
+  const keyboard = jobId
+    ? Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`)],
+        [Markup.button.callback('🔄 Новый товар', 'new_search')],
+      ])
+    : Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 К отчёту', 'last')],
+        [Markup.button.callback('🔄 Новый товар', 'new_search')],
+      ]);
+  await ctx.reply('⚠️ <b>Не удалось открыть раздел.</b>\n\nНо анализ сохранён. Попробуйте открыть отчёт заново или начните новый товар.', {
+    parse_mode: 'HTML',
+    ...keyboard,
+  });
 }
 
 export async function handleSupplierQuestions(ctx: Context) {
@@ -36,10 +49,8 @@ export async function handleSupplierQuestions(ctx: Context) {
 
   const jobId = callbackJobId(ctx);
   const job = await findJob(userId, jobId).catch(() => null);
-  if (jobId && !job) {
-    await ctx.reply('⚠️ Товар не найден. Вернитесь к отчёту или начните новый товар.', {
-      ...Markup.inlineKeyboard([[Markup.button.callback('🔄 Новый товар', 'new_search')]]),
-    });
+  if (!job) {
+    await replyOpenSectionFallback(ctx, jobId);
     return;
   }
 
@@ -52,11 +63,11 @@ export async function handleSupplierQuestions(ctx: Context) {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
         [
-          Markup.button.callback('📋 Скопировать RU', job?.id ? `sq_ru_${job.id}` : 'sq_ru'),
-          Markup.button.callback('📋 Скопировать CN', job?.id ? `sq_cn_${job.id}` : 'sq_cn'),
+          Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`),
+          Markup.button.callback('📋 Скопировать CN', `sq_cn_${job.id}`),
         ],
-        ...(job?.id ? [[Markup.button.callback('📥 Обновить по ответу', `supplier_confirm_${job.id}`)]] : []),
-        ...(job?.id ? [[Markup.button.callback('⬅️ Назад', `back_main_${job.id}`), Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`)]] : []),
+        [Markup.button.callback('📥 Обновить по ответу', `supplier_confirm_${job.id}`)],
+        [Markup.button.callback('⬅️ Назад', `back_main_${job.id}`), Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`)],
         [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     }
@@ -89,7 +100,7 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
   try {
     const job = await findJob(userId, jobId);
     if (!job?.result_json) {
-      await ctx.reply('Нет сохранённых товаров. Отправь ссылку на товар с 1688.');
+      await replyOpenSectionFallback(ctx, jobId);
       return;
     }
 
@@ -97,7 +108,7 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     const product = data.product ?? data.rawProduct;
     const x = buildDecisionContext(product ?? {});
     const questionSet = buildSupplierQuestions(product ?? {});
-    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 10);
+    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 8);
 
     if (lang === 'cn' && !cnQuestionsAreSafe(questions)) {
       await ctx.reply('⚠️ Китайская версия не сформирована — используйте русскую версию или переведите через байера.', {
@@ -147,6 +158,6 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     });
   } catch (e) {
     console.error('[supplier_questions]', e);
-    await ctx.reply('⚠️ Не удалось открыть раздел. Данные анализа сохранены — вернитесь к отчёту или откройте пакет ещё раз.', { ...Markup.inlineKeyboard([[Markup.button.callback('🏠 К отчёту', 'last')], [Markup.button.callback('🔄 Новый товар', 'new_search')]]) });
+    await replyOpenSectionFallback(ctx, jobId);
   }
 }

@@ -10,7 +10,7 @@ export async function handleSearch1688(ctx: Context) {
   try {
     const { data: job } = await supabase.from('jobs').select('result_json').eq('id', jobId).single();
     if (!job?.result_json) {
-      await ctx.answerCbQuery('Товар не найден');
+      await ctx.answerCbQuery('Данные недоступны');
       return;
     }
 

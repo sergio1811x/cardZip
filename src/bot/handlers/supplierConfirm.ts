@@ -11,22 +11,32 @@ function confirmKey(chatId: number): string {
 }
 
 async function findJobForConfirm(userId: string, jobId?: string) {
-  let query = supabase
-    .from('jobs')
-    .select('id, result_json, procurement_status, procurement_pipeline')
-    .eq('user_id', userId)
-    .in('status', ['done', 'sent']);
-
   if (jobId) {
-    const { data } = await query.eq('id', jobId).single();
+    const { data } = await supabase
+      .from('jobs')
+      .select('id, result_json, procurement_status, procurement_pipeline')
+      .eq('user_id', userId)
+      .eq('id', jobId)
+      .single();
     return data;
   }
+  return null;
+}
 
-  const { data } = await query
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
-  return data;
+async function replyOpenSectionFallback(ctx: Context, jobId?: string) {
+  const keyboard = jobId
+    ? Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`)],
+        [Markup.button.callback('🔄 Новый товар', 'new_search')],
+      ])
+    : Markup.inlineKeyboard([
+        [Markup.button.callback('🏠 К отчёту', 'last')],
+        [Markup.button.callback('🔄 Новый товар', 'new_search')],
+      ]);
+  await ctx.reply('⚠️ <b>Не удалось открыть раздел.</b>\n\nНо анализ сохранён. Попробуйте открыть отчёт заново или начните новый товар.', {
+    parse_mode: 'HTML',
+    ...keyboard,
+  });
 }
 
 export async function handleSupplierConfirmStart(ctx: Context) {
@@ -38,7 +48,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
   const job = await findJobForConfirm(userId, callbackJobId).catch(() => null);
 
   if (!job) {
-    await ctx.reply('Нет товаров для обновления. Сначала отправьте ссылку.');
+    await replyOpenSectionFallback(ctx, callbackJobId);
     return;
   }
 
@@ -138,14 +148,14 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     const extracted = await extractSupplierData(text);
 
     if (!extracted) {
-      await ctx.reply('⚠️ Не смог уверенно извлечь данные из ответа. Данные анализа сохранены — вставьте ответ ещё раз или вернитесь к плану.', { ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад к плану', `proc_plan_${pending.jobId}`)]]) });
+      await ctx.reply('⚠️ Не нашёл вес, габариты или цену в ответе. Можно вставить ответ ещё раз, вручную указать вес или отправить поставщику уточняющий вопрос.', { ...Markup.inlineKeyboard([[Markup.button.callback('📁 Открыть пакет', `materials_${pending.jobId}`)]]) });
       return true;
     }
 
     // Загружаем job
     const { data: job } = await supabase.from('jobs').select('*').eq('id', pending.jobId).single();
     if (!job?.result_json) {
-      await ctx.reply('⚠️ Товар не найден. Вернитесь к последнему отчёту или начните новый товар.', { ...Markup.inlineKeyboard([[Markup.button.callback('🏠 К отчёту', 'last')], [Markup.button.callback('🔄 Новый товар', 'new_search')]]) });
+      await replyOpenSectionFallback(ctx, pending.jobId);
       return true;
     }
 

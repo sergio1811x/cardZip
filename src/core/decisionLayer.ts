@@ -273,6 +273,15 @@ function asRecord(v: unknown): Record<string, any> { return v && typeof v === 'o
 function num(value: unknown): number | null { if (typeof value === 'number' && Number.isFinite(value)) return value; if (typeof value === 'string') { const n = Number(value.replace(',', '.').replace(/[^\d.-]/g, '')); return Number.isFinite(n) ? n : null; } return null; }
 function positive(value: unknown): number | null { const n = num(value); return n !== null && n > 0 ? Math.round(n * 100) / 100 : null; }
 function cny(value: number | null | undefined): string { if (!value || !Number.isFinite(value) || value <= 0) return 'нужно уточнить'; return `${String(Math.round(value * 100) / 100).replace('.', ',')} ¥`; }
+function cnyCn(value: number | null | undefined): string { if (!value || !Number.isFinite(value) || value <= 0) return '需要确认'; return `${String(Math.round(value * 100) / 100)} 元`; }
+function supplierTypeRu(value: unknown): string {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return 'продавец';
+  if (/factory|фабрик|工厂|厂家/.test(raw)) return 'фабрика';
+  if (/merchant|провер|实力|供应商/.test(raw)) return 'проверенный продавец';
+  if (/seller|store|shop|продав/.test(raw)) return 'продавец';
+  return normalizeFact(value) || 'продавец';
+}
 function money(value: number | null | undefined): string { if (!value || !Number.isFinite(value) || value <= 0) return '—'; return `${Math.round(value).toLocaleString('ru-RU')} ₽`; }
 function rangeText(min: number | null, max: number | null): string { if (!min && !max) return 'нужно уточнить'; if (min && max && min !== max) return `${cny(min).replace(' ¥', '')}–${cny(max).replace(' ¥', '')} ¥`; return cny(min ?? max); }
 function html(value: unknown): string { return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
@@ -282,6 +291,13 @@ function uniq(list: string[], limit = 20): string[] { const seen = new Set<strin
 function stripNumber(v: unknown): string { return normalizeFact(v).replace(/^\s*(?:\d+[.)]|[-•])\s*/g, '').trim(); }
 
 function displaySkuSummary(summary: string): string { return clean(summary).replace(/^SKU:\s*/i, ''); }
+function displayMainSkuSummary(x: ReturnType<typeof buildDecisionContext>): string {
+  if (x.sku.ambiguousParams?.length) {
+    const dims = x.sku.skuDimensions.length ? describeSkuDimensions(x.sku.skuDimensions) : 'параметр SKU';
+    return `${x.sku.skuCount || x.sku.shownSkuCount || 0} ${pluralRu(x.sku.skuCount || x.sku.shownSkuCount || 0, 'вариант', 'варианта', 'вариантов')} · ${dims}`;
+  }
+  return displaySkuSummary(x.sku.skuSummary);
+}
 function displayPriceSummary(text: string): string { return clean(text).replace(/^Цена выбранного SKU:\s*/i, 'выбранный SKU: ').replace(/^Цена по SKU:\s*/i, 'по SKU: ').replace(/^Цена:\s*/i, ''); }
 
 function pluralRu(n: number, one: string, few: string, many: string): string {
@@ -390,7 +406,7 @@ export function buildSkuDecision(product: RawProduct1688 | any, intelligence?: P
   const colorOptions = uniq(variants.map(v => v.color || '').filter(Boolean), 20);
   const sizeOptions = uniq(variants.map(v => v.size || '').filter(Boolean), 30);
   const componentOptions = uniq(variants.flatMap(v => v.components ?? []), 20);
-  const ambiguousParams = uniq(variants.map(v => v.parameter || '').filter(Boolean), 20);
+  const ambiguousParams = uniq(variants.map(v => v.parameter || '').filter(Boolean), 20).sort((a, b) => { const na = Number(a); const nb = Number(b); return Number.isFinite(na) && Number.isFinite(nb) ? na - nb : a.localeCompare(b, 'ru'); });
 
   const dims: string[] = [];
   if (colorOptions.length || /цвет|color|白|黑|红|蓝|绿|黄|粉|хаки|бел|черн|чёрн|розов/i.test(rawText)) dims.push('color');
@@ -409,7 +425,7 @@ export function buildSkuDecision(product: RawProduct1688 | any, intelligence?: P
   if (colorOptions.length) parts.push(`цвета: ${colorOptions.slice(0, 6).join(', ')}${colorOptions.length > 6 ? '…' : ''}`);
   if (numericSizes.length) parts.push(`размеры ${numericSizes[0]}–${numericSizes[numericSizes.length - 1]}`);
   else if (letterSizes.length) parts.push(`размеры ${letterSizes.slice(0, 8).join(', ')}`);
-  if (ambiguousParams.length) parts.push(`параметр SKU: ${ambiguousParams.slice(0, 8).join(', ')} — уточнить у поставщика`);
+  if (ambiguousParams.length) parts.push(`параметры: ${ambiguousParams.slice(0, 8).join(' / ')} — значение нужно уточнить`);
   if (componentOptions.length) parts.push(`детали: ${componentOptions.slice(0, 4).join(', ')}`);
   if (/маломер|偏小一码/.test(rawText)) parts.push('маломерит на 1 размер');
   if (prices.length) parts.push(`цена по SKU ${rangeText(Math.min(...prices), Math.max(...prices))}`);
@@ -579,7 +595,7 @@ function topQuestions(product: any, x = buildDecisionContext(product), n = 7): s
 export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: number }, _wbCategory?: any): string {
   const x = buildDecisionContext(product);
   const source = String(product?.platform ?? '1688').toUpperCase();
-  const supplierType = normalizeFact(product?.supplierType || product?.normalized1688?.supplierType || 'продавец') || 'продавец';
+  const supplierType = supplierTypeRu(product?.supplierType || product?.normalized1688?.supplierType || 'продавец');
   const supplierRating = normalizeFact(product?.supplierRating ?? product?.normalized1688?.supplierRating);
   const sold = positive(product?.normalized1688?.salesCount ?? product?.sold);
   const moq = positive(product?.normalized1688?.moq ?? product?.moq);
@@ -588,11 +604,11 @@ export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: 
   const modelLine = x.sku.sizeOptions?.length
     ? `• Размеры/модели: ${x.sku.sizeOptions.slice(0, 10).join(', ')}`
     : x.sku.ambiguousParams?.length
-      ? `• Размеры/модели: параметр SKU ${x.sku.ambiguousParams.slice(0, 6).join(', ')} — уточнить у поставщика`
+      ? `• Параметры: ${x.sku.ambiguousParams.slice(0, 8).join(' / ')} — значение нужно уточнить`
       : null;
   const mainWeightText = x.weight.canUseForCargo ? x.weight.displayText.replace(/^Вес:\s*/i, '') : 'не указан';
   const questions = topQuestions(product, x, 5).map(q => q.replace(/^\d+[.)]\s*/, ''));
-  const selectedSku = x.sku.recommendedSampleSku || (x.sku.needsSelection ? 'выберите конкретный цвет/размер/модель' : 'уточнить у поставщика');
+  const selectedSku = x.sku.ambiguousParams?.length ? 'выберите конкретный цвет и параметр SKU' : (x.sku.recommendedSampleSku || (x.sku.needsSelection ? 'выберите конкретный цвет/размер/модель' : 'уточнить у поставщика'));
   const packageItems = ['вопросы поставщику', 'ТЗ байеру', 'ТЗ карго', 'чек-лист образца', 'SEO-черновик', 'фото товара'];
   const verdict = x.price.canCalculateCost
     ? 'Партию закупать рано. Можно запросить данные и заказать 1–2 образца.'
@@ -607,7 +623,7 @@ export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: 
     `• Цена: ${html(displayPriceSummary(x.price.displayPriceText))}`,
     `• Выбранный SKU: ${html(selectedSku)}`,
     `• MOQ: ${moq ? `${Math.round(moq).toLocaleString('ru-RU')} шт.` : 'уточнить'}`,
-    `• SKU: ${html(displaySkuSummary(x.sku.skuSummary))}`,
+    `• SKU: ${html(displayMainSkuSummary(x))}`,
     ...(colorLine ? [html(colorLine)] : []),
     ...(modelLine ? [html(modelLine)] : []),
     `• Материал: ${html(materials)}`,
@@ -645,6 +661,9 @@ function procurementStatusText(x: ReturnType<typeof buildDecisionContext>): stri
 }
 
 function materialsLine(x: ReturnType<typeof buildDecisionContext>, product: any): string {
+  if (isUmbrella(product, x)) {
+    return 'ткань купола, железо/сплав — подтвердить у поставщика';
+  }
   const id = x.intelligence.productIdentity ?? {};
   const fromIntel = asArray<any>(id.materials ?? id.material)
     .map((m) => typeof m === 'string' ? m : m?.value)
@@ -653,10 +672,10 @@ function materialsLine(x: ReturnType<typeof buildDecisionContext>, product: any)
   const fromAttrs = collectRawAttributes(product, 12)
     .filter(f => /материал|材质|材料|пвх|pvc|eva|силикон|пластик|металл|ткан/i.test(`${f.name} ${f.value}`))
     .map(f => f.value);
-  const values = uniq([...fromIntel, ...fromAttrs], 4);
+  const values = uniq([...fromIntel, ...fromAttrs], 4)
+    .map(v => v.replace(/понтиж|pongee|碰击|碰击布/gi, 'ткань купола'));
   return values.length ? `${values.join(', ')} — подтвердить у поставщика` : 'уточнить у поставщика';
 }
-
 function useCasesLine(x: ReturnType<typeof buildDecisionContext>): string {
   const uses = asArray<string>(x.intelligence.productIdentity?.useCases).map(normalizeFact).filter(Boolean);
   if (uses.length) return uses.slice(0, 4).join(', ');
@@ -792,7 +811,7 @@ export function build1688Detail(product: any): string {
     '',
     '<b>Поставщик:</b>',
     `• название: ${html(product?.supplierName || 'не указано')}`,
-    `• тип: ${html(product?.supplierType || 'не указан')}`,
+    `• тип: ${html(supplierTypeRu(product?.supplierType) || 'не указан')}`,
     `• рейтинг: ${html(product?.supplierRating || '—')}`,
     `• заказов: ${html(product?.sold || '—')}`,
     `• MOQ: ${positive(product?.moq ?? product?.normalized1688?.moq) ? `${positive(product?.moq ?? product?.normalized1688?.moq)} шт.` : 'уточнить'}`,
@@ -813,7 +832,7 @@ function seoFriendlyTitle(product: any, x: ReturnType<typeof buildDecisionContex
   if (/бахил|чехл.*обув|鞋套/.test(text)) return 'Бахилы многоразовые водонепроницаемые для обуви';
   if (isSmallAppliance(product, x)) return 'Мини стиральная машина портативная 4 л для белья и носков';
   if (isSleepMask(product, x)) return 'Маска для сна 3D с затемнением мягкая';
-  if (isUmbrella(product, x)) return 'Зонт автоматический складной от дождя с чехлом';
+  if (isUmbrella(product, x)) return 'Зонт автоматический складной с крючком и чехлом';
   if (/сабо|洞洞鞋|护士鞋/.test(text)) return 'Медицинские сабо EVA для работы и повседневной носки';
   if (/сандал|凉鞋/.test(text)) return 'Женские сандалии летние с декоративным элементом';
   return rawTitle || x.title;
@@ -897,9 +916,9 @@ export function buildSeoDraft(product: any): string {
   const description = seoDescription(product, x, title);
   const bullets = seoBullets(product, x);
   const facts = mergeFacts(collectRawAttributes(product, 24), collectIntelFacts(product, x.intelligence, 12))
-    .filter(f => !/^(?:производитель|место производства|провинция|бренд)$/i.test(f.name))
+    .filter(f => !/^(?:производитель|место производства|провинция|бренд|тип|type|material|материал)$/i.test(f.name))
     .filter(f => !/(Product Intelligence|AI-черновик|debug)/i.test(f.value + ' ' + f.status))
-    .slice(0, 10);
+    .slice(0, 6);
   const colors = x.sku.colorOptions?.length ? x.sku.colorOptions.join(', ') : null;
   const sizes = x.sku.sizeOptions?.length ? x.sku.sizeOptions.join(', ') : null;
   const keywords = uniq([
@@ -925,12 +944,21 @@ export function buildSeoDraft(product: any): string {
     '## Характеристики',
     '| Параметр | Значение | Статус |',
     '|---|---|---|',
-    `| Тип | ${x.title} | из карточки |`,
-    `| Материал | ${materialsLine(x, product).replace(/\|/g, '/')} | подтвердить |`,
-    ...(colors ? [`| Цвета | ${colors} | из SKU |`] : []),
-    ...(sizes ? [`| Размеры | ${sizes} | из SKU, уточнить сетку |`] : []),
-    ...(x.sku.componentOptions?.length ? [`| Детали | ${x.sku.componentOptions.join(', ')} | из SKU/фото, проверить |`] : []),
-    ...facts.slice(0, 5).map(f => `| ${f.name.replace(/\|/g, '/')} | ${f.value.replace(/\|/g, '/')} | ${f.status} |`),
+    ...(isUmbrella(product, x) ? [
+      '| Тип | складной автоматический зонт | из карточки, проверить |',
+      ...(colors ? [`| Цвета | ${colors} | из SKU |`] : []),
+      '| Материал купола | уточнить | подтвердить у поставщика |',
+      '| Материал спиц | железо/сплав | подтвердить у поставщика |',
+      '| Механизм | автоматический | проверить на образце |',
+      '| Защита от солнца | UPF50+ заявлено | не писать без подтверждения |',
+    ] : [
+      `| Тип | ${x.title} | из карточки |`,
+      `| Материал | ${materialsLine(x, product).replace(/\|/g, '/')} | подтвердить |`,
+      ...(colors ? [`| Цвета | ${colors} | из SKU |`] : []),
+      ...(sizes ? [`| Размеры | ${sizes} | из SKU, уточнить сетку |`] : []),
+      ...(x.sku.componentOptions?.length ? [`| Детали | ${x.sku.componentOptions.join(', ')} | из SKU/фото, проверить |`] : []),
+    ]),
+    ...facts.slice(0, 4).map(f => `| ${f.name.replace(/\|/g, '/')} | ${f.value.replace(/\|/g, '/')} | ${f.status} |`),
     '',
     '## Ключевые слова',
     keywords.join(', '),
@@ -949,62 +977,78 @@ export function buildSeoDraft(product: any): string {
 
 export function buildSupplierQuestions(product: any, x = buildDecisionContext(product)): { ru: string[]; cn: string[] } {
   const rules = getProcurementRules(product, x);
+  const priceRu = x.price.calculationPriceYuan ? cny(x.price.calculationPriceYuan) : 'цену нужно уточнить';
+  const priceCn = x.price.calculationPriceYuan ? cnyCn(x.price.calculationPriceYuan) : '需要确认价格';
+  const params = uniq(x.sku.ambiguousParams ?? [], 8);
+
+  if (isUmbrella(product, x)) {
+    const ru = uniq([
+      x.price.calculationPriceYuan ? `Подтвердите цену выбранного SKU: ${priceRu}.` : 'Укажите цену выбранного SKU.',
+      'Укажите вес с упаковкой выбранного SKU.',
+      'Укажите габариты индивидуальной упаковки.',
+      params.length ? `Что означают параметры SKU ${params.join(' / ')}: диаметр купола, длина в сложенном виде, количество спиц или другой параметр?` : '',
+      'Укажите длину зонта в сложенном виде.',
+      'Укажите диаметр купола в раскрытом виде.',
+      'Сколько спиц у выбранного SKU?',
+      'Есть ли чехол в комплекте? Пришлите фото открытого/закрытого зонта и упаковки.',
+    ].filter(Boolean), 8);
+    const cn = uniq([
+      x.price.calculationPriceYuan ? `请确认所选SKU的价格是否为 ${priceCn}。` : '请提供所选SKU的价格。',
+      '请提供所选SKU含包装的重量。',
+      '请提供单件产品的包装尺寸。',
+      params.length ? `SKU参数 ${params.join(' / ')} 分别代表什么：伞面直径、折叠长度、伞骨数量还是其他参数？` : '',
+      '请提供雨伞折叠后的长度。',
+      '请提供雨伞打开后的伞面直径。',
+      '所选SKU有多少根伞骨？',
+      '是否包含伞套？请发送打开、折叠状态和包装的实拍照片。',
+    ].filter(Boolean), 8);
+    return { ru, cn };
+  }
+
   const ru: string[] = [];
   const cn: string[] = [];
-
   if (x.price.calculationPriceYuan) {
-    ru.push(`Подтвердите цену выбранного SKU: ${cny(x.price.calculationPriceYuan)}.`);
-    cn.push(`请确认所选SKU的价格是否为${cny(x.price.calculationPriceYuan).replace(' ¥', '元')}？`);
+    ru.push(`Подтвердите цену выбранного SKU: ${priceRu}.`);
+    cn.push(`请确认所选SKU的价格是否为 ${priceCn}。`);
   } else {
     ru.push('Укажите цену выбранного цвета/размера/комплектации.');
     cn.push('请告诉我所选颜色/尺码/套装的价格。');
   }
-  if (!x.weight.canUseForCargo) {
-    ru.push('Укажите вес с упаковкой именно для выбранного SKU.');
-    cn.push('请提供所选SKU含包装的重量。');
-  }
+  ru.push('Укажите вес с упаковкой выбранного SKU.');
+  cn.push('请提供所选SKU含包装的重量。');
   ru.push('Укажите габариты индивидуальной упаковки.');
   cn.push('请提供单件产品包装尺寸。');
+  if (params.length) {
+    ru.push(`Что означают параметры SKU ${params.join(' / ')}?`);
+    cn.push(`SKU参数 ${params.join(' / ')} 分别代表什么？`);
+  }
   if (x.sku.needsSelection) {
     ru.push('Подтвердите точную комплектацию выбранного SKU.');
     cn.push('请确认所选SKU的准确套装内容。');
   }
-  for (const param of x.sku.ambiguousParams ?? []) {
-    ru.push(`Что означает параметр “${param}” в SKU: диаметр, длина, размер купола или другое?`);
-    cn.push(`SKU里的“${param}”代表什么：伞面直径、折叠长度、伞面尺寸还是其他参数？`);
-  }
 
-  for (const check of cleanRuleList(rules.buyerMustCheck, product, x, 12)) {
+  for (const check of cleanRuleList(rules.buyerMustCheck, product, x, 8)) {
     const q = questionFromCheck(check);
     if (q) ru.push(q);
     cn.push(cnQuestionFromCheck(check));
   }
-
   ru.push('Пришлите реальные фото товара, выбранного SKU и упаковки.');
   cn.push('请发送所选SKU、产品和包装的实拍照片。');
   ru.push('Можно ли заказать 1–2 образца перед партией?');
   cn.push('批量采购前可以先购买1-2个样品吗？');
 
-  const hasClaims = mergeFacts(collectIntelFacts(product, x.intelligence, 10), collectRawAttributes(product, 10))
-    .some(f => /заявлен|сертифик|документ|испытан|антибактер|противоскольз|влагозащит|водонепрониц|upf|дезинфекц|стерилиз/i.test(f.value + ' ' + f.name));
-  if (hasClaims || rules.seoForbiddenClaims.length) {
-    ru.push('Какие заявленные свойства подтверждены документами или испытаниями, а какие являются только описанием поставщика?');
-    cn.push('页面里的功能描述哪些有检测报告或证书，哪些只是产品描述？');
-  }
-
   return {
-    ru: cleanRuleList(ru, product, x, 12),
-    cn: uniq(cn.filter(Boolean), 12),
+    ru: cleanRuleList(ru, product, x, 8),
+    cn: uniq(cn.filter(Boolean), 8),
   };
 }
 
 export function buildBuyerBrief(product: any, sourceUrl = ''): string {
   const x = buildDecisionContext(product);
   const rules = getProcurementRules(product, x);
-  const qs = buildSupplierQuestions(product, x).ru;
   const skuExamples = x.sku.skuVariantsNormalized.slice(0, 8).map(v => v.label);
-  const sampleChecks = cleanRuleList(rules.sampleMustCheck, product, x, 12);
-  const buyerChecks = cleanRuleList(rules.buyerMustCheck, product, x, 14);
+  const sampleChecks = cleanRuleList(rules.sampleMustCheck, product, x, 8);
+  const buyerChecks = cleanRuleList(rules.buyerMustCheck, product, x, 10);
   return [
     '# ТЗ байеру',
     '',
@@ -1025,30 +1069,27 @@ export function buildBuyerBrief(product: any, sourceUrl = ''): string {
     '',
     '## 3. Поставщик',
     `Название: ${normalizeFact(product?.supplierName) || 'не указано'}`,
-    `Тип: ${normalizeFact(product?.supplierType) || 'не указан'}`,
+    `Тип: ${supplierTypeRu(product?.supplierType) || 'не указан'}`,
     `Рейтинг: ${normalizeFact(product?.supplierRating) || '—'}`,
     `Заказы: ${normalizeFact(product?.sold) || '—'}`,
     '',
     '## 4. Что подтвердить у поставщика',
     ...buyerChecks.map(q => `- ${q}`),
     '',
-    '## 5. Готовые вопросы поставщику',
-    ...qs.map(q => `- ${q}`),
-    '',
-    '## 6. Что проверить на образце',
+    '## 5. Что проверить на образце',
     ...sampleChecks.map(q => `- ${q}`),
     '',
-    '## 7. Фото, которые нужно запросить',
+    '## 6. Фото, которые нужно запросить',
     '- общий вид выбранного SKU',
     '- крупно материал, рабочие элементы и важные детали',
     '- упаковка и маркировка',
     '- комплектация в одном кадре',
     '- фото рядом с линейкой/размером, если это влияет на закупку',
     '',
-    '## 8. Риски',
+    '## 7. Риски',
     ...uniq([...x.readiness.risks, ...x.sku.skuRisks, ...rules.redFlags], 12).map(r => `- ${r}`),
     '',
-    '## 9. Решение',
+    '## 8. Решение',
     x.readiness.canRecommendSample ? 'Можно запрашивать данные для образца. Партию не закупать до проверки веса, упаковки и образца.' : 'Пока не готово к закупке: закрыть недостающие данные поставщика.',
   ].join('\n');
 }
@@ -1192,25 +1233,77 @@ export function buildSampleChecklist(product: any): string {
   const x = buildDecisionContext(product);
   const rules = getProcurementRules(product, x);
   const sku = x.sku.recommendedSampleSku || 'базовый/самый массовый SKU';
+  const params = uniq(x.sku.ambiguousParams ?? [], 8);
+
+  if (isUmbrella(product, x)) {
+    const beforeSample = uniq([
+      'подтвердить цену выбранного SKU',
+      'получить вес и габариты упаковки',
+      params.length ? `уточнить параметры SKU ${params.join(' / ')}` : '',
+      'запросить фото открытого и закрытого зонта',
+      'уточнить наличие чехла',
+    ].filter(Boolean), 8);
+    const sampleChecks = [
+      'работу механизма',
+      'прочность спиц',
+      'качество ручки',
+      'ткань купола',
+      'швы',
+      'водоотталкивание',
+      'размер в раскрытом виде',
+      'длину в сложенном виде',
+      'упаковку',
+    ];
+    const redFlags = cleanRuleList([...x.readiness.risks, ...x.sku.skuRisks, ...rules.redFlags], product, x, 10);
+    return [
+      '# Чек-лист образца',
+      '',
+      '## До заказа образца',
+      ...beforeSample.map(v => `- ${v}`),
+      '',
+      '## Какой SKU взять',
+      `- ${sku}`,
+      '- Количество: 1–2 единицы, не партия',
+      '',
+      '## На образце проверить',
+      ...sampleChecks.map(v => `- ${v}`),
+      '',
+      '## Какие фото сделать',
+      '- зонт раскрыт полностью',
+      '- зонт в сложенном виде',
+      '- кнопка и ручка крупно',
+      '- спицы и швы купола',
+      '- чехол и упаковка',
+      '',
+      '## Красные флаги',
+      ...(redFlags.length ? redFlags.map(v => `- ${v}`) : ['- поставщик не подтверждает вес, упаковку или выбранный SKU']),
+      '',
+      '## Решение после образца',
+      '- брать в тестовую партию',
+      '- доработать SKU/упаковку/контент',
+      '- не брать',
+    ].join('\n');
+  }
+
   const beforeSample = uniq([
     ...x.readiness.missingData,
-    ...rules.buyerMustCheck.slice(0, 8),
+    ...rules.buyerMustCheck.slice(0, 6),
     'подтвердить цену выбранного SKU',
     'получить реальные фото товара и упаковки',
-  ], 12);
-  const sampleChecks = cleanRuleList(rules.sampleMustCheck, product, x, 14);
+  ], 8);
+  const sampleChecks = cleanRuleList(rules.sampleMustCheck, product, x, 10);
   const measureItems = cleanRuleList([
     'вес с упаковкой',
     'габариты индивидуальной упаковки',
-    ...rules.cargoMustAsk.filter(v => /длина|диаметр|объ[её]м|кабель|габарит|вес|количество|размер|упаков/i.test(v)).slice(0, 8),
-  ], product, x, 10);
+    ...rules.cargoMustAsk.filter(v => /длина|диаметр|объ[её]м|кабель|габарит|вес|количество|размер|упаков/i.test(v)).slice(0, 5),
+  ], product, x, 7);
   const photoItems = cleanRuleList([
     'общий вид выбранного SKU',
     'крупно материал, рабочие элементы и важные детали',
     'комплектация в одном кадре',
     'индивидуальная упаковка и маркировка',
-  ], product, x, 8);
-  const redFlags = cleanRuleList([...x.readiness.risks, ...x.sku.skuRisks, ...rules.redFlags], product, x, 14);
+  ], product, x, 6);
+  const redFlags = cleanRuleList([...x.readiness.risks, ...x.sku.skuRisks, ...rules.redFlags], product, x, 10);
   return [
     '# Чек-лист образца',
     '',
