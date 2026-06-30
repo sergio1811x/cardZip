@@ -21,7 +21,7 @@ function detailKeyboard(jobId: string) {
 function topLevelKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${jobId}`)],
-    [Markup.button.callback('💬 Текст поставщику', 'supplier_questions'), Markup.button.callback('📦 Данные товара', `product_detail_${jobId}`)],
+    [Markup.button.callback('💬 Текст поставщику', `supplier_questions_${jobId}`), Markup.button.callback('📦 Данные товара', `product_detail_${jobId}`)],
     [Markup.button.callback('📁 Материалы', `materials_${jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
@@ -52,78 +52,106 @@ export function buildMessage3(status: any): { text: string; keyboard: any } {
 export function buildEconomicsDetail(product: any, jobId: string): { text: string; keyboard: any } {
   const x = buildDecisionContext(product);
   const lines = ['💸 <b>Предварительная себестоимость</b>', ''];
-  if (!x.price.canCalculateCost) lines.push('Себестоимость не рассчитана — нет цены товара.');
-  else {
-    lines.push(`Цена товара: ${x.price.displayPriceText}`);
-    if (x.cost.purchaseRub) lines.push(`Закупка: ${x.cost.purchaseRub.toLocaleString('ru-RU')} ₽`);
-    if (x.cost.costWithoutCargoRub) lines.push(`Себестоимость без карго: ${x.cost.costWithoutCargoRub.toLocaleString('ru-RU')} ₽`);
-    if (x.cost.cargoRub) lines.push(`Карго: ${x.cost.cargoRub.toLocaleString('ru-RU')} ₽`);
-    else lines.push('Карго: не рассчитано — нужен вес с упаковкой.');
-    if (x.cost.totalCostRub) lines.push(`Итого с карго: ${x.cost.totalCostRub.toLocaleString('ru-RU')} ₽`);
-    if (x.cost.canShowRoi) {
-      lines.push(`Сценарная прибыль: ${x.cost.scenarioProfitRub?.toLocaleString('ru-RU')} ₽`);
-      lines.push(`Сценарный ROI: ${x.cost.scenarioRoiPercent}%`);
-      lines.push('Это расчёт по цене, введённой пользователем, не подтверждённая рыночная цена.');
-    } else {
-      lines.push('ROI не считаю — рынок и цена продажи не заданы.');
+  if (!x.price.canCalculateCost) {
+    lines.push('Цена товара не подтверждена — себестоимость пока не считаю.');
+    lines.push('', 'Что сделать сейчас: уточните цену выбранного SKU у поставщика.');
+  } else {
+    lines.push('<b>Цена товара</b>');
+    lines.push(`${x.price.displayPriceText}${x.cost.purchaseRub ? ` ≈ ${x.cost.purchaseRub.toLocaleString('ru-RU')} ₽` : ''}`);
+    lines.push('');
+    lines.push('<b>Сейчас можно посчитать</b>');
+    if (x.cost.purchaseRub) lines.push(`• товар: ${x.cost.purchaseRub.toLocaleString('ru-RU')} ₽`);
+    if (x.cost.costWithoutCargoRub && x.cost.purchaseRub) {
+      const overhead = x.cost.costWithoutCargoRub - x.cost.purchaseRub;
+      lines.push(`• банк / подготовка / фулфилмент: ~${Math.max(0, overhead).toLocaleString('ru-RU')} ₽`);
+      lines.push(`• итого без карго: ~${x.cost.costWithoutCargoRub.toLocaleString('ru-RU')} ₽ / шт`);
     }
+    lines.push('');
+    lines.push('<b>Пока не рассчитано</b>');
+    if (!x.cost.cargoRub) lines.push('• карго — нет веса с упаковкой');
+    else lines.push(`• карго: ~${x.cost.cargoRub.toLocaleString('ru-RU')} ₽`);
+    lines.push('• ROI — рынок и цена продажи не заданы');
+    if (x.weight.source === 'category_default') lines.push('• грубый ориентир веса не использую для финального расчёта');
     if (x.cost.warnings.length) lines.push('', ...x.cost.warnings.map((w) => `⚠️ ${w}`));
+    lines.push('', '<b>Что сделать сейчас:</b> уточните вес у поставщика или укажите вес вручную.');
   }
-  lines.push('', 'Что сделать:');
-  lines.push('1. Уточните вес у поставщика.');
-  lines.push(`2. Или нажмите «⚖️ Указать вес вручную».`);
-  return { text: lines.join('\n'), keyboard: detailKeyboard(jobId) };
+  return {
+    text: lines.join('\n'),
+    keyboard: Markup.inlineKeyboard([
+      [Markup.button.callback('⚖️ Указать вес', `weight_input:${jobId}`), Markup.button.callback('💬 Спросить поставщика', `supplier_questions_${jobId}`)],
+      [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
+      [Markup.button.callback('🔄 Новый товар', 'new_search')],
+    ]),
+  };
 }
 
 export function buildProcurementPlanDetail(product: any, jobId: string): { text: string; keyboard: any } {
   const x = buildDecisionContext(product);
   const flow = String(product?.procurementStatus ?? product?.procurement_status ?? '').toLowerCase();
-  const questionsSent = /waiting_supplier_reply|supplier_reply_received|ready_for_sample|sample_ordered|sample_received|ready_for_test_batch/.test(flow);
-  const replyReceived = !!product?.supplierAnswer || /supplier_reply_received|ready_for_sample|sample_ordered|sample_received|ready_for_test_batch/.test(flow);
+  const questionsOpened = /questions_opened|waiting_supplier_reply|supplier_reply_added|supplier_reply_received|weight_added|sample_ordered|sample_received|ready_for_test_batch/.test(flow);
+  const waitingReply = /questions_opened|waiting_supplier_reply/.test(flow);
+  const replyReceived = !!product?.supplierAnswer || /supplier_reply_added|supplier_reply_received|weight_added|sample_ordered|sample_received|ready_for_test_batch/.test(flow);
   const hasWeight = x.weight.canUseForCargo;
-  const status = replyReceived ? (hasWeight ? '🧪 Готов к плану образца' : '✅ Ответ получен, нужен вес') : questionsSent ? '⏳ Ждём ответ поставщика' : '🟡 Готов к запросу данных';
-  const step1Status = questionsSent ? '✅ вопросы отправлены / можно ждать ответ' : '⏳ нужно сделать';
-  const step2Status = replyReceived ? '✅ ответ внесён' : questionsSent ? '⏳ ждём ответ поставщика' : '🔒 сначала отправьте вопросы';
-  const step3Status = hasWeight ? '✅ вес есть, себестоимость можно обновлять' : replyReceived ? '⏳ проверьте, есть ли вес в ответе' : '🔒 ждёт вес от поставщика';
-  const step4Status = replyReceived || hasWeight ? '🧪 можно готовить заказ 1–2 образцов' : '🔒 после ответа поставщика';
+
+  const productStatus = replyReceived
+    ? (hasWeight ? '🧪 ответ получен, можно готовить образец' : '✅ ответ получен, нужен вес/габариты')
+    : questionsOpened
+      ? '⏳ ждём ответ поставщика'
+      : '🟡 нужно запросить данные';
+
+  const mainAction = replyReceived
+    ? (hasWeight ? 'Откройте план образца и проверьте товар руками перед партией.' : 'Проверьте ответ поставщика. Если веса нет — укажите его вручную или запросите повторно.')
+    : questionsOpened
+      ? 'Когда поставщик ответит — нажмите «📥 Внести ответ» и вставьте текст.'
+      : 'Нажмите «1️⃣ Отправить вопросы» и скопируйте текст в чат 1688.';
 
   const lines = [
     '🚀 <b>Дальнейший план закупки</b>',
     '',
-    `Статус товара: ${status}`,
+    `Статус товара: ${productStatus}`,
     `Готовность: ${x.readiness.score}/100`,
     '',
-    '<b>1️⃣ Спросить поставщика</b>',
-    'Зачем: без веса, упаковки и точного SKU нельзя понять реальную себестоимость.',
-    'Что получим: цену SKU, вес, габариты, материал, комплектацию.',
-    `Статус: ${step1Status}`,
+    '<b>Сейчас главный шаг</b>',
+    replyReceived ? (hasWeight ? '4️⃣ Заказать и проверить образец' : '3️⃣ Обновить себестоимость после веса') : questionsOpened ? '2️⃣ Внести ответ поставщика' : '1️⃣ Спросить поставщика',
     '',
-    '<b>2️⃣ Внести ответ поставщика</b>',
-    'Зачем: я извлеку из ответа вес, габариты, цену, MOQ и обновлю документы.',
-    `Статус: ${step2Status}`,
+    '<b>Зачем:</b>',
+    replyReceived
+      ? 'после ответа можно закрыть риски по цене, весу, упаковке и понять, готов ли товар к образцу.'
+      : 'без веса, упаковки и точного SKU нельзя понять реальную себестоимость и безопасно заказать образец.',
     '',
-    '<b>3️⃣ Обновить себестоимость</b>',
-    'Зачем: после веса можно посчитать карго, бюджет образца и тестовой закупки.',
-    `Статус: ${step3Status}`,
+    '<b>Что получим:</b>',
+    '• цену выбранного SKU',
+    '• вес с упаковкой',
+    '• габариты упаковки',
+    '• материал и комплектацию',
+    '• реальные фото/видео, если поставщик их даст',
     '',
-    '<b>4️⃣ Заказать образец</b>',
-    'Зачем: проверить качество, упаковку и заявленные свойства руками, а не по картинке.',
-    `Статус: ${step4Status}`,
+    '<b>Маршрут</b>',
+    `${questionsOpened ? '✅' : '⏳'} 1. Отправить вопросы поставщику`,
+    `${replyReceived ? '✅' : questionsOpened ? '⏳' : '🔒'} 2. Внести ответ поставщика`,
+    `${hasWeight ? '✅' : replyReceived ? '⏳' : '🔒'} 3. Обновить себестоимость`,
+    `${replyReceived || hasWeight ? '🧪' : '🔒'} 4. Заказать образец`,
+    '⚪ 5. Принять решение: тестировать · доработать · не брать',
     '',
-    '<b>5️⃣ Принять решение</b>',
-    'Варианты: заказать образец · отправить в доработку · не брать товар.',
-    '',
-    '<b>Сейчас лучшее действие:</b>',
-    questionsSent ? 'Если поставщик уже ответил — нажмите «2️⃣ Внести ответ».' : 'Нажмите «1️⃣ Отправить вопросы» и скопируйте текст в чат 1688.',
+    '<b>Что сделать сейчас:</b>',
+    mainAction,
   ];
-  const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('1️⃣ Отправить вопросы', 'supplier_questions')],
-    [Markup.button.callback('2️⃣ Внести ответ', 'supplier_confirm'), Markup.button.callback('3️⃣ Указать вес', `weight_input:${jobId}`)],
-    [Markup.button.callback('4️⃣ План образца', `sample_detail_${jobId}`), Markup.button.callback('💸 Себестоимость', `econ_detail_${jobId}`)],
-    [Markup.button.callback('📁 Материалы', `materials_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
-    [Markup.button.callback('🔄 Новый товар', 'new_search')],
-  ]);
-  return { text: lines.join('\n'), keyboard };
+
+  const rows: any[] = [];
+  if (!questionsOpened) {
+    rows.push([Markup.button.callback('1️⃣ Отправить вопросы', `supplier_questions_${jobId}`)]);
+    rows.push([Markup.button.callback('📁 Материалы', `materials_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)]);
+  } else if (!replyReceived) {
+    rows.push([Markup.button.callback('📥 Внести ответ', `supplier_confirm_${jobId}`)]);
+    rows.push([Markup.button.callback('💬 Показать вопросы', `supplier_questions_${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)]);
+    rows.push([Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)]);
+  } else {
+    rows.push([Markup.button.callback('💸 Себестоимость', `econ_detail_${jobId}`), Markup.button.callback('🧪 План образца', `sample_detail_${jobId}`)]);
+    rows.push([Markup.button.callback('⚖️ Указать вес вручную', `weight_input:${jobId}`), Markup.button.callback('📁 Материалы', `materials_${jobId}`)]);
+    rows.push([Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)]);
+  }
+  rows.push([Markup.button.callback('🔄 Новый товар', 'new_search')]);
+  return { text: lines.join('\n'), keyboard: Markup.inlineKeyboard(rows) };
 }
 
 export function buildWbDetail(product: any, jobId: string): { text: string; keyboard: any } {

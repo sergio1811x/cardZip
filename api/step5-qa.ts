@@ -257,8 +257,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Only update the credits line in the already validated artifact.
     finalText = applyCreditsLine(finalText, freshStatus.creditsRemaining ?? 0);
 
+    const productWithProcurementState = { ...(product as any), procurementStatus: 'analyzed' };
+
     await supabase.from('jobs').update({
-      procurement_status: decisionContext.readiness.canRecommendSample ? 'ready_for_sample' : 'questions_ready',
+      procurement_status: 'analyzed',
       procurement_score: decisionContext.readiness.score,
       procurement_pipeline: {
         product_data: true,
@@ -272,7 +274,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
       result_json: {
         ...result,
-        product,
+        product: productWithProcurementState,
         generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, infographicText, riskChecklistText, sampleRecommendationText },
         finalUserCard: finalText,
         qaResult,

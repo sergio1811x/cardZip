@@ -61,7 +61,7 @@ export async function handleLast(ctx: Context): Promise<void> {
   const buttons: any[][] = [
     [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${lastJob.id}`)],
     [
-      Markup.button.callback('💬 Текст поставщику', 'supplier_questions'),
+      Markup.button.callback('💬 Текст поставщику', `supplier_questions_${lastJob.id}`),
       Markup.button.callback('📦 Данные товара', `product_detail_${lastJob.id}`),
     ],
     [

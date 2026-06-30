@@ -112,7 +112,7 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
 
   const buttons = [];
   buttons.push([Markup.button.callback('🚀 Дальнейший план', `proc_plan_${job.id}`)]);
-  buttons.push([Markup.button.callback('💬 Текст поставщику', 'supplier_questions'), Markup.button.callback('📦 Данные товара', `product_detail_${job.id}`)]);
+  buttons.push([Markup.button.callback('💬 Текст поставщику', `supplier_questions_${job.id}`), Markup.button.callback('📦 Данные товара', `product_detail_${job.id}`)]);
   buttons.push([Markup.button.callback('📁 Материалы', `materials_${job.id}`)]);
   buttons.push([Markup.button.callback('⬅️ К списку', 'my_analyses')]);
 

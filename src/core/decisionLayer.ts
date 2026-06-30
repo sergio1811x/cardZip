@@ -35,7 +35,8 @@ export type SkuDecision = {
   skuSummary: string;
   skuCount: number;
   shownSkuCount: number;
-  skuVariantsNormalized: Array<{ raw: string; label: string; priceYuan: number | null; packCount?: number; size?: string; color?: string; components?: string[] }>;
+  skuVariantsNormalized: Array<{ raw: string; label: string; priceYuan: number | null; packCount?: number; size?: string; color?: string; components?: string[]; parameter?: string }>;
+  ambiguousParams?: string[];
   colorOptions?: string[];
   sizeOptions?: string[];
   componentOptions?: string[];
@@ -137,6 +138,7 @@ const CATEGORY_BUYER_CHECKS: Record<string, string[]> = {
   electronics: ['точная модель/SKU', 'тип питания/разъём', 'комплектация', 'мощность/напряжение, если товар электрический', 'батарея, если есть', 'инструкция и сертификаты', 'вес с упаковкой'],
   small_appliance: ['напряжение', 'мощность', 'тип вилки', 'питание от сети или аккумулятор', 'реальный объём/ёмкость', 'режимы работы', 'есть ли слив воды', 'длина кабеля', 'комплектация', 'инструкция', 'сертификаты/декларации', 'гарантия', 'видео работы'],
   sleep_accessory: ['материал и мягкость', 'форма 3D-углублений', 'не давит ли на глаза', 'затемнение на свету', 'качество резинки/ремешка', 'запах после распаковки', 'швы и края', 'упаковка OPP/коробка', 'вес и габариты упаковки'],
+  umbrella: ['вес с упаковкой', 'длина в сложенном виде', 'диаметр купола в раскрытом виде', 'количество спиц', 'материал купола', 'материал спиц', 'тип механизма: автоматическое открытие или открытие+закрытие', 'есть ли чехол в комплекте', 'подтвердить UPF50+, если заявлено', 'реальные фото открытого и закрытого зонта', 'фото упаковки'],
   beauty: ['состав', 'срок годности', 'документы/декларации', 'маркировка', 'упаковка', 'запах и консистенция образца'],
   kids: ['сертификаты', 'возрастная маркировка', 'мелкие детали', 'безопасность материалов документально', 'упаковка и инструкция'],
   passive_insect_trap: ['точная комплектация выбранного SKU', 'материал корпуса', 'размер одной ловушки', 'вес упаковки выбранной комплектации', 'есть ли приманка в комплекте', 'способ крепления/подвешивания', 'реальные фото товара и упаковки'],
@@ -150,7 +152,120 @@ const CATEGORY_MUST_NOT_ASK: Record<string, string[]> = {
   electronics: ['рукав', 'длина стельки', 'размерная сетка одежды', 'состав ткани'],
   small_appliance: ['рукав', 'длина стельки', 'подошва', 'стелька', 'состав ткани в процентах', 'размерная сетка одежды', 'консистенция', 'срок годности'],
   sleep_accessory: ['срок годности', 'консистенция', 'подошва', 'дно', 'корпус', 'герметичность упаковки как обязательное', 'мощность', 'напряжение', 'тип вилки', 'аккумулятор'],
+  umbrella: ['длина стельки', 'подошва', 'стелька', 'рукав', 'мощность', 'напряжение', 'аккумулятор', 'тип вилки', 'срок годности', 'консистенция'],
   passive_insect_trap: ['мощность', 'напряжение', '220V', 'тип вилки', 'аккумулятор', 'зарядка', 'тип лампы', 'электрическая лампа', 'ультразвуковая'],
+};
+
+
+type ProcurementRules = {
+  productKind: string;
+  buyerMustCheck: string[];
+  sampleMustCheck: string[];
+  cargoMustAsk: string[];
+  seoAllowedClaims: string[];
+  seoForbiddenClaims: string[];
+  infographicSlides: Array<{ title: string; text: string; visual: string }>;
+  redFlags: string[];
+};
+
+const GENERIC_PROCUREMENT_RULES: ProcurementRules = {
+  productKind: 'generic_product',
+  buyerMustCheck: ['цена выбранного SKU', 'вес с упаковкой', 'габариты упаковки', 'материал', 'комплектация', 'реальные фото выбранного SKU и упаковки', 'MOQ и срок отгрузки'],
+  sampleMustCheck: ['соответствие выбранному SKU', 'качество материала', 'комплектация', 'упаковка', 'вес и габариты', 'запах/дефекты после распаковки', 'заявленные свойства на образце'],
+  cargoMustAsk: ['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'вес транспортной коробки', 'габариты транспортной коробки', 'фото индивидуальной и транспортной упаковки', 'материал товара', 'код ТН ВЭД, если поставщик знает', 'есть ли батарейка / жидкость / порошок / магнит / стекло'],
+  seoAllowedClaims: ['тип товара', 'назначение', 'цвета/SKU', 'материал после подтверждения', 'комплектация после подтверждения'],
+  seoForbiddenClaims: ['сертифицированный без документов', '100% эффект без теста', 'безопасный без документов', 'оригинальный бренд без подтверждения'],
+  infographicSlides: [
+    { title: 'главный', text: 'Показать товар и основной сценарий применения', visual: 'товар крупно на чистом фоне' },
+    { title: 'сценарии применения', text: 'Где и зачем использовать товар', visual: '3–4 иконки или фото сценариев применения' },
+    { title: 'конструкция/детали', text: 'Материал и важные элементы — подтвердить на образце', visual: 'крупные детали товара' },
+    { title: 'SKU', text: 'Выберите нужный цвет, размер или комплектацию', visual: 'варианты SKU из карточки' },
+    { title: 'упаковка', text: 'Упаковку, вес и габариты подтвердить у поставщика', visual: 'фото упаковки и комплектации' },
+  ],
+  redFlags: ['поставщик не подтверждает вес', 'не даёт реальные фото', 'цена меняется после уточнения', 'SKU на фото отличается от выбранного', 'материал не подтверждается', 'заявленные свойства без тестов/документов'],
+};
+
+const PROCUREMENT_RULES: Record<string, ProcurementRules> = {
+  umbrella: {
+    productKind: 'umbrella',
+    buyerMustCheck: ['вес с упаковкой', 'длина в сложенном виде', 'диаметр купола в раскрытом виде', 'количество спиц', 'материал купола', 'материал спиц', 'тип механизма: автоматическое открытие или открытие+закрытие', 'есть ли чехол в комплекте', 'подтвердить UPF50+/защиту от солнца, если заявлено', 'реальные фото открытого и закрытого зонта', 'фото упаковки'],
+    sampleMustCheck: ['работает ли кнопка', 'не заедает ли механизм открытия/закрытия', 'прочность спиц', 'люфт ручки', 'качество швов купола', 'водоотталкивание на образце', 'размер в раскрытом виде', 'длина в сложенном виде', 'наличие чехла', 'качество упаковки'],
+    cargoMustAsk: ['вес с упаковкой', 'габариты упаковки', 'длина в сложенном виде', 'диаметр купола', 'количество спиц', 'материал купола и спиц', 'наличие чехла', 'фото открытого/закрытого зонта и упаковки'],
+    seoAllowedClaims: ['автоматический механизм после проверки образца', 'складной формат', 'цвет/дизайн', 'дождь/солнце как сценарий применения'],
+    seoForbiddenClaims: ['100% защита от дождя без теста', 'UPF50+ без документов', 'ветроустойчивый без теста', 'премиальный без подтверждения'],
+    infographicSlides: [
+      { title: 'главный', text: 'Автоматический зонт от дождя и солнца', visual: 'раскрытый купол, ручка и общий вид' },
+      { title: 'компактный формат', text: 'Складной зонт удобно брать с собой', visual: 'зонт в сложенном виде рядом с сумкой' },
+      { title: 'механизм', text: 'Кнопка автоматического открытия', visual: 'крупно кнопка и ручка; проверить механизм на образце' },
+      { title: 'купол и цвета', text: 'Градиентный купол и варианты цвета', visual: 'раскрытый купол + цвета/SKU' },
+      { title: 'чехол и упаковка', text: 'Чехол и упаковку подтвердить у поставщика', visual: 'чехол, упаковка, размеры и вес' },
+    ],
+    redFlags: ['нет веса/габаритов', 'не подтверждён механизм', 'нет фото открытого зонта', 'нет чехла, хотя он заявлен', 'UPF/ветроустойчивость без документов или теста', 'слабая упаковка для доставки'],
+  },
+  sleep_mask: {
+    productKind: 'sleep_mask',
+    buyerMustCheck: ['материал лицевой части', 'материал внутренней части', 'размер маски', 'вес с упаковкой', 'тип упаковки: OPP или коробка', 'регулируется ли ремешок', 'реальные фото выбранного цвета и упаковки', 'подтверждение 3D-формы', 'подтверждение затемнения'],
+    sampleMustCheck: ['мягкость материала', 'форма 3D-углублений', 'не давит ли на глаза', 'не давит ли на нос', 'качество резинки/ремешка', 'затемнение на свету', 'запах после распаковки', 'швы и края', 'комфорт при носке 10–15 минут', 'упаковка OPP/коробка'],
+    cargoMustAsk: ['вес с упаковкой', 'габариты упаковки', 'тип упаковки OPP/коробка', 'количество в транспортной коробке', 'вес/габариты коробки', 'фото упаковки выбранного SKU'],
+    seoAllowedClaims: ['3D-форма после проверки образца', 'для сна дома и в поездках', 'мягкий материал после подтверждения', 'несколько цветов/упаковок'],
+    seoForbiddenClaims: ['100% затемнение без теста', 'лечебный эффект', 'гипоаллергенная без документов', 'полностью безопасна для детей без документов'],
+    infographicSlides: [
+      { title: 'главный', text: 'Мягкая 3D-маска для сна', visual: 'маска на лице или рядом с подушкой' },
+      { title: 'сценарии применения', text: 'Для дома, поездок, самолёта и дневного отдыха', visual: 'иконки дом / поезд / самолёт / отдых' },
+      { title: '3D-форма', text: 'Не давит на глаза и ресницы', visual: 'крупно углубления для глаз' },
+      { title: 'затемнение', text: 'Помогает закрыть глаза от света', visual: 'сравнение свет/темнота без обещания 100%' },
+      { title: 'цвета и упаковка', text: 'Выберите цвет и вариант упаковки', visual: 'цвета/SKU и упаковка OPP/коробка' },
+    ],
+    redFlags: ['сильный запах', 'давит на глаза/нос', 'плохая резинка', 'швы царапают кожу', 'не подтверждён материал', 'упаковка отличается от выбранного SKU'],
+  },
+  mini_washer: {
+    productKind: 'mini_washer',
+    buyerMustCheck: ['мощность', 'напряжение', 'тип вилки', 'длина кабеля', 'реальный объём 4 л', 'режимы работы', 'есть ли слив воды', 'комплектация', 'инструкция', 'сертификаты/декларации', 'гарантия', 'видео работы', 'вес с упаковкой', 'габариты упаковки'],
+    sampleMustCheck: ['включается ли от нужного напряжения', 'не течёт ли корпус', 'как работает слив воды', 'шум и вибрация', 'качество пластика', 'фактический объём', 'отстирывает ли носки/бельё', 'длина кабеля', 'комплектация', 'инструкция', 'упаковка после доставки'],
+    cargoMustAsk: ['вес с упаковкой', 'габариты упаковки', 'вес/габариты транспортной коробки', 'напряжение, мощность и тип вилки', 'есть ли аккумулятор или питание только от сети', 'фото комплектации', 'инструкция и документы', 'видео работы'],
+    seoAllowedClaims: ['портативный формат', 'для небольших вещей', 'объём 4 л после подтверждения', 'несколько цветов/моделей'],
+    seoForbiddenClaims: ['дезинфекция без документов', 'стерилизация без документов', 'безопасна для детей без документов', 'профессиональная без подтверждения', 'синий свет как доказанная дезинфекция без документов'],
+    infographicSlides: [
+      { title: 'главный', text: 'Портативная мини-стиральная машина 4 л', visual: 'товар крупно рядом с носками/бельём для масштаба' },
+      { title: 'для небольших вещей', text: 'Для белья, носков и детских вещей', visual: 'иконки бельё / носки / детские вещи / дача' },
+      { title: 'управление и питание', text: 'Проверьте мощность, напряжение и тип вилки', visual: 'кнопки управления, кабель питания и вилка' },
+      { title: 'ёмкость и слив', text: 'Объём и слив воды подтвердить у поставщика', visual: 'крышка, ёмкость/барабан, слив' },
+      { title: 'комплектация', text: 'Проверьте комплектацию и инструкцию', visual: 'коробка, кабель, инструкция, аксессуары' },
+    ],
+    redFlags: ['нет видео работы', 'не подтверждено напряжение/вилка', 'нет информации о сливе', 'нет инструкции', 'заявлена дезинфекция без документов', 'корпус течёт или сильная вибрация', 'нет гарантий/условий замены'],
+  },
+  footwear: {
+    productKind: 'footwear',
+    buyerMustCheck: ['размерная сетка', 'длина стельки', 'материал верха', 'материал подошвы', 'вес пары с упаковкой', 'размеры упаковки одной пары', 'запах EVA/PU после распаковки', 'реальные фото пары', 'упаковка', 'MOQ по цветам и размерам', 'можно ли заказать образец'],
+    sampleMustCheck: ['соответствие размеру', 'длина стельки', 'удобство посадки', 'запах материала', 'качество клея/швов', 'скользкость подошвы', 'вес пары', 'упаковка', 'дефекты на паре', 'соответствие фото поставщика'],
+    cargoMustAsk: ['вес пары с коробкой/упаковкой', 'габариты коробки одной пары', 'количество пар в транспортной коробке', 'вес/габариты транспортной коробки', 'фото упаковки'],
+    seoAllowedClaims: ['тип обуви', 'материал после подтверждения', 'размеры из SKU', 'цвета из SKU', 'сценарии носки'],
+    seoForbiddenClaims: ['ортопедические без документов', 'лечебные свойства', 'антибактериальные без документов', 'противоскользящие как факт без теста'],
+    infographicSlides: [
+      { title: 'главный', text: 'Показать пару и назначение', visual: 'обувь на ноге или пара на чистом фоне' },
+      { title: 'материал и подошва', text: 'Материал и подошву проверить на образце', visual: 'крупно верх, подошва и фактура' },
+      { title: 'размеры', text: 'Размерную сетку подтвердить по длине стельки', visual: 'таблица размеров после подтверждения' },
+      { title: 'цвета', text: 'Доступные цвета из SKU', visual: 'цветовые варианты' },
+      { title: 'упаковка', text: 'Фото упаковки запросить у поставщика', visual: 'коробка/пакет, маркировка' },
+    ],
+    redFlags: ['нет длины стельки', 'нет веса пары', 'сильный запах', 'скользкая подошва', 'поставщик не даёт реальные фото', 'цвет/размер отличается от SKU'],
+  },
+  passive_insect_trap: {
+    productKind: 'passive_insect_trap',
+    buyerMustCheck: ['размер одной ловушки', 'материал', 'вес выбранной комплектации', 'количество штук в комплекте', 'есть ли приманка в комплекте', 'способ крепления/подвешивания', 'реальные фото товара и упаковки'],
+    sampleMustCheck: ['размер и материал', 'комплектация', 'как крепится/подвешивается', 'есть ли приманка', 'запах/липкость/качество поверхности, если применимо', 'упаковка', 'вес и габариты'],
+    cargoMustAsk: ['вес выбранной комплектации', 'габариты упаковки', 'количество штук в комплекте', 'количество комплектов в коробке', 'фото упаковки'],
+    seoAllowedClaims: ['пассивная ловушка', 'материал', 'комплектация', 'способ крепления'],
+    seoForbiddenClaims: ['электрическая без подтверждения', 'ультразвуковая без подтверждения', 'безопасна для детей/животных без документов', '100% избавляет от насекомых'],
+    infographicSlides: [
+      { title: 'главный', text: 'Пассивная ловушка для насекомых', visual: 'товар крупно + сценарий размещения' },
+      { title: 'как использовать', text: 'Поставить, подвесить или закрепить — уточнить по модели', visual: 'варианты размещения' },
+      { title: 'комплектация', text: 'Количество штук в наборе', visual: 'все элементы комплекта' },
+      { title: 'материал', text: 'Материал и размер подтвердить', visual: 'крупный план поверхности/крепления' },
+      { title: 'упаковка', text: 'Запросите фото упаковки', visual: 'индивидуальная упаковка и коробка' },
+    ],
+    redFlags: ['появились электрические характеристики у пассивной ловушки', 'непонятная комплектация', 'нет размера/материала', 'нет фото упаковки'],
+  },
 };
 
 function asArray<T = any>(v: unknown): T[] { return Array.isArray(v) ? v as T[] : []; }
@@ -204,6 +319,7 @@ function categoryType(product: any, intel = getIntel(product)): string {
   // High-confidence overrides: these categories often get mislabeled as beauty/home/electronics by LLM.
   if (/мини[ -]?стирал|стиральн[а-яё ]*машин|портативн[а-яё ]*стирал|washing\s*machine|洗衣机|内衣洗衣/i.test(text)) return 'small_appliance';
   if (/маск[аи]\s+для\s+сна|3d[ -]?маск|sleep\s*mask|眼罩|睡眠眼罩|遮光眼罩/i.test(text)) return 'sleep_accessory';
+  if (/зонт|umbrella|雨伞|伞|傘/i.test(text)) return 'umbrella';
   if (raw) return raw;
   if (/鞋|сабо|сандал|тапоч|шл[её]пан|обув/.test(text)) return 'shoes';
   if (/плать|брюк|леггинс|футбол|одежд|衣|裤/.test(text)) return 'clothing';
@@ -227,18 +343,46 @@ function valueFromLabel(label: string, prefix: string): string | undefined {
 }
 
 function describeSkuDimensions(dims: string[]): string {
-  return dims.map(d => ({ color: 'цвет', size: 'размер', model: 'модель', packCount: 'количество штук', details: 'комплектация' } as Record<string, string>)[d] ?? d).join(' × ');
+  return dims.map(d => ({ color: 'цвет', size: 'размер', model: 'модель', packCount: 'количество штук', details: 'комплектация', parameter: 'параметр SKU' } as Record<string, string>)[d] ?? d).join(' × ');
 }
+
+function ambiguousUmbrellaSkuParam(raw: string, label: string, category: string): string | undefined {
+  if (category !== 'umbrella') return undefined;
+  const rawText = String(raw ?? '').trim();
+  const labelText = String(label ?? '').trim();
+  const direct = rawText.match(/^\D*(\d{1,3})\D*$/)?.[1];
+  const fromLabel = labelText.match(/Размер:\s*(\d{1,3})(?:\b|\s|;|$)/i)?.[1];
+  const value = direct || fromLabel;
+  if (!value) return undefined;
+  if (/см|cm|мм|mm|диаметр|купол|длина|размер\s+купола/i.test(rawText)) return undefined;
+  return value;
+}
+
+function normalizeSkuLabelForCategory(raw: string, label: string, category: string): { label: string; size?: string; parameter?: string } {
+  const parameter = ambiguousUmbrellaSkuParam(raw, label, category);
+  if (!parameter) return { label };
+  const cleaned = String(label || raw)
+    .replace(/(?:^|;\s*)Размер:\s*\d{1,3}(?=\s*;|$)/i, '')
+    .replace(/;{2,}/g, ';')
+    .replace(/^;\s*|;\s*$/g, '')
+    .trim();
+  const paramText = `Параметр SKU: ${parameter} — уточнить у поставщика`;
+  return { label: cleaned ? `${cleaned}; ${paramText}` : paramText, parameter };
+}
+
 
 export function buildSkuDecision(product: RawProduct1688 | any, intelligence?: ProductIntelligenceLike): SkuDecision {
   const variantsRaw = collectSku(product);
+  const skuCategory = categoryType(product, intelligence);
   const variants = variantsRaw.map((s, i) => {
     const raw = String(s?.name ?? s?.label ?? s?.skuName ?? s?.propertiesName ?? `SKU ${i + 1}`);
-    const label = normalizeSkuText(raw) || normalizeFact(raw) || `SKU ${i + 1}`;
+    const baseLabel = normalizeSkuText(raw) || normalizeFact(raw) || `SKU ${i + 1}`;
+    const fixed = normalizeSkuLabelForCategory(raw, baseLabel, skuCategory);
+    const label = fixed.label;
     const color = valueFromLabel(label, 'Цвет');
-    const size = extractShoeSize(raw) || extractLetterSize(raw) || valueFromLabel(label, 'Размер');
+    const size = fixed.parameter ? undefined : (extractShoeSize(raw) || extractLetterSize(raw) || valueFromLabel(label, 'Размер'));
     const components = uniq([...(extractSkuComponents(raw) ?? []), ...(valueFromLabel(label, 'Комплектация/детали')?.split(',').map(v => v.trim()) ?? [])], 8);
-    return { raw, label, priceYuan: skuPrice(s), packCount: detectPackCount(raw), size, color, components };
+    return { raw, label, priceYuan: skuPrice(s), packCount: detectPackCount(raw), size, color, components, parameter: fixed.parameter };
   }).filter(v => v.raw || v.label);
 
   const prices = variants.map(v => v.priceYuan).filter((p): p is number => !!p);
@@ -246,10 +390,12 @@ export function buildSkuDecision(product: RawProduct1688 | any, intelligence?: P
   const colorOptions = uniq(variants.map(v => v.color || '').filter(Boolean), 20);
   const sizeOptions = uniq(variants.map(v => v.size || '').filter(Boolean), 30);
   const componentOptions = uniq(variants.flatMap(v => v.components ?? []), 20);
+  const ambiguousParams = uniq(variants.map(v => v.parameter || '').filter(Boolean), 20);
 
   const dims: string[] = [];
   if (colorOptions.length || /цвет|color|白|黑|红|蓝|绿|黄|粉|хаки|бел|черн|чёрн|розов/i.test(rawText)) dims.push('color');
-  if (sizeOptions.length || /размер|size|尺码|码|\b(?:XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b|\b3[5-9]\b|\b4[0-9]\b/i.test(rawText) || categoryType(product, intelligence) === 'shoes') dims.push('size');
+  if (sizeOptions.length || (/размер|size|尺码|码|\b(?:XS|S|M|L|XL|XXL|XXXL|2XL|3XL)\b|\b3[5-9]\b|\b4[0-9]\b/i.test(rawText) && !ambiguousParams.length) || categoryType(product, intelligence) === 'shoes') dims.push('size');
+  if (ambiguousParams.length) dims.push('parameter');
   if (/модель|version|款|型号|经典|普通|基础|高版本/i.test(rawText)) dims.push('model');
   const isMultiPack = variants.some(v => !!v.packCount);
   if (isMultiPack) dims.push('packCount');
@@ -263,6 +409,7 @@ export function buildSkuDecision(product: RawProduct1688 | any, intelligence?: P
   if (colorOptions.length) parts.push(`цвета: ${colorOptions.slice(0, 6).join(', ')}${colorOptions.length > 6 ? '…' : ''}`);
   if (numericSizes.length) parts.push(`размеры ${numericSizes[0]}–${numericSizes[numericSizes.length - 1]}`);
   else if (letterSizes.length) parts.push(`размеры ${letterSizes.slice(0, 8).join(', ')}`);
+  if (ambiguousParams.length) parts.push(`параметр SKU: ${ambiguousParams.slice(0, 8).join(', ')} — уточнить у поставщика`);
   if (componentOptions.length) parts.push(`детали: ${componentOptions.slice(0, 4).join(', ')}`);
   if (/маломер|偏小一码/.test(rawText)) parts.push('маломерит на 1 размер');
   if (prices.length) parts.push(`цена по SKU ${rangeText(Math.min(...prices), Math.max(...prices))}`);
@@ -274,6 +421,7 @@ export function buildSkuDecision(product: RawProduct1688 | any, intelligence?: P
     ...(variants.length > 1 ? ['нужно выбрать конкретный SKU перед расчётом'] : []),
     ...(isMultiPack ? ['цена и вес зависят от комплектации'] : []),
     ...(uniqueDims.includes('details') ? ['проверить комплектацию/детали выбранного SKU'] : []),
+    ...(ambiguousParams.length ? [`уточнить значение параметра SKU: ${ambiguousParams.slice(0, 4).join(', ')}`] : []),
     ...(/маломер|偏小一码/.test(rawText) ? ['поставщик указывает риск маломерности'] : []),
   ], 8);
   return {
@@ -285,6 +433,7 @@ export function buildSkuDecision(product: RawProduct1688 | any, intelligence?: P
     colorOptions,
     sizeOptions,
     componentOptions,
+    ambiguousParams,
     isMultiPack,
     needsSelection: variants.length > 1,
     priceText: prices.length ? `Цена по SKU: ${rangeText(Math.min(...prices), Math.max(...prices))}` : undefined,
@@ -322,8 +471,7 @@ export function buildWeightDecision(product: RawProduct1688 | any, intelligence?
   if (skipCategoryDefaultWeight(product, cat)) {
     return { weightKg: null, displayText: 'Вес: не указан. Ориентир по категории не применён — товар объёмный/технический; вес нужно уточнить у поставщика.', source: 'missing', isEstimated: false, canUseForCargo: false, canUseForRoi: false, reason: 'Для объёмной техники категорийный вес может вводить в заблуждение.' };
   }
-  const fallback = CATEGORY_DEFAULT_WEIGHT[cat] ?? CATEGORY_DEFAULT_WEIGHT.other;
-  return { weightKg: fallback, displayText: `Вес: ориентир ${fallback} кг по категории, не для ROI`, source: 'category_default', isEstimated: true, canUseForCargo: false, canUseForRoi: false, reason: 'Вес не указан; категорийный вес можно показывать только как ориентир.' };
+  return { weightKg: null, displayText: 'Вес: не указан', source: 'missing', isEstimated: false, canUseForCargo: false, canUseForRoi: false, reason: 'Вес не указан; для точного карго нужен вес выбранного SKU.' };
 }
 
 export function buildMarketDecision(_product: any): MarketDecision { return { status: 'not_required', rawCandidatesCount: 0, confirmedDirectCount: 0, similarLocalCount: 0, crossBorderCount: 0, categoryOnlyCount: 0, medianPriceRub: null, p25PriceRub: null, p75PriceRub: null, canShowMedianPrice: false, canCalculateRoi: false, confidence: 'low', reason: 'Автоматический WB/Ozon-поиск не входит в обязательный MVP. Рынок проверяется вручную или через будущий модуль конкурентов.' }; }
@@ -439,6 +587,7 @@ export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: 
   const useCases = useCasesLine(x);
   const colorLine = x.sku.colorOptions?.length ? `• Цвета: ${x.sku.colorOptions.slice(0, 8).join(', ')}` : null;
   const sizeLine = x.sku.sizeOptions?.length ? `• Размеры: ${x.sku.sizeOptions.slice(0, 10).join(', ')}` : null;
+  const mainWeightText = x.weight.canUseForCargo ? x.weight.displayText.replace(/^Вес:\s*/i, '') : 'не указан';
   const understood = uniq([
     ...x.readiness.positiveSignals,
     ...(x.sku.skuCount ? [`SKU разобраны: ${displaySkuSummary(x.sku.skuSummary)}`] : []),
@@ -469,7 +618,7 @@ export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: 
     ...(colorLine ? [html(colorLine)] : []),
     ...(sizeLine ? [html(sizeLine)] : []),
     `• Фото: ${imagesCount(product) || '—'} шт`,
-    `• Вес: ${html(x.weight.displayText.replace(/^Вес:\s*/i, ''))}`,
+    `• Вес: ${html(mainWeightText)}`,
     `• Материал: ${html(materials)}`,
     `• Назначение: ${html(useCases || 'уточнить по карточке и образцу')}`,
     '',
@@ -550,6 +699,11 @@ function isSleepMask(product: any, x?: ReturnType<typeof buildDecisionContext>):
   return /маск[аи]\s+для\s+сна|3d[ -]?маск|sleep\s*mask|眼罩|睡眠眼罩|遮光眼罩/.test(t);
 }
 
+function isUmbrella(product: any, x?: ReturnType<typeof buildDecisionContext>): boolean {
+  const t = `${x?.title ?? ''} ${product?.titleRu ?? ''} ${product?.titleCn ?? ''} ${product?.categoryName ?? ''}`.toLowerCase();
+  return /зонт|umbrella|雨伞|伞|傘/.test(t);
+}
+
 function isSmallAppliance(product: any, x?: ReturnType<typeof buildDecisionContext>): boolean {
   const t = `${x?.title ?? ''} ${product?.titleRu ?? ''} ${product?.titleCn ?? ''} ${product?.categoryName ?? ''}`.toLowerCase();
   return /мини[ -]?стирал|стиральн[а-яё ]*машин|портативн[а-яё ]*стирал|washing\s*machine|洗衣机|内衣洗衣/.test(t);
@@ -558,6 +712,78 @@ function isSmallAppliance(product: any, x?: ReturnType<typeof buildDecisionConte
 function skipCategoryDefaultWeight(product: any, category: string): boolean {
   const text = `${product?.titleRu ?? ''} ${product?.titleCn ?? ''} ${product?.categoryName ?? ''}`.toLowerCase();
   return category === 'small_appliance' || /стиральн[а-яё ]*машин|洗衣机|объ[её]м\s*\d+\s*л/.test(text);
+}
+
+
+function procurementKind(product: any, x?: ReturnType<typeof buildDecisionContext>): string {
+  const cat = String(x?.categoryType ?? categoryType(product)).toLowerCase();
+  const t = `${x?.title ?? ''} ${product?.titleRu ?? ''} ${product?.titleCn ?? ''} ${product?.categoryName ?? ''} ${getIdentity(product).productKind ?? ''} ${getIdentity(product).coreObject ?? ''}`.toLowerCase();
+  if (isUmbrella(product, x)) return 'umbrella';
+  if (isSmallAppliance(product, x)) return 'mini_washer';
+  if (isSleepMask(product, x)) return 'sleep_mask';
+  if (/пассивн[а-яё ]*ловуш|липк[а-яё ]*ловуш|клеев[а-яё ]*ловуш|捕虫|粘虫|蚊/.test(t) && !/usb|ламп|电|электр|ультразвук/.test(t)) return 'passive_insect_trap';
+  if (cat === 'shoes' || /鞋|сабо|сандал|тапоч|шл[её]пан|обув|кроссов/.test(t)) return 'footwear';
+  if (/usb|type-c|зарядк|power bank|кабель|adapter|адаптер/.test(t)) return 'usb_device';
+  if (cat === 'clothing' || /плать|брюк|леггинс|футбол|одежд|衣|裤/.test(t)) return 'clothing';
+  if (/сумк|рюкзак|кошел|bag|包/.test(t)) return 'bag_accessory';
+  if (/кухн|нож|овощ|посуда|терк|сковор|锅|厨房/.test(t)) return 'kitchen_tool';
+  return 'generic_product';
+}
+
+function getProcurementRules(product: any, x?: ReturnType<typeof buildDecisionContext>): ProcurementRules {
+  const kind = procurementKind(product, x);
+  const base = PROCUREMENT_RULES[kind] ?? GENERIC_PROCUREMENT_RULES;
+  return { ...GENERIC_PROCUREMENT_RULES, ...base, productKind: base.productKind || kind };
+}
+
+function cleanRuleList(list: string[], product: any, x?: ReturnType<typeof buildDecisionContext>, limit = 12): string[] {
+  const banned = new Set<string>();
+  const cat = String(x?.categoryType ?? categoryType(product)).toLowerCase();
+  const kind = procurementKind(product, x);
+  for (const b of [...(CATEGORY_MUST_NOT_ASK[cat] ?? []), ...(CATEGORY_MUST_NOT_ASK[kind] ?? [])]) banned.add(b.toLowerCase());
+  return uniq(list, 30)
+    .filter((item) => {
+      const low = item.toLowerCase();
+      return ![...banned].some(b => b && low.includes(b));
+    })
+    .slice(0, limit);
+}
+
+function questionFromCheck(check: string): string {
+  const text = stripNumber(check).replace(/[.;]+$/g, '');
+  if (!text) return '';
+  if (/^(есть ли|можно ли|регулируется ли|работает ли|не давит ли|не теч[её]т ли|как работает|какие|какой|какая|какое|сколько|что означает)/i.test(text)) return `${text}?`;
+  if (/подтверд/i.test(text)) return `${text}.`;
+  if (/фото|видео/i.test(text)) return `Пришлите ${text}.`;
+  if (/вес|габарит|размер|длин|диаметр|объ[её]м|мощность|напряжение|тип вилки|материал|комплектац|упаковк|инструкц|гарант|сертифик/i.test(text)) return `Уточните ${text}.`;
+  return `Подтвердите: ${text}.`;
+}
+
+function cnQuestionFromCheck(check: string): string {
+  const low = check.toLowerCase();
+  if (/мощност/.test(low)) return '请确认产品功率。';
+  if (/напряж/.test(low)) return '请确认电压。';
+  if (/тип вилки/.test(low)) return '请确认插头类型。';
+  if (/длина кабеля/.test(low)) return '请确认电源线长度。';
+  if (/объ[её]м/.test(low)) return '请确认实际容量。';
+  if (/режим/.test(low)) return '请确认工作模式。';
+  if (/слив/.test(low)) return '请确认是否有排水口以及如何排水。';
+  if (/видео/.test(low)) return '请发送产品工作视频。';
+  if (/инструкц/.test(low)) return '请提供说明书照片或电子版。';
+  if (/сертифик|деклараци|документ/.test(low)) return '请提供相关证书/检测报告/合规文件。';
+  if (/гарант/.test(low)) return '请确认保修和售后政策。';
+  if (/вес/.test(low)) return '请提供所选SKU含包装重量。';
+  if (/габарит|размер упаков/.test(low)) return '请提供包装尺寸。';
+  if (/материал/.test(low)) return '请确认产品材质。';
+  if (/комплектац/.test(low)) return '请确认包装清单/配件。';
+  if (/фото/.test(low)) return '请发送产品和包装实拍照片。';
+  if (/диаметр купола/.test(low)) return '请确认雨伞打开后的伞面直径。';
+  if (/длина в сложенном/.test(low)) return '请确认雨伞折叠后的长度。';
+  if (/количество спиц/.test(low)) return '请确认伞骨数量。';
+  if (/чехол/.test(low)) return '请确认是否包含伞套。';
+  if (/ремешок/.test(low)) return '请确认头带是否可调节。';
+  if (/затемнен/.test(low)) return '请确认遮光效果，并发送实拍图。';
+  return `请确认：${check}。`;
 }
 
 export function build1688Detail(product: any): string {
@@ -603,6 +829,7 @@ function seoFriendlyTitle(product: any, x: ReturnType<typeof buildDecisionContex
   if (/бахил|чехл.*обув|鞋套/.test(text)) return 'Бахилы многоразовые водонепроницаемые для обуви';
   if (isSmallAppliance(product, x)) return 'Мини стиральная машина портативная 4 л для белья и носков';
   if (isSleepMask(product, x)) return 'Маска для сна 3D с затемнением мягкая';
+  if (isUmbrella(product, x)) return 'Зонт автоматический складной от дождя с чехлом';
   if (/сабо|洞洞鞋|护士鞋/.test(text)) return 'Медицинские сабо EVA для работы и повседневной носки';
   if (/сандал|凉鞋/.test(text)) return 'Женские сандалии летние с декоративным элементом';
   return rawTitle || x.title;
@@ -616,6 +843,9 @@ function seoDescription(product: any, x: ReturnType<typeof buildDecisionContext>
   }
   if (isSmallAppliance(product, x)) {
     return 'Компактная мини-стиральная машина подходит для стирки нижнего белья, носков и небольших вещей дома, на даче или в поездке. Объём 4 л и компактный корпус позволяют использовать её там, где нет места для полноразмерной техники. Перед публикацией подтвердите мощность, напряжение, тип вилки, комплектацию и видео работы.';
+  }
+  if (isUmbrella(product, x)) {
+    return 'Складной автоматический зонт подходит для защиты от дождя во время прогулок, дороги на работу и поездок. Перед публикацией подтвердите диаметр купола, длину в сложенном виде, количество спиц, материал купола и наличие чехла. UPF/защиту от солнца и ветроустойчивость используйте только после подтверждения документов или теста образца.';
   }
   if (isSleepMask(product, x)) {
     return 'Мягкая 3D-маска для сна помогает закрыть глаза от света дома, в дороге, самолёте, поезде или во время отдыха. Объёмная форма снижает давление на глаза и ресницы, а мягкий материал делает маску удобной для ежедневного использования. Перед публикацией подтвердите материал, размер, вес и качество резинки на образце.';
@@ -645,6 +875,15 @@ function seoBullets(product: any, x: ReturnType<typeof buildDecisionContext>): s
       'Перед продажей проверьте мощность и тип вилки',
     ];
   }
+  if (isUmbrella(product, x)) {
+    return [
+      'Автоматическое открытие — подтвердить механизм на образце',
+      'Складной формат удобно брать с собой',
+      'Купол и спицы нужно проверить на прочность',
+      'Чехол и упаковку подтвердить у поставщика',
+      'UPF/защиту от солнца писать только после подтверждения',
+    ];
+  }
   if (isSleepMask(product, x)) {
     return [
       '3D-форма не давит на глаза',
@@ -668,6 +907,7 @@ function seoBullets(product: any, x: ReturnType<typeof buildDecisionContext>): s
 
 export function buildSeoDraft(product: any): string {
   const x = buildDecisionContext(product);
+  const rules = getProcurementRules(product, x);
   const content = product?.seoContent ?? {};
   const title = seoFriendlyTitle(product, x, content);
   const description = seoDescription(product, x, title);
@@ -715,42 +955,72 @@ export function buildSeoDraft(product: any): string {
     ...uniq([...x.readiness.missingData, 'материал', 'вес с упаковкой', 'реальные фото выбранного SKU'], 7).map(s => `- ${s}`),
     '',
     '## Нельзя писать как факт',
-    ...(x.intelligence.claimsPolicy?.forbiddenAsFact?.length ? x.intelligence.claimsPolicy.forbiddenAsFact.slice(0, 8).map(s => `- ${s}`) : ['- 100% влагозащита без теста', '- сертификация без документов', '- лечебные/медицинские свойства без документов', '- прибыльность/ROI без расчёта']),
+    ...uniq([...(x.intelligence.claimsPolicy?.forbiddenAsFact ?? []), ...rules.seoForbiddenClaims, 'прибыльность/ROI без расчёта'], 10).map(s => `- ${s}`),
   ].join('\n');
 }
 
 export function buildSupplierQuestions(product: any, x = buildDecisionContext(product)): { ru: string[]; cn: string[] } {
+  const rules = getProcurementRules(product, x);
   const ru: string[] = [];
   const cn: string[] = [];
-  if (x.price.calculationPriceYuan) { ru.push(`Подтвердите цену выбранного SKU: ${cny(x.price.calculationPriceYuan)}.`); cn.push(`请确认所选SKU的价格是否为${cny(x.price.calculationPriceYuan).replace(' ¥', '元')}？`); }
-  else { ru.push('Укажите цену выбранного цвета/размера/комплектации.'); cn.push('请告诉我所选颜色/尺码/套装的价格。'); }
-  if (!x.weight.canUseForCargo) { ru.push('Укажите вес с упаковкой именно для выбранного SKU.'); cn.push('请提供所选SKU含包装的重量。'); }
-  ru.push('Укажите габариты индивидуальной упаковки.'); cn.push('请提供单件产品包装尺寸。');
-  if (x.sku.needsSelection) { ru.push('Подтвердите точную комплектацию выбранного SKU.'); cn.push('请确认所选SKU的准确套装内容。'); }
-  if (isSmallAppliance(product, x)) {
-    ru.push('Подтвердите напряжение, мощность и тип вилки.'); cn.push('请确认电压、功率和插头类型。');
-    ru.push('Питание от сети или есть аккумулятор?'); cn.push('产品是插电使用还是带电池？');
-    ru.push('Объём 4 л реальный или маркетинговый? Какой фактический полезный объём?'); cn.push('4L容量是实际容量还是宣传容量？实际可用容量是多少？');
-    ru.push('Какие режимы работы есть и есть ли слив воды?'); cn.push('有哪些工作模式？是否有排水口？');
-    ru.push('Пришлите видео работы, фото комплектации, инструкцию и гарантийные условия.'); cn.push('请发送工作视频、配件清单照片、说明书和保修说明。');
+
+  if (x.price.calculationPriceYuan) {
+    ru.push(`Подтвердите цену выбранного SKU: ${cny(x.price.calculationPriceYuan)}.`);
+    cn.push(`请确认所选SKU的价格是否为${cny(x.price.calculationPriceYuan).replace(' ¥', '元')}？`);
+  } else {
+    ru.push('Укажите цену выбранного цвета/размера/комплектации.');
+    cn.push('请告诉我所选颜色/尺码/套装的价格。');
   }
-  ru.push('Подтвердите материал товара и упаковки.'); cn.push('请确认产品材质和包装材质。');
-  ru.push('Пришлите реальные фото товара, выбранного SKU и упаковки.'); cn.push('请发送所选SKU、产品和包装的实拍照片。');
-  ru.push('Можно ли заказать 1–2 образца перед партией?'); cn.push('批量采购前可以先购买1-2个样品吗？');
-  const hasClaims = mergeFacts(collectIntelFacts(product, x.intelligence, 10), collectRawAttributes(product, 10)).some(f => /заявлен|сертифик|документ|испытан|антибактер|противоскольз|влагозащит|водонепрониц/i.test(f.value + ' ' + f.name));
-  if (hasClaims) { ru.push('Какие заявленные свойства подтверждены документами или испытаниями, а какие являются только описанием поставщика?'); cn.push('页面里的功能描述哪些有检测报告或证书，哪些只是产品描述？'); }
-  return { ru: uniq(ru, 12), cn: uniq(cn, 12) };
+  if (!x.weight.canUseForCargo) {
+    ru.push('Укажите вес с упаковкой именно для выбранного SKU.');
+    cn.push('请提供所选SKU含包装的重量。');
+  }
+  ru.push('Укажите габариты индивидуальной упаковки.');
+  cn.push('请提供单件产品包装尺寸。');
+  if (x.sku.needsSelection) {
+    ru.push('Подтвердите точную комплектацию выбранного SKU.');
+    cn.push('请确认所选SKU的准确套装内容。');
+  }
+  for (const param of x.sku.ambiguousParams ?? []) {
+    ru.push(`Что означает параметр “${param}” в SKU: диаметр, длина, размер купола или другое?`);
+    cn.push(`SKU里的“${param}”代表什么：伞面直径、折叠长度、伞面尺寸还是其他参数？`);
+  }
+
+  for (const check of cleanRuleList(rules.buyerMustCheck, product, x, 12)) {
+    const q = questionFromCheck(check);
+    if (q) ru.push(q);
+    cn.push(cnQuestionFromCheck(check));
+  }
+
+  ru.push('Пришлите реальные фото товара, выбранного SKU и упаковки.');
+  cn.push('请发送所选SKU、产品和包装的实拍照片。');
+  ru.push('Можно ли заказать 1–2 образца перед партией?');
+  cn.push('批量采购前可以先购买1-2个样品吗？');
+
+  const hasClaims = mergeFacts(collectIntelFacts(product, x.intelligence, 10), collectRawAttributes(product, 10))
+    .some(f => /заявлен|сертифик|документ|испытан|антибактер|противоскольз|влагозащит|водонепрониц|upf|дезинфекц|стерилиз/i.test(f.value + ' ' + f.name));
+  if (hasClaims || rules.seoForbiddenClaims.length) {
+    ru.push('Какие заявленные свойства подтверждены документами или испытаниями, а какие являются только описанием поставщика?');
+    cn.push('页面里的功能描述哪些有检测报告或证书，哪些只是产品描述？');
+  }
+
+  return {
+    ru: cleanRuleList(ru, product, x, 12),
+    cn: uniq(cn.filter(Boolean), 12),
+  };
 }
 
 export function buildBuyerBrief(product: any, sourceUrl = ''): string {
   const x = buildDecisionContext(product);
+  const rules = getProcurementRules(product, x);
   const qs = buildSupplierQuestions(product, x).ru;
   const skuExamples = x.sku.skuVariantsNormalized.slice(0, 8).map(v => v.label);
-  const sampleChecks = categorySpecificSampleChecks(product, x);
+  const sampleChecks = cleanRuleList(rules.sampleMustCheck, product, x, 12);
+  const buyerChecks = cleanRuleList(rules.buyerMustCheck, product, x, 14);
   return [
     '# ТЗ байеру',
     '',
-    'Статус документа: готово для отправки байеру после выбора SKU.',
+    'Статус документа: готово для отправки байеру после выбора SKU. После ответа поставщика пакет нужно обновить.',
     '',
     '## 1. Ссылка',
     sourceUrl || '—',
@@ -761,7 +1031,7 @@ export function buildBuyerBrief(product: any, sourceUrl = ''): string {
     `SKU: ${displaySkuSummary(x.sku.skuSummary)}`,
     ...(skuExamples.length ? ['Примеры SKU:', ...skuExamples.map(s => `- ${s}`)] : []),
     `Цвет: ${x.sku.colorOptions?.length ? x.sku.colorOptions.join(', ') : 'уточнить выбранный SKU'}`,
-    `Размер: ${x.sku.sizeOptions?.length ? x.sku.sizeOptions.join(', ') : 'если применимо — уточнить'}`,
+    `Размер/параметр: ${x.sku.sizeOptions?.length ? x.sku.sizeOptions.join(', ') : 'если применимо — уточнить'}`,
     `Комплектация: ${x.sku.componentOptions?.length ? x.sku.componentOptions.join(', ') : (x.sku.isMultiPack ? 'зависит от комплектации' : 'уточнить')}`,
     `MOQ: ${positive(product?.moq ?? product?.normalized1688?.moq) ? `${positive(product?.moq ?? product?.normalized1688?.moq)} шт.` : 'уточнить'}`,
     '',
@@ -772,150 +1042,65 @@ export function buildBuyerBrief(product: any, sourceUrl = ''): string {
     `Заказы: ${normalizeFact(product?.sold) || '—'}`,
     '',
     '## 4. Что подтвердить у поставщика',
+    ...buyerChecks.map(q => `- ${q}`),
+    '',
+    '## 5. Готовые вопросы поставщику',
     ...qs.map(q => `- ${q}`),
     '',
-    '## 5. Что проверить на образце',
+    '## 6. Что проверить на образце',
     ...sampleChecks.map(q => `- ${q}`),
     '',
-    '## 6. Фото, которые нужно запросить',
+    '## 7. Фото, которые нужно запросить',
     '- общий вид выбранного SKU',
-    '- крупно материал и детали',
+    '- крупно материал, рабочие элементы и важные детали',
     '- упаковка и маркировка',
-    '- фото SKU рядом с линейкой/размерной сеткой, если применимо',
+    '- комплектация в одном кадре',
+    '- фото рядом с линейкой/размером, если это влияет на закупку',
     '',
-    '## 7. Риски',
-    ...uniq([...x.readiness.risks, ...x.sku.skuRisks], 8).map(r => `- ${r}`),
+    '## 8. Риски',
+    ...uniq([...x.readiness.risks, ...x.sku.skuRisks, ...rules.redFlags], 12).map(r => `- ${r}`),
     '',
-    '## 8. Решение',
+    '## 9. Решение',
     x.readiness.canRecommendSample ? 'Можно запрашивать данные для образца. Партию не закупать до проверки веса, упаковки и образца.' : 'Пока не готово к закупке: закрыть недостающие данные поставщика.',
   ].join('\n');
 }
 
 export function buildCargoBrief(product: any, sourceUrl = ''): string {
   const x = buildDecisionContext(product);
-  const category = x.categoryType;
-  const extra = isSmallAppliance(product, x)
-    ? ['- напряжение, мощность и тип вилки', '- есть ли аккумулятор или только питание от сети', '- видео работы и фото комплектации', '- инструкция, сертификаты/декларации, гарантия', '- есть ли жидкость внутри поставки']
-    : isSleepMask(product, x)
-    ? ['- тип упаковки: OPP-пакет или цветная коробка', '- вес и габариты упаковки выбранного SKU', '- материал маски и ремешка']
-    : category === 'electronics'
-    ? ['- есть ли батарейка / аккумулятор / магнит', '- мощность и тип зарядки, если товар электрический', '- инструкция и документы']
-    : category === 'beauty'
-      ? ['- состав, срок годности, документы', '- герметичность упаковки']
-      : category === 'shoes'
-        ? ['- вес одной пары с коробкой', '- габариты коробки одной пары', '- количество пар в транспортной коробке']
-        : ['- есть ли батарейка / жидкость / порошок / магнит / стекло'];
+  const rules = getProcurementRules(product, x);
+  const cargoChecks = cleanRuleList(rules.cargoMustAsk, product, x, 16);
   return [
     '# ТЗ для карго',
     '',
-    'Статус документа: готово для запроса расчёта, но точное карго возможно только после веса и габаритов.',
+    'Статус документа: готово для запроса расчёта. Точное карго возможно только после веса и габаритов выбранного SKU.',
     '',
     '## Товар',
     x.title,
     sourceUrl ? `Ссылка: ${sourceUrl}` : '',
     '',
     '## Что нужно запросить',
-    '- вес одной единицы с упаковкой',
-    '- габариты индивидуальной упаковки',
-    '- количество в транспортной коробке',
-    '- вес транспортной коробки',
-    '- габариты транспортной коробки',
-    '- фото индивидуальной упаковки',
-    '- фото транспортной коробки',
-    '- материал товара',
-    '- код ТН ВЭД, если поставщик знает',
-    ...extra,
+    ...cargoChecks.map(v => `- ${v}`),
     '',
     '## Текущий статус',
     `Вес: ${x.weight.displayText.replace(/^Вес:\s*/i, '')}`,
-    `Габариты: уточнить`,
+    `Габариты: ${product?.supplierAnswer?.dimensions ?? 'уточнить'}`,
     `SKU: ${displaySkuSummary(x.sku.skuSummary)}`,
     '',
     '## Важно',
     'Карго не рассчитывается точно без веса и габаритов выбранного SKU.',
+    'Если поставщик не даёт вес/габариты — не считайте финальную себестоимость партии.',
   ].filter(Boolean).join('\n');
 }
 
 function categorySpecificSampleChecks(product: any, x: ReturnType<typeof buildDecisionContext>): string[] {
-  const text = `${x.title} ${product?.titleCn ?? ''}`.toLowerCase();
-  if (isSmallAppliance(product, x)) return [
-    'включается ли от нужного напряжения',
-    'не течёт ли корпус при работе',
-    'как работает слив воды',
-    'шум и вибрация',
-    'качество пластика и сборки',
-    'фактический объём ёмкости',
-    'отстирывает ли носки/бельё',
-    'длина кабеля и тип вилки',
-    'комплектация и инструкция',
-    'упаковка после доставки',
-  ];
-  if (isSleepMask(product, x)) return [
-    'материал и мягкость после распаковки',
-    'форма 3D-углублений и место для глаз/ресниц',
-    'не давит ли маска на глаза',
-    'насколько хорошо закрывает свет',
-    'качество резинки/ремешка и регулировки',
-    'запах после распаковки',
-    'качество швов и краёв',
-    'комфорт при носке 10–15 минут',
-    'упаковка OPP/коробка',
-    'вес и габариты упаковки',
-  ];
-  if (/бахил|чехл.*обув|鞋套/.test(text)) return [
-    'соответствие цвета/размера выбранному SKU',
-    'удобство надевания поверх обуви',
-    'качество молнии',
-    'качество манжеты/утяжки',
-    'материал и запах после распаковки',
-    'вес с упаковкой',
-    'габариты упаковки',
-    'как сидит на обуви',
-    'не рвётся ли при натяжении',
-    'антискольжение проверить самостоятельно, не писать как факт без теста',
-  ];
-  const checks = CATEGORY_BUYER_CHECKS[x.categoryType] ?? CATEGORY_BUYER_CHECKS.other;
-  return checks.slice(0, 10);
+  const rules = getProcurementRules(product, x);
+  return cleanRuleList(rules.sampleMustCheck, product, x, 12);
 }
 
 export function buildInfographicBrief(product: any): string {
   const x = buildDecisionContext(product);
-  const title = x.title;
-  const text = `${title} ${product?.titleCn ?? ''}`.toLowerCase();
-  const isShoeCovers = /бахил|чехл[ыа]? для обув|鞋套/i.test(text);
-  const isMachine = isSmallAppliance(product, x);
-  const isMask = isSleepMask(product, x);
-  const slides = isShoeCovers
-    ? [
-        { h: 'главный', copy: 'Многоразовые бахилы для защиты обуви', show: 'общий вид бахил на обуви' },
-        { h: 'сценарии применения', copy: 'Для дождя, грязи, походов и велосипеда', show: 'иконки: дождь / грязь / велосипед / лес / работа на улице' },
-        { h: 'конструкция', copy: 'Высокая посадка поверх обуви', show: 'как бахила закрывает обувь и часть ноги' },
-        { h: 'фиксация', copy: x.sku.componentOptions?.length ? `Молния и фиксация сверху: ${x.sku.componentOptions.join(', ')}` : 'Фиксацию подтвердить по фото выбранного SKU', show: 'крупно молнию, манжету или шнурок' },
-        { h: 'размеры/SKU', copy: 'Выберите цвет и размер', show: `цвета/размеры: ${displaySkuSummary(x.sku.skuSummary)}` },
-      ]
-    : isMachine
-      ? [
-          { h: 'главный', copy: 'Портативная мини-стиральная машина 4 л', show: 'товар крупно, рядом бельё/носки для масштаба' },
-          { h: 'для небольших вещей', copy: 'Для белья, носков и детских вещей', show: 'иконки: бельё / носки / детские вещи / дача' },
-          { h: 'управление и питание', copy: 'Проверьте мощность, напряжение и тип вилки', show: 'крупно кнопки управления, кабель питания и вилку' },
-          { h: 'ёмкость и слив', copy: 'Объём и слив воды подтвердить у поставщика', show: 'крышка, ёмкость/барабан, сливной элемент' },
-          { h: 'комплектация', copy: 'Проверьте комплектацию и инструкцию', show: 'коробка, кабель, инструкция, аксессуары' },
-        ]
-    : isMask
-      ? [
-          { h: 'главный', copy: 'Мягкая 3D-маска для сна', show: 'маска на лице или рядом с подушкой, чистый спокойный фон' },
-          { h: 'сценарии применения', copy: 'Для дома, поездок, самолёта и дневного отдыха', show: 'иконки: дом / поезд / самолёт / отдых' },
-          { h: '3D-форма', copy: 'Не давит на глаза и ресницы', show: 'крупно углубления для глаз, боковой разрез' },
-          { h: 'затемнение', copy: 'Помогает закрыть глаза от света', show: 'сравнение свет/темнота, без обещания 100% затемнения' },
-          { h: 'цвета и упаковка', copy: 'Выберите цвет и вариант упаковки', show: displaySkuSummary(x.sku.skuSummary) },
-        ]
-    : [
-        { h: 'главный', copy: title, show: 'товар крупно на чистом фоне + главный сценарий применения' },
-        { h: 'сценарии применения', copy: useCasesLine(x) || 'Сценарии применения товара', show: '3–4 иконки или фото, где используют товар' },
-        { h: 'конструкция', copy: x.sku.componentOptions?.length ? x.sku.componentOptions.join(', ') : 'Материал и детали — проверить на образце', show: 'крупные детали материала, креплений, корпуса и рабочих элементов' },
-        { h: 'размеры/SKU', copy: 'Выберите нужный цвет, размер и комплектацию', show: displaySkuSummary(x.sku.skuSummary) },
-        { h: 'упаковка/комплектация', copy: 'Перед партией подтвердите вес, упаковку и фото выбранного SKU', show: 'упаковка, комплектация, вес и габариты' },
-      ];
+  const rules = getProcurementRules(product, x);
+  const slides = rules.infographicSlides.length ? rules.infographicSlides : GENERIC_PROCUREMENT_RULES.infographicSlides;
   return [
     '# ТЗ для инфографики',
     '',
@@ -924,23 +1109,30 @@ export function buildInfographicBrief(product: any): string {
     '## Цель карточки',
     'Показать товар, сценарии применения и ключевые преимущества без неподтверждённых claims.',
     '',
-    ...slides.flatMap((s, i) => [`## Слайд ${i + 1} — ${s.h}`, `Текст: ${cautiousClaim(s.copy)}`, `Что показать: ${s.show}`, '']),
+    ...slides.slice(0, 6).flatMap((s, i) => [
+      `## Слайд ${i + 1} — ${s.title}`,
+      `Текст: ${cautiousClaim(s.text)}`,
+      `Что показать: ${s.visual}`,
+      '',
+    ]),
     '## Что нельзя писать',
-    '- 100% водонепроницаемые без теста',
-    '- противоскользящие как факт без проверки',
-    '- сертифицированные без документов',
+    ...cleanRuleList(rules.seoForbiddenClaims, product, x, 8).map(v => `- ${v}`),
     '- прибыльность/ROI без ручного расчёта',
   ].join('\n');
 }
 
 export function buildRiskChecklist(product: any): string {
   const x = buildDecisionContext(product);
-  const sampleChecks = categorySpecificSampleChecks(product, x);
-  const beforeBatch = isSmallAppliance(product, x)
-    ? ['ручную проверку 3–5 конкурентов WB/Ozon', 'финальную себестоимость с карго', 'напряжение/мощность/тип вилки', 'видео работы и результат стирки', 'инструкцию, гарантию и документы', 'процент брака/условия замены']
-    : isSleepMask(product, x)
-      ? ['ручную проверку 3–5 конкурентов WB/Ozon', 'финальную себестоимость с карго', 'качество резинки и швов', 'затемнение и комфорт на образце', 'упаковку OPP/коробку']
-      : ['ручную проверку 3–5 конкурентов WB/Ozon', 'финальную себестоимость с карго', 'упаковку для маркетплейса', 'возвраты/размерную сетку/комплектацию', 'документы/маркировку для регулируемых claims'];
+  const rules = getProcurementRules(product, x);
+  const sampleChecks = cleanRuleList(rules.sampleMustCheck, product, x, 12);
+  const redFlags = cleanRuleList(rules.redFlags, product, x, 12);
+  const beforeBatch = uniq([
+    'ручную проверку 3–5 конкурентов WB/Ozon',
+    'финальную себестоимость с карго',
+    'ответ поставщика по весу, упаковке и выбранному SKU',
+    'результат проверки образца',
+    ...rules.buyerMustCheck.slice(0, 6),
+  ], 12);
   return [
     '# Риск-чеклист товара',
     '',
@@ -950,7 +1142,7 @@ export function buildRiskChecklist(product: any): string {
     ...(x.readiness.risks.length ? x.readiness.risks.map(r => `- ${r}`) : ['- рынок и конкуренты не проверены вручную']),
     '',
     '## Что проверить до образца',
-    ...uniq([...x.readiness.missingData, 'цена выбранного SKU', 'вес и габариты упаковки', 'реальные фото товара и упаковки'], 10).map(m => `- ${m}`),
+    ...uniq([...x.readiness.missingData, ...rules.buyerMustCheck.slice(0, 8), 'реальные фото товара и упаковки'], 14).map(m => `- ${m}`),
     '',
     '## Что проверить на образце',
     ...sampleChecks.map(r => `- ${r}`),
@@ -959,13 +1151,7 @@ export function buildRiskChecklist(product: any): string {
     ...beforeBatch.map(v => `- ${v}`),
     '',
     '## Красные флаги',
-    '- поставщик не подтверждает вес',
-    '- поставщик не даёт реальные фото',
-    '- SKU на фото отличается от выбранного',
-    '- цена меняется после уточнения',
-    '- материал не подтверждается',
-    '- заявленные свойства без тестов/документов',
-    '- упаковка не подходит для маркетплейса',
+    ...redFlags.map(v => `- ${v}`),
     '',
     '## Решение',
     x.readiness.canRecommendSample ? 'Можно переходить к образцу после подтверждения SKU, веса и упаковки. Партию не закупать.' : 'Пока не готово к закупке: закрыть недостающие данные.',
@@ -974,14 +1160,21 @@ export function buildRiskChecklist(product: any): string {
 
 export function buildSampleRecommendation(product: any): string {
   const x = buildDecisionContext(product);
+  const rules = getProcurementRules(product, x);
   const sku = x.sku.recommendedSampleSku || 'базовый/самый массовый SKU';
-  const checks = categorySpecificSampleChecks(product, x);
-  const measureItems = isSmallAppliance(product, x)
-    ? ['- вес с упаковкой', '- габариты индивидуальной упаковки', '- фактический объём ёмкости', '- длину кабеля', '- уровень шума/вибрации при работе']
-    : ['- вес с упаковкой', '- габариты индивидуальной упаковки', '- фактические размеры товара', '- размер/посадку, если применимо'];
-  const photoItems = isSmallAppliance(product, x)
-    ? ['- общий вид товара', '- кнопки управления, крышка, ёмкость/барабан', '- слив, кабель питания и вилка', '- комплектация, инструкция и упаковка']
-    : ['- общий вид товара', '- крупно материал и детали', '- упаковка и маркировка', '- SKU рядом с линейкой/размерной сеткой, если применимо'];
+  const checks = cleanRuleList(rules.sampleMustCheck, product, x, 12);
+  const measureItems = cleanRuleList([
+    'вес с упаковкой',
+    'габариты индивидуальной упаковки',
+    ...rules.cargoMustAsk.filter(v => /длина|диаметр|объ[её]м|кабель|габарит|вес|количество|размер/i.test(v)).slice(0, 6),
+  ], product, x, 8).map(v => `- ${v}`);
+  const photoItems = cleanRuleList([
+    'общий вид выбранного SKU',
+    'крупно важные детали и рабочие элементы',
+    'комплектация в одном кадре',
+    'упаковка и маркировка',
+    ...rules.infographicSlides.map(s => s.visual),
+  ], product, x, 8).map(v => `- ${v}`);
   return [
     '# Рекомендация по образцу',
     '',
@@ -1022,6 +1215,7 @@ export function validateGeneratedText(input: { productIntelligence?: ProductInte
   if (/0(?:[,.]0+)?\s*(?:кг|kg)\b/i.test(fixed)) errors.push('zero weight');
   if (/Product Intelligence|AI-черновик|debug/i.test(fixed)) errors.push('internal labels');
   fixed = fixed
+    .replace(/❌\s*Внутренняя ошибка\.?\s*Попробуй ещё раз\.?/gi, '⚠️ Не удалось открыть раздел. Данные анализа сохранены — вернитесь к плану или попробуйте ещё раз.')
     .replace(/\b(?:undefined|null|NaN|Infinity|-Infinity)\b/gi, '—')
     .replace(/0(?:[,.]0+)?\s*[¥￥]/gi, 'цена уточняется')
     .replace(/0(?:[,.]0+)?\s*₽/gi, 'цена уточняется')
@@ -1051,6 +1245,13 @@ export function validateGeneratedText(input: { productIntelligence?: ProductInte
     fixed = fixed
       .replace(/\b(?:срок годности|консистенция образца|подошв[аы]|дно|корпус|герметичность упаковки как обязательное|размерная сетка)\b[^\n]*/gi, '')
       .replace(/товар\s+для\s+для/gi, 'товар для')
+      .replace(/\n{3,}/g, '\n\n');
+  }
+  if (/зонт|umbrella|雨伞|伞|傘/i.test(fixed)) {
+    fixed = fixed
+      .replace(/\b(?:длина стельки|подошв[аы]|стельк[аи]|рукав|мощность|напряжение|аккумулятор|тип вилки|срок годности|консистенция)\b[^\n]*/gi, '')
+      .replace(/UFP50/gi, 'UPF50+/UFP50 — уточнить у поставщика')
+      .replace(/ветроустойчив[а-яё]*\s+как\s+факт/gi, 'ветроустойчивость — проверить на образце')
       .replace(/\n{3,}/g, '\n\n');
   }
   fixed = fixed.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();

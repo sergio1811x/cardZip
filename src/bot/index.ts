@@ -18,7 +18,7 @@ import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 import { handleMyAnalyses, handleAnalysisDetail } from './handlers/myAnalyses';
 import { handleManualWeightStart, handleManualSalePriceStart, handleManualCompetitorsStart, handleManualInputText, getPendingManualInput } from './handlers/manualInputs';
-import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleMaterialsZip, handleMaterialsList, handleMaterialsGroup, handleBackToMain, handleProductDetail, handleRiskDetail, handleSampleDetail, handleProcurementPlan } from './handlers/detailButtons';
+import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleMaterialsZip, handleMaterialsList, handleMaterialsGroup, handleMaterialsDoc, handleBackToMain, handleProductDetail, handleRiskDetail, handleSampleDetail, handleProcurementPlan } from './handlers/detailButtons';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -154,7 +154,11 @@ bot.action('supplier_questions', async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierQuestions(ctx);
 });
-bot.action(/^sq_(ru|cn)$/, async (ctx) => {
+bot.action(/^supplier_questions_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleSupplierQuestions(ctx);
+});
+bot.action(/^sq_(ru|cn)(?:_(.+))?$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierQuestionsLang(ctx);
 });
@@ -185,7 +189,8 @@ bot.action(/^proc_plan_(.+)$/, handleProcurementPlan);
 bot.action(/^econ_detail_(.+)$/, handleEconDetail);
 bot.action(/^wb_detail_(.+)$/, handleWbDetail);
 bot.action(/^materials_zip_(.+)$/, handleMaterialsZip);
-bot.action(/^materials_group_(questions|buyer|cargo|check|card)_(.+)$/, handleMaterialsGroup);
+bot.action(/^materials_group_(questions|buyer_cargo|check|card)_(.+)$/, handleMaterialsGroup);
+bot.action(/^materials_doc_(questions|buyer|cargo|risk|sample|seo|info)_(.+)$/, handleMaterialsDoc);
 bot.action(/^materials_list_(.+)$/, handleMaterialsList);
 bot.action(/^materials_(.+)$/, handleMaterialsResend);
 bot.action(/^risk_detail_(.+)$/, handleRiskDetail);
@@ -204,6 +209,10 @@ bot.action(/^(cargo|ff)_(\d+)_(.+)$/, async (ctx) => {
 
 // ─── Подтверждение от поставщика ─────────────────────────────────────────────
 bot.action('supplier_confirm', async (ctx) => {
+  await ctx.answerCbQuery();
+  return handleSupplierConfirmStart(ctx);
+});
+bot.action(/^supplier_confirm_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierConfirmStart(ctx);
 });
@@ -274,7 +283,7 @@ bot.on('text', async (ctx) => {
   }
 
   if (!userId) {
-    await ctx.reply('❌ Не удалось определить пользователя. Попробуй /start');
+    await ctx.reply('Не удалось определить пользователя. Нажмите /start и попробуйте снова.');
     return;
   }
 
@@ -284,5 +293,10 @@ bot.on('text', async (ctx) => {
 // ─── Глобальный обработчик ошибок ─────────────────────────────────────────────
 bot.catch((err, ctx) => {
   console.error('[bot] Необработанная ошибка:', err);
-  ctx.reply('❌ Внутренняя ошибка. Попробуй ещё раз.').catch(() => {});
+  ctx.reply('⚠️ Не удалось открыть раздел.\n\nДанные анализа сохранены. Попробуйте вернуться к плану или открыть материалы ещё раз.\n\nЕсли ошибка повторится — начните новый товар.', {
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('🏠 К отчёту', 'last')],
+      [Markup.button.callback('🔄 Новый товар', 'new_search')],
+    ]),
+  }).catch(() => {});
 });

@@ -10,19 +10,32 @@ function confirmKey(chatId: number): string {
   return `confirm_pending:${chatId}`;
 }
 
+async function findJobForConfirm(userId: string, jobId?: string) {
+  let query = supabase
+    .from('jobs')
+    .select('id, result_json, procurement_status, procurement_pipeline')
+    .eq('user_id', userId)
+    .in('status', ['done', 'sent']);
+
+  if (jobId) {
+    const { data } = await query.eq('id', jobId).single();
+    return data;
+  }
+
+  const { data } = await query
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single();
+  return data;
+}
+
 export async function handleSupplierConfirmStart(ctx: Context) {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) return;
 
-  // Найти последний job
-  const { data: job } = await supabase
-    .from('jobs')
-    .select('id, result_json, procurement_status')
-    .eq('user_id', userId)
-    .in('status', ['done', 'sent'])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .single();
+  const match = (ctx as any).match as RegExpMatchArray | undefined;
+  const callbackJobId = match?.[1];
+  const job = await findJobForConfirm(userId, callbackJobId).catch(() => null);
 
   if (!job) {
     await ctx.reply('Нет товаров для обновления. Сначала отправьте ссылку.');
@@ -32,18 +45,42 @@ export async function handleSupplierConfirmStart(ctx: Context) {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
-  if (redis) {
-    await redis.set(confirmKey(chatId), JSON.stringify({ jobId: job.id, userId }), { ex: 300 });
+  const product = ((job as any).result_json as any)?.product ?? ((job as any).result_json as any)?.rawProduct;
+  const rawStatus = String((job as any).procurement_status ?? product?.procurementStatus ?? '').toLowerCase();
+  const pipeline = (job as any).procurement_pipeline ?? ((job as any).result_json as any)?.procurement_pipeline ?? {};
+  const questionsAlreadySent = /questions_opened|waiting_supplier_reply|supplier_reply_added|supplier_reply_received|weight_added|sample_ordered|sample_received|ready_for_test_batch/.test(rawStatus)
+    || !!pipeline?.questions_opened
+    || !!pipeline?.supplier_questions_opened
+    || !!pipeline?.supplier_reply_received
+    || !!product?.supplierAnswer;
+
+  if (!questionsAlreadySent) {
+    await ctx.reply(
+      '📥 <b>Ответ поставщика</b>\n\n' +
+      'Сначала отправьте вопросы поставщику. После ответа вернитесь сюда и вставьте текст.\n\n' +
+      'Что сделать сейчас:\n' +
+      '1. Нажмите «💬 Текст поставщику».\n' +
+      '2. Скопируйте вопросы.\n' +
+      '3. Отправьте их в чат 1688.\n' +
+      '4. Когда поставщик ответит — нажмите «📥 Внести ответ».',
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('💬 Открыть вопросы', `supplier_questions_${job.id}`)],
+          [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${job.id}`)],
+          [Markup.button.callback('🔄 Новый товар', 'new_search')],
+        ]),
+      },
+    );
+    return;
   }
 
-  const rawStatus = String((job as any).procurement_status ?? ((job as any).result_json as any)?.product?.procurementStatus ?? '').toLowerCase();
-  const questionsAlreadySent = /waiting_supplier_reply|supplier_reply_received|ready_for_sample|sample_ordered|sample_received|ready_for_test_batch/.test(rawStatus);
-  const prefix = questionsAlreadySent
-    ? '📥 <b>Ответ поставщика</b>\n\nВставьте сюда ответ поставщика.\n'
-    : '📥 <b>Ответ поставщика</b>\n\nЕсли вопросы ещё не отправлены, сначала нажмите «💬 Текст поставщику».\nКогда поставщик ответит — вставьте сюда его сообщение.\n';
+  if (redis) {
+    await redis.set(confirmKey(chatId), JSON.stringify({ jobId: job.id, userId }), { ex: 900 });
+  }
 
   await ctx.reply(
-    prefix +
+    '📥 <b>Ответ поставщика</b>\n\nВставьте сюда ответ поставщика.\n\n' +
     'Я попробую извлечь:\n\n' +
     '• цену выбранного SKU\n' +
     '• вес с упаковкой\n' +
@@ -64,7 +101,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('💬 Текст поставщику', 'supplier_questions')],
+        [Markup.button.callback('💬 Текст поставщику', `supplier_questions_${job.id}`)],
         [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${job.id}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     }
@@ -100,20 +137,20 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     const extracted = await extractSupplierData(text);
 
     if (!extracted) {
-      await ctx.reply('❌ Не удалось извлечь данные. Попробуйте отправить текст ещё раз.');
+      await ctx.reply('⚠️ Не смог уверенно извлечь данные из ответа. Данные анализа сохранены — вставьте ответ ещё раз или вернитесь к плану.', { ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад к плану', `proc_plan_${pending.jobId}`)]]) });
       return true;
     }
 
     // Загружаем job
     const { data: job } = await supabase.from('jobs').select('*').eq('id', pending.jobId).single();
     if (!job?.result_json) {
-      await ctx.reply('❌ Товар не найден.');
+      await ctx.reply('⚠️ Товар не найден. Вернитесь к последнему отчёту или начните новый товар.', { ...Markup.inlineKeyboard([[Markup.button.callback('🏠 К отчёту', 'last')], [Markup.button.callback('🔄 Новый товар', 'new_search')]]) });
       return true;
     }
 
     const result = job.result_json as any;
-    const raw = result.rawProduct;
-    const product = result.product;
+    const raw = result.rawProduct ?? result.product ?? {};
+    const product = result.product ?? raw;
 
     // Обновляем данные
     if (extracted.weightKg && extracted.weightKg > 0) raw.weightKg = extracted.weightKg;
@@ -149,11 +186,11 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
       },
     } as any;
     const decisionContext = buildDecisionContext(updatedProduct);
-    (updatedProduct as any).procurementStatus = decisionContext.readiness.canRecommendSample ? 'ready_for_sample' : 'supplier_reply_received';
+    (updatedProduct as any).procurementStatus = 'supplier_reply_added';
 
     // Сохраняем обновлённый job
     await supabase.from('jobs').update({
-      procurement_status: decisionContext.readiness.canRecommendSample ? 'ready_for_sample' : 'supplier_reply_received',
+      procurement_status: 'supplier_reply_added',
       procurement_score: decisionContext.readiness.score,
       procurement_pipeline: {
         product_data: true,
@@ -210,8 +247,13 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     });
 
   } catch (e) {
-    console.error('[confirm]', e);
-    await ctx.reply('❌ Ошибка при обработке. Попробуйте ещё раз.');
+    console.error('[supplier-confirm-error]', e);
+    await ctx.reply('⚠️ Не удалось обработать ответ поставщика. Данные анализа сохранены — вернитесь к плану и попробуйте ещё раз.', {
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${pending.jobId}`)],
+        [Markup.button.callback('🏠 К отчёту', `back_main_${pending.jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+      ]),
+    });
   }
 
   return true;

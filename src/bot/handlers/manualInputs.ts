@@ -1,4 +1,5 @@
 import type { Context } from 'telegraf';
+import { Markup } from 'telegraf';
 import { supabase } from '../../db/supabase';
 import { redis } from '../../lib/redis';
 import { buildDecisionContext } from '../../core/decisionLayer';
@@ -18,8 +19,14 @@ export async function handleManualWeightStart(ctx: Context): Promise<void> {
   await saveState(ctx, { ...state, type: 'weight' });
   await ctx.answerCbQuery().catch(() => {});
   await ctx.reply(
-    '⚖️ <b>Указать вес</b>\n\nВведите вес выбранного SKU с упаковкой.\n\nПримеры:\n• 0.42 кг\n• 420 г\n• 1,2 кг\n\nПосле ввода пересчитаю себестоимость и обновлю отчёт.',
-    { parse_mode: 'HTML' }
+    '⚖️ <b>Указать вес</b>\n\nВведите вес выбранного SKU с упаковкой.\n\nПримеры:\n• 0.42 кг\n• 420 г\n• 1,2 кг\n\nПосле ввода я обновлю:\n• предварительную себестоимость\n• карго\n• ТЗ байеру\n• ТЗ карго\n• риск-чеклист',
+    {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${state.jobId}`)],
+        [Markup.button.callback('🏠 К отчёту', `back_main_${state.jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+      ]),
+    }
   );
 }
 
@@ -67,14 +74,14 @@ export async function handleManualInputText(ctx: Context, text: string): Promise
     .single();
 
   if (!job?.result_json) {
-    await ctx.reply('❌ Анализ не найден. Попробуйте /last.');
+    await ctx.reply('⚠️ Анализ не найден. Откройте последний отчёт через /last.');
     return true;
   }
 
   const result = job.result_json as any;
   const product = result.product ?? result.rawProduct;
   if (!product) {
-    await ctx.reply('❌ Данные товара недоступны.');
+    await ctx.reply('⚠️ Данные товара недоступны. Вернитесь к последнему отчёту или начните новый товар.');
     return true;
   }
 
@@ -157,8 +164,21 @@ async function stateFromCallback(ctx: Context, re: RegExp): Promise<Omit<ManualI
 
 async function saveUpdatedJob(jobId: string, result: any, product: any): Promise<void> {
   const decisionContext = buildDecisionContext(product);
+  const procurementStatus = decisionContext.weight.canUseForCargo ? 'weight_added' : (product?.procurementStatus ?? result?.product?.procurementStatus ?? 'analyzed');
   await supabase.from('jobs').update({
-    result_json: { ...result, product, decisionContext },
+    procurement_status: procurementStatus,
+    procurement_score: decisionContext.readiness.score,
+    procurement_pipeline: {
+      product_data: true,
+      sku_parsed: decisionContext.sku.skuCount > 0,
+      weight_confirmed: decisionContext.weight.canUseForCargo,
+      dimensions_confirmed: !!product?.supplierAnswer?.dimensions,
+      supplier_reply_received: !!product?.supplierAnswer,
+      sample_ordered: false,
+      sample_checked: false,
+      test_batch_ready: false,
+    },
+    result_json: { ...result, product: { ...product, procurementStatus }, decisionContext },
   }).eq('id', jobId);
 }
 

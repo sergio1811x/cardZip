@@ -2,8 +2,8 @@ import type { Context } from 'telegraf';
 import { Input, Markup } from 'telegraf';
 import AdmZip from 'adm-zip';
 import { supabase } from '../../db/supabase';
-import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail } from '../../core/messageBuilder';
-import { buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildSupplierQuestions } from '../../core/decisionLayer';
+import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail, buildMainMessage } from '../../core/messageBuilder';
+import { buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildSupplierQuestions, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
 import { formatSeoText } from '../../core/seoFormatter';
 import { formatOrderBrief } from '../../core/orderBrief';
 import { zipBuilder } from '../../core/zipBuilder';
@@ -33,13 +33,45 @@ function detailKeyboard(jobId: string) {
 
 function materialsKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('💬 Вопросы поставщику', `materials_group_questions_${jobId}`)],
-    [Markup.button.callback('📄 Для байера', `materials_group_buyer_${jobId}`), Markup.button.callback('🚚 Для карго', `materials_group_cargo_${jobId}`)],
+    [Markup.button.callback('🔥 Вопросы поставщику', `materials_group_questions_${jobId}`)],
+    [Markup.button.callback('📄 Байер / карго', `materials_group_buyer_cargo_${jobId}`)],
     [Markup.button.callback('🧪 Образец и риски', `materials_group_check_${jobId}`), Markup.button.callback('📝 Для карточки', `materials_group_card_${jobId}`)],
-    [Markup.button.callback('⬇️ Скачать всё ZIP', `materials_zip_${jobId}`)],
+    [Markup.button.callback('⬇️ Скачать ZIP', `materials_zip_${jobId}`)],
     [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
+}
+
+function groupBackKeyboard(jobId: string) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('⬅️ Назад к материалам', `materials_${jobId}`), Markup.button.callback('🚀 К плану', `proc_plan_${jobId}`)],
+    [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+  ]);
+}
+
+function safeSectionErrorKeyboard(jobId: string) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${jobId}`)],
+    [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+  ]);
+}
+
+async function replySectionError(ctx: Context, jobId: string, action: string, error?: unknown) {
+  console.error('[ui-handler-error]', {
+    action,
+    userId: (ctx as any).dbUserId,
+    productId: jobId,
+    state: (ctx as any).session?.procurementStatus,
+    error,
+  });
+  const text = [
+    '⚠️ <b>Не удалось открыть раздел</b>',
+    '',
+    'Данные анализа сохранены. Попробуйте вернуться к плану или открыть материалы ещё раз.',
+    '',
+    'Если ошибка повторится — начните новый товар.',
+  ].join('\n');
+  await ctx.reply(text, { parse_mode: 'HTML', ...safeSectionErrorKeyboard(jobId) }).catch(() => {});
 }
 
 function safePrefix(product: any, offerId: string): string {
@@ -50,6 +82,20 @@ function safePrefix(product: any, offerId: string): string {
     .slice(0, 4)
     .join('_')
     .substring(0, 40) || offerId).replace(/_+/g, '_');
+}
+
+
+function cleanDoc(product: any, text: string, reportType: 'seo' | 'buyerBrief' | 'supplierQuestions' | 'main' = 'buyerBrief'): string {
+  const x = buildDecisionContext(product ?? {});
+  const checked = validateGeneratedText({
+    productIntelligence: x.intelligence,
+    generatedText: String(text ?? ''),
+    reportType,
+    categoryType: x.categoryType,
+    marketDecision: x.market,
+    weightDecision: x.weight,
+  });
+  return checked.fixedText || String(text ?? '').trim();
 }
 
 function buildMaterials(job: any): { product?: ProductWithContent; prefix: string; docs: Array<{ filename: string; text: string; title: string; description: string }>; imageUrls: string[] } {
@@ -73,13 +119,13 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   const sampleRecommendationText = product ? buildSampleRecommendation(product) : (generatedFiles?.sampleRecommendationText ?? '');
 
   const docs = [
-    { filename: `questions_ru_cn_${prefix}.txt`, text: String(supplierText || 'Вопросы поставщику не найдены. Откройте кнопку “Текст поставщику”.'), title: '💬 questions_ru_cn.txt', description: 'Вопросы поставщику на русском и китайском.' },
-    { filename: `buyer_brief_${prefix}.md`, text: String(briefText), title: '📄 buyer_brief.md', description: 'ТЗ байеру: что закупаем, SKU, цена, риски, что проверить.' },
-    { filename: `cargo_brief_${prefix}.md`, text: String(cargoText), title: '🚚 cargo_brief.md', description: 'ТЗ карго: вес, габариты, упаковка, ограничения.' },
-    { filename: `risk_checklist_${prefix}.md`, text: String(riskChecklistText), title: '⚠️ risk_checklist.md', description: 'Что проверить до образца, на образце и перед партией.' },
-    { filename: `sample_plan_${prefix}.md`, text: String(sampleRecommendationText), title: '🧪 sample_plan.md', description: 'Какой образец взять и что проверить.' },
-    { filename: `seo_draft_${prefix}.md`, text: String(seoText), title: '📝 seo_draft.md', description: 'Черновик карточки WB/Ozon.' },
-    { filename: `infographic_brief_${prefix}.md`, text: String(infographicText), title: '🎨 infographic_brief.md', description: 'ТЗ для дизайнера инфографики.' },
+    { filename: `questions_ru_cn_${prefix}.txt`, text: cleanDoc(product, String(supplierText || 'Вопросы поставщику не найдены. Откройте кнопку “Текст поставщику”.'), 'supplierQuestions'), title: '💬 questions_ru_cn.txt', description: 'Вопросы поставщику на русском и китайском.' },
+    { filename: `buyer_brief_${prefix}.md`, text: cleanDoc(product, String(briefText), 'buyerBrief'), title: '📄 buyer_brief.md', description: 'ТЗ байеру: что закупаем, SKU, цена, риски, что проверить.' },
+    { filename: `cargo_brief_${prefix}.md`, text: cleanDoc(product, String(cargoText), 'buyerBrief'), title: '🚚 cargo_brief.md', description: 'ТЗ карго: вес, габариты, упаковка, ограничения.' },
+    { filename: `risk_checklist_${prefix}.md`, text: cleanDoc(product, String(riskChecklistText), 'buyerBrief'), title: '⚠️ risk_checklist.md', description: 'Что проверить до образца, на образце и перед партией.' },
+    { filename: `sample_plan_${prefix}.md`, text: cleanDoc(product, String(sampleRecommendationText), 'buyerBrief'), title: '🧪 sample_plan.md', description: 'Какой образец взять и что проверить.' },
+    { filename: `seo_draft_${prefix}.md`, text: cleanDoc(product, String(seoText), 'seo'), title: '📝 seo_draft.md', description: 'Черновик карточки WB/Ozon.' },
+    { filename: `infographic_brief_${prefix}.md`, text: cleanDoc(product, String(infographicText), 'buyerBrief'), title: '🎨 infographic_brief.md', description: 'ТЗ для дизайнера инфографики.' },
   ].filter(d => d.text && d.text.trim().length > 0);
 
   return { product, prefix, docs, imageUrls: (result?.imageUrls ?? []) as string[] };
@@ -180,15 +226,17 @@ export async function handleBackToMain(ctx: Context): Promise<void> {
   const match = (ctx.callbackQuery as any)?.data?.match(/^back_main_(.+)$/);
   if (!match) return;
 
-  const job = await getJobData(ctx, match[1]);
+  const jobId = match[1];
+  const job = await getJobData(ctx, jobId);
   const product = (job?.result_json as any)?.product as ProductWithContent | undefined;
   if (!product) {
-    await ctx.answerCbQuery('Данные недоступны');
-    return;
+    await ctx.answerCbQuery('Данные недоступны').catch(() => {});
+    return replySectionError(ctx, jobId, 'back_main:not_found');
   }
 
-  await ctx.answerCbQuery();
-  await ctx.deleteMessage().catch(() => {});
+  await ctx.answerCbQuery('Открываю отчёт').catch(() => {});
+  const { text, keyboard } = buildMainMessage(product, jobId, {});
+  await ctx.reply(text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...keyboard });
 }
 
 export async function handleMaterialsResend(ctx: Context): Promise<void> {
@@ -207,29 +255,25 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
   const preview = [
     '📁 <b>Закупочный пакет</b>',
     '',
-    'Я подготовил материалы по этапам.',
+    'Я разложил материалы по этапам закупки.',
     '',
-    '1. <b>Для поставщика</b>',
-    '💬 Вопросы RU/CN — нужно отправить сейчас.',
+    '🔥 <b>Сейчас использовать</b>',
+    '💬 Вопросы поставщику — отправьте их в чат 1688.',
     '',
-    '2. <b>Для байера</b>',
-    '📄 ТЗ байеру — что закупаем, SKU, цена, что проверить.',
+    '<b>После ответа поставщика</b>',
+    '📄 ТЗ байеру — что закупаем, SKU, цена и что проверить.',
+    '🚚 ТЗ карго — вес, габариты, упаковка и ограничения.',
+    '🧪 План образца и риск-чеклист — что проверить до партии.',
     '',
-    '3. <b>Для карго</b>',
-    '🚚 ТЗ карго — вес, габариты, упаковка, ограничения.',
+    '<b>Для карточки</b>',
+    '📝 SEO-черновик — название, описание, характеристики и ключи.',
+    '🎨 ТЗ инфографики — какие слайды сделать и что показать.',
+    ...(imageUrls.length ? ['', '📷 Фото товара добавлю отдельным архивом при скачивании ZIP.'] : []),
     '',
-    '4. <b>Для проверки товара</b>',
-    '⚠️ Риск-чеклист',
-    '🧪 План образца',
+    '<b>Рекомендация:</b>',
+    'сначала отправьте вопросы поставщику. Остальные документы станут точнее после ответа.',
     '',
-    '5. <b>Для карточки</b>',
-    '📝 SEO-черновик',
-    '🎨 ТЗ для инфографики',
-    ...(imageUrls.length ? ['', '📷 Фото товара доступны отдельным архивом после скачивания ZIP.'] : []),
-    '',
-    'Рекомендация: сначала используйте «Вопросы поставщику». Остальные документы лучше скачивать после ответа поставщика.',
-    '',
-    `Всего документов: ${docs.length}`,
+    `Документов в пакете: ${docs.length}`,
   ].join('\n');
   await ctx.reply(preview, {
     parse_mode: 'HTML',
@@ -238,24 +282,98 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
 }
 
 export async function handleMaterialsGroup(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_group_(questions|buyer|cargo|check|card)_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_group_(questions|buyer_cargo|check|card)_(.+)$/);
   if (!match) return;
   const [, group, jobId] = match;
   const job = await getJobData(ctx, jobId);
-  if (!job) return void await ctx.answerCbQuery('Данные недоступны');
+  if (!job) {
+    await ctx.answerCbQuery('Данные недоступны').catch(() => {});
+    return replySectionError(ctx, jobId, 'materials_group:not_found');
+  }
+  await ctx.answerCbQuery('Открываю раздел').catch(() => {});
+
+  if (group === 'questions') {
+    await ctx.reply(
+      '🔥 <b>Вопросы поставщику</b>\n\nСейчас это главный документ. Скопируйте вопросы и отправьте их в чат 1688.\n\nПосле ответа поставщика нажмите «📥 Внести ответ» — я обновлю статус, себестоимость и документы.',
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('💬 Открыть текст поставщику', `supplier_questions_${jobId}`)],
+          [Markup.button.callback('⬅️ Назад к материалам', `materials_${jobId}`), Markup.button.callback('🚀 К плану', `proc_plan_${jobId}`)],
+        ]),
+      },
+    );
+    return;
+  }
+
+  if (group === 'buyer_cargo') {
+    await ctx.reply(
+      '📄 <b>Байер / карго</b>\n\nЭти документы нужны, когда поставщик подтвердит SKU, вес и упаковку.\n\n📄 <b>ТЗ байеру</b> — что закупаем, какой SKU, цена и что проверить.\n\n🚚 <b>ТЗ карго</b> — вес, габариты, упаковка и ограничения.\n\nЕсли веса ещё нет — сначала отправьте вопросы поставщику.',
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('📄 Скачать ТЗ байеру', `materials_doc_buyer_${jobId}`), Markup.button.callback('🚚 Скачать ТЗ карго', `materials_doc_cargo_${jobId}`)],
+          [Markup.button.callback('💬 Спросить поставщика', `supplier_questions_${jobId}`)],
+          [Markup.button.callback('⬅️ Назад к материалам', `materials_${jobId}`), Markup.button.callback('🚀 К плану', `proc_plan_${jobId}`)],
+        ]),
+      },
+    );
+    return;
+  }
+
+  if (group === 'check') {
+    await ctx.reply(
+      '🧪 <b>Образец и риски</b>\n\nПеред партией лучше заказать 1–2 образца.\n\nЧто проверяем: соответствие SKU, качество материала, упаковку, вес/габариты и заявленные свойства.\n\nДокументы: риск-чеклист и план образца.',
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('⚠️ Риск-чеклист', `materials_doc_risk_${jobId}`), Markup.button.callback('🧪 План образца', `materials_doc_sample_${jobId}`)],
+          [Markup.button.callback('⬅️ Назад к материалам', `materials_${jobId}`), Markup.button.callback('🚀 К плану', `proc_plan_${jobId}`)],
+        ]),
+      },
+    );
+    return;
+  }
+
+  await ctx.reply(
+    '📝 <b>Материалы для карточки</b>\n\nЯ подготовил черновики для WB/Ozon.\n\n📝 <b>SEO-черновик</b> — название, описание, характеристики и ключевые слова.\n\n🎨 <b>ТЗ инфографики</b> — какие слайды сделать и что показать.\n\nВажно: используйте эти материалы после проверки SKU, фото и заявленных свойств.',
+    {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('📝 SEO-черновик', `materials_doc_seo_${jobId}`), Markup.button.callback('🎨 ТЗ инфографики', `materials_doc_info_${jobId}`)],
+        [Markup.button.callback('⬅️ Назад к материалам', `materials_${jobId}`), Markup.button.callback('🚀 К плану', `proc_plan_${jobId}`)],
+      ]),
+    },
+  );
+}
+
+export async function handleMaterialsDoc(ctx: Context): Promise<void> {
+  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_doc_(questions|buyer|cargo|risk|sample|seo|info)_(.+)$/);
+  if (!match) return;
+  const [, type, jobId] = match;
+  const job = await getJobData(ctx, jobId);
+  if (!job) {
+    await ctx.answerCbQuery('Данные недоступны').catch(() => {});
+    return replySectionError(ctx, jobId, 'materials_doc:not_found');
+  }
   const { docs } = buildMaterials(job);
-  const selected = docs.filter((d) => {
-    if (group === 'questions') return /questions/i.test(d.filename);
-    if (group === 'buyer') return /buyer_brief/i.test(d.filename);
-    if (group === 'cargo') return /cargo_brief/i.test(d.filename);
-    if (group === 'check') return /risk_checklist|sample_plan/i.test(d.filename);
-    if (group === 'card') return /seo_draft|infographic_brief/i.test(d.filename);
+  const selected = docs.find((d) => {
+    if (type === 'questions') return /questions/i.test(d.filename);
+    if (type === 'buyer') return /buyer_brief/i.test(d.filename);
+    if (type === 'cargo') return /cargo_brief/i.test(d.filename);
+    if (type === 'risk') return /risk_checklist/i.test(d.filename);
+    if (type === 'sample') return /sample_plan/i.test(d.filename);
+    if (type === 'seo') return /seo_draft/i.test(d.filename);
+    if (type === 'info') return /infographic_brief/i.test(d.filename);
     return false;
   });
-  await ctx.answerCbQuery(selected.length ? 'Отправляю материалы' : 'Материалы не найдены');
-  if (!selected.length) return;
-  await sendDocs(ctx, ctx.chat!.id, selected);
-  await ctx.reply('Готово. Можно вернуться к плану или скачать весь закупочный пакет.', materialsKeyboard(jobId)).catch(() => {});
+  if (!selected) {
+    await ctx.answerCbQuery('Документ не найден').catch(() => {});
+    return replySectionError(ctx, jobId, `materials_doc:${type}:missing`);
+  }
+  await ctx.answerCbQuery('Отправляю документ').catch(() => {});
+  await sendDocs(ctx, ctx.chat!.id, [{ filename: selected.filename, text: selected.text }]);
+  await ctx.reply('Документ отправлен. Можно вернуться к материалам или открыть дальнейший план.', groupBackKeyboard(jobId)).catch(() => {});
 }
 
 export async function handleMaterialsZip(ctx: Context): Promise<void> {
