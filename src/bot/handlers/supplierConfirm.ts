@@ -56,18 +56,18 @@ export async function handleSupplierConfirmStart(ctx: Context) {
 
   if (!questionsAlreadySent) {
     await ctx.reply(
-      '📥 <b>Ответ поставщика</b>\n\n' +
+      '📥 <b>Обновить пакет по ответу</b>\n\n' +
       'Сначала отправьте вопросы поставщику. После ответа вернитесь сюда и вставьте текст.\n\n' +
       'Что сделать сейчас:\n' +
-      '1. Нажмите «💬 Текст поставщику».\n' +
+      '1. Нажмите «💬 Вопросы поставщику».\n' +
       '2. Скопируйте вопросы.\n' +
       '3. Отправьте их в чат 1688.\n' +
-      '4. Когда поставщик ответит — нажмите «📥 Внести ответ».',
+      '4. Когда поставщик ответит — нажмите «📥 Обновить по ответу».',
       {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
           [Markup.button.callback('💬 Открыть вопросы', `supplier_questions_${job.id}`)],
-          [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${job.id}`)],
+          [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${job.id}`)],
           [Markup.button.callback('🔄 Новый товар', 'new_search')],
         ]),
       },
@@ -80,7 +80,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
   }
 
   await ctx.reply(
-    '📥 <b>Ответ поставщика</b>\n\nВставьте сюда ответ поставщика.\n\n' +
+    '📥 <b>Обновить пакет по ответу</b>\n\nВставьте сюда ответ поставщика.\n\n' +
     'Я попробую извлечь:\n\n' +
     '• цену выбранного SKU\n' +
     '• вес с упаковкой\n' +
@@ -96,13 +96,14 @@ export async function handleSupplierConfirmStart(ctx: Context) {
     '• статус закупки\n' +
     '• ТЗ байеру\n' +
     '• ТЗ карго\n' +
-    '• риск-чеклист\n\n' +
+    '• чек-лист образца\n\n' +
     '<i>Можно отправить текст на русском, китайском или английском.</i>',
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('💬 Текст поставщику', `supplier_questions_${job.id}`)],
-        [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${job.id}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+        [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${job.id}`)],
+        [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`), Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`)],
+        [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     }
   );
@@ -206,9 +207,7 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     }).eq('id', pending.jobId);
 
     // Формируем ответ
-    const previousScore = buildDecisionContext(product as any).readiness.score;
-    const newScore = decisionContext.readiness.score;
-    const confirmedLines: string[] = ['✅ <b>Закупочный пакет обновлён</b>', ''];
+        const confirmedLines: string[] = ['✅ <b>Закупочный пакет обновлён</b>', ''];
     confirmedLines.push('Извлечено:');
     if (extracted.weightKg) confirmedLines.push(`• вес с упаковкой: ${extracted.weightKg} кг`);
     if (extracted.priceCny) confirmedLines.push(`• цена SKU: ${extracted.priceCny} ¥`);
@@ -230,11 +229,11 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     confirmedLines.push('• предварительная себестоимость обновлена');
     confirmedLines.push('• ТЗ байеру');
     confirmedLines.push('• ТЗ карго');
-    confirmedLines.push('• риск-чеклист');
-    confirmedLines.push('• статус закупки');
+    confirmedLines.push('• чек-лист образца');
+    confirmedLines.push('• закупочный пакет');
     confirmedLines.push('');
     confirmedLines.push(`Новый статус: ${decisionContext.readiness.label}`);
-    confirmedLines.push(`Готовность: ${previousScore}/100 → ${newScore}/100`);
+    confirmedLines.push('Теперь можно скачать обновлённый ZIP.');
 
 
     await ctx.reply(confirmedLines.join('\n'), { parse_mode: 'HTML' });
@@ -248,10 +247,10 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
 
   } catch (e) {
     console.error('[supplier-confirm-error]', e);
-    await ctx.reply('⚠️ Не удалось обработать ответ поставщика. Данные анализа сохранены — вернитесь к плану и попробуйте ещё раз.', {
+    await ctx.reply('⚠️ Не удалось обработать ответ поставщика. Данные анализа сохранены — вернитесь к отчёту или откройте пакет ещё раз.', {
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('⬅️ Назад к плану', `proc_plan_${pending.jobId}`)],
-        [Markup.button.callback('🏠 К отчёту', `back_main_${pending.jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+        [Markup.button.callback('🏠 К отчёту', `back_main_${pending.jobId}`), Markup.button.callback('📁 Закупочный пакет', `materials_${pending.jobId}`)],
+        [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     });
   }

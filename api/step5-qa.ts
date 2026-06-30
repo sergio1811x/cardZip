@@ -6,7 +6,7 @@ import { markSent } from '../src/db/queries/jobs';
 import { getStatus, tryConsumeCredit } from '../src/services/subscriptionService';
 import { buildMainMessage, buildSafeSummary } from '../src/core/messageBuilder';
 import { runHardValidator, validateReport } from '../src/core/reportValidator';
-import { validateGeneratedText, buildDecisionContext, buildSupplierQuestions, buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation } from '../src/core/decisionLayer';
+import { validateGeneratedText, buildDecisionContext, buildSupplierQuestions, buildCargoBrief, buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildSampleChecklist } from '../src/core/decisionLayer';
 import { formatSeoText } from '../src/core/seoFormatter';
 import { formatOrderBrief } from '../src/core/orderBrief';
 import { upsertProduct } from '../src/db/queries/products';
@@ -122,6 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let infographicText = buildInfographicBrief(product);
     let riskChecklistText = buildRiskChecklist(product);
     let sampleRecommendationText = buildSampleRecommendation(product);
+    let sampleChecklistText = buildSampleChecklist(product);
     const supplierQuestions = buildSupplierQuestions(product, decisionContext).ru;
     const writerQuestions = Array.isArray(writerResult?.supplierQuestionsRu) ? writerResult.supplierQuestionsRu : [];
     const seenSupplierQuestions = new Set<string>();
@@ -145,20 +146,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const cargoValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: cargoText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
     const infographicValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: infographicText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
     const riskValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: riskChecklistText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
-    const sampleValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: sampleRecommendationText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
+    const sampleValidation = validateGeneratedText({ productIntelligence: decisionContext.intelligence, generatedText: sampleChecklistText, reportType: 'buyerBrief', categoryType: decisionContext.categoryType, marketDecision: decisionContext.market, weightDecision: decisionContext.weight });
     seoText = seoValidation.fixedText || seoText;
     briefText = briefValidation.fixedText || briefText;
     let supplierText = supplierValidation.fixedText || supplierQs;
     cargoText = cargoValidation.fixedText || cargoText;
     infographicText = infographicValidation.fixedText || infographicText;
     riskChecklistText = riskValidation.fixedText || riskChecklistText;
-    sampleRecommendationText = sampleValidation.fixedText || sampleRecommendationText;
+    sampleChecklistText = sampleValidation.fixedText || sampleChecklistText;
 
     const fileErrors = [...seoValidation.errors, ...briefValidation.errors, ...supplierValidation.errors, ...cargoValidation.errors, ...infographicValidation.errors, ...riskValidation.errors, ...sampleValidation.errors];
     if (fileErrors.length) console.warn('[step5] file validators repaired:', fileErrors.join(', '));
 
     await supabase.from('jobs').update({
-      result_json: { ...result, product, generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, infographicText, riskChecklistText, sampleRecommendationText } },
+      result_json: { ...result, product, generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, infographicText, riskChecklistText, sampleRecommendationText } },
     }).eq('id', jobId);
 
     const wbCategory = null;
@@ -176,7 +177,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const softValidation = validateReport(mainText, (product as any).categoryType ?? decisionContext.categoryType ?? 'other', {
       hasPrice: !!decisionContext.price.calculationPriceYuan,
       hasWeight: decisionContext.weight.canUseForRoi,
-      hasDirectAnalogs: true, // no-WB MVP: ROI is allowed only as manual scenario and checked by hard validator
+      hasDirectAnalogs: true,
       wb429: false,
       intelligence: decisionContext.intelligence as any,
     });
@@ -185,7 +186,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const snapshot = result.analysisSnapshot ?? { market: product.marketDecision ?? decisionContext.market, economics: product.economics, productContext: product.productContext, purchasePrice: decisionContext.price, weight: decisionContext.weight, sku: decisionContext.sku };
     let hard = runHardValidator({
       analysisSnapshot: snapshot,
-      artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText, cargoText, infographicText, riskChecklistText, sampleRecommendationText },
+      artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, infographicText, riskChecklistText, sampleRecommendationText },
     });
     ({ finalText, seoText, briefText, supplierText } = applySanitizedArtifacts(hard, { finalText, seoText, briefText, supplierText }));
 
@@ -275,7 +276,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       result_json: {
         ...result,
         product: productWithProcurementState,
-        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, infographicText, riskChecklistText, sampleRecommendationText },
+        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, infographicText, riskChecklistText, sampleRecommendationText },
         finalUserCard: finalText,
         qaResult,
       },

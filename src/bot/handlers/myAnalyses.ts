@@ -99,21 +99,17 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
   text += `Цена: ${escHtml(x.price.displayPriceText)}\n`;
   text += `SKU: ${escHtml(x.sku.skuSummary)}\n`;
   text += `Вес: ${escHtml(x.weight.displayText)}\n`;
-  text += `${escHtml(x.readiness.label)} · готовность ${x.readiness.score}/100\n`;
+  text += `Статус: ${escHtml(x.readiness.label)}\n`;
 
   if (x.cost.costWithoutCargoRub) {
     text += `Себестоимость без карго: ${fmtRub(x.cost.costWithoutCargoRub)}\n`;
   }
-  text += 'Следующий шаг: открыть дальнейший план и отправить вопросы поставщику.\n';
+  text += 'Следующий шаг: отправить вопросы поставщику и скачать закупочный пакет.\n';
 
-  if (x.readiness.nextActions.length) {
-    text += '\nЧто сделать:\n' + x.readiness.nextActions.slice(0, 3).map((a, i) => `${i + 1}. ${escHtml(a)}`).join('\n');
-  }
 
   const buttons = [];
-  buttons.push([Markup.button.callback('🚀 Дальнейший план', `proc_plan_${job.id}`)]);
-  buttons.push([Markup.button.callback('💬 Текст поставщику', `supplier_questions_${job.id}`), Markup.button.callback('📦 Данные товара', `product_detail_${job.id}`)]);
-  buttons.push([Markup.button.callback('📁 Материалы', `materials_${job.id}`)]);
+  buttons.push([Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${job.id}`)]);
+  buttons.push([Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`), Markup.button.callback('📦 Данные товара', `product_detail_${job.id}`)]);
   buttons.push([Markup.button.callback('⬅️ К списку', 'my_analyses')]);
 
   const keyboard = Markup.inlineKeyboard(buttons);

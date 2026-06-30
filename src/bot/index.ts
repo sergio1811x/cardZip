@@ -18,7 +18,7 @@ import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 import { handleMyAnalyses, handleAnalysisDetail } from './handlers/myAnalyses';
 import { handleManualWeightStart, handleManualSalePriceStart, handleManualCompetitorsStart, handleManualInputText, getPendingManualInput } from './handlers/manualInputs';
-import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleMaterialsZip, handleMaterialsList, handleMaterialsGroup, handleMaterialsDoc, handleBackToMain, handleProductDetail, handleRiskDetail, handleSampleDetail, handleProcurementPlan } from './handlers/detailButtons';
+import { handleEconDetail, handleWbDetail, handleMaterialsResend, handleMaterialsZip, handleMaterialsList, handleMaterialsInside, handleMaterialsGroup, handleMaterialsDoc, handleBackToMain, handleProductDetail, handleRiskDetail, handleSampleDetail, handleProcurementPlan } from './handlers/detailButtons';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN не задан');
@@ -99,9 +99,9 @@ bot.action('example_result', async (ctx) => {
 ` +
       `• ТЗ байеру и ТЗ карго
 ` +
-      `• риск-чеклист и план образца
+      `• чек-лист образца
 ` +
-      `• SEO-черновик и ТЗ для инфографики
+      `• SEO-черновик и идеи инфографики
 
 ` +
       `Отправьте ссылку 1688 — соберу такой пакет по вашему товару.`,
@@ -118,12 +118,12 @@ bot.action('how_it_works', async (ctx) => {
 ` +
       `2. CardZip разбирает товар, SKU, цену, MOQ и поставщика.
 ` +
-      `3. Я готовлю закупочный пакет: вопросы поставщику, ТЗ байеру, ТЗ карго, риски, образец, SEO и инфографику.
+      `3. Я готовлю закупочный пакет: вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист образца, SEO и фото.
 ` +
-      `4. После ответа поставщика можно внести данные и обновить статус закупки.
+      `4. После ответа поставщика можно обновить пакет по весу, цене, MOQ и упаковке.
 
 ` +
-      `Я не обещаю прибыль и не считаю ROI без рынка и вашей цены продажи — задача CardZip помочь не закупать вслепую.`,
+      `Я не обещаю прибыль и не ищу аналоги WB — задача CardZip подготовить товар к закупке без китайского хаоса.`,
     { parse_mode: 'HTML' },
   );
 });
@@ -189,8 +189,9 @@ bot.action(/^proc_plan_(.+)$/, handleProcurementPlan);
 bot.action(/^econ_detail_(.+)$/, handleEconDetail);
 bot.action(/^wb_detail_(.+)$/, handleWbDetail);
 bot.action(/^materials_zip_(.+)$/, handleMaterialsZip);
+bot.action(/^materials_inside_(.+)$/, handleMaterialsInside);
 bot.action(/^materials_group_(questions|buyer_cargo|check|card)_(.+)$/, handleMaterialsGroup);
-bot.action(/^materials_doc_(questions|buyer|cargo|risk|sample|seo|info)_(.+)$/, handleMaterialsDoc);
+bot.action(/^materials_doc_(questions|buyer|cargo|sample|seo|readme)_(.+)$/, handleMaterialsDoc);
 bot.action(/^materials_list_(.+)$/, handleMaterialsList);
 bot.action(/^materials_(.+)$/, handleMaterialsResend);
 bot.action(/^risk_detail_(.+)$/, handleRiskDetail);

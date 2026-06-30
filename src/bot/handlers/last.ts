@@ -45,7 +45,7 @@ export async function handleLast(ctx: Context): Promise<void> {
   lines.push(`Цена: ${escHtml(x.price.displayPriceText)}`);
   lines.push(`SKU: ${escHtml(x.sku.skuSummary)}`);
   lines.push(`Вес: ${escHtml(x.weight.displayText)}`);
-  lines.push(`${escHtml(x.readiness.label)} · готовность ${x.readiness.score}/100`);
+  lines.push(`Статус: ${escHtml(x.readiness.label)}`);
 
   if (x.cost.purchaseRub) {
     lines.push(`Закупка: ${fmtRub(x.cost.purchaseRub)}`);
@@ -53,21 +53,15 @@ export async function handleLast(ctx: Context): Promise<void> {
   if (x.cost.costWithoutCargoRub) {
     lines.push(`Себестоимость без карго: ${fmtRub(x.cost.costWithoutCargoRub)}`);
   }
-  lines.push('Следующий шаг: открыть дальнейший план и отправить вопросы поставщику.');
+  lines.push('Следующий шаг: отправить вопросы поставщику и скачать закупочный пакет.');
 
   lines.push('');
   lines.push(`Анализ от ${date}`);
 
   const buttons: any[][] = [
-    [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${lastJob.id}`)],
-    [
-      Markup.button.callback('💬 Текст поставщику', `supplier_questions_${lastJob.id}`),
-      Markup.button.callback('📦 Данные товара', `product_detail_${lastJob.id}`),
-    ],
-    [
-      Markup.button.callback('📁 Материалы', `materials_${lastJob.id}`),
-      Markup.button.callback('🔄 Новый товар', 'new_search'),
-    ],
+    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${lastJob.id}`)],
+    [Markup.button.callback('📁 Закупочный пакет', `materials_${lastJob.id}`), Markup.button.callback('📦 Данные товара', `product_detail_${lastJob.id}`)],
+    [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ];
 
   await ctx.reply(lines.join('\n'), {

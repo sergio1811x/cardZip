@@ -44,25 +44,34 @@ export async function handleSupplierQuestions(ctx: Context) {
   }
 
   await ctx.reply(
-    '💬 <b>Текст поставщику</b>\n\n' +
-    'Сейчас главный шаг — отправить вопросы поставщику в чат 1688.\n\n' +
-    'Зачем это нужно:\n' +
-    '• подтвердить цену выбранного SKU\n' +
-    '• получить вес и габариты упаковки\n' +
-    '• проверить материал, комплектацию и реальные фото\n\n' +
-    'Выберите язык. После ответа поставщика нажмите «📥 Внести ответ».',
+    '💬 <b>Вопросы поставщику</b>\n\n' +
+    'Скопируйте текст и отправьте поставщику в чат 1688.\n\n' +
+    'После ответа поставщика можно обновить закупочный пакет: я попробую извлечь вес, габариты, цену, MOQ и обновить ТЗ.\n\n' +
+    '<b>Что делать сейчас:</b> откройте русский или китайский текст и отправьте его поставщику.',
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
         [
-          Markup.button.callback('🇷🇺 Русский текст', job?.id ? `sq_ru_${job.id}` : 'sq_ru'),
-          Markup.button.callback('🇨🇳 Китайский текст', job?.id ? `sq_cn_${job.id}` : 'sq_cn'),
+          Markup.button.callback('📋 Скопировать RU', job?.id ? `sq_ru_${job.id}` : 'sq_ru'),
+          Markup.button.callback('📋 Скопировать CN', job?.id ? `sq_cn_${job.id}` : 'sq_cn'),
         ],
-        ...(job?.id ? [[Markup.button.callback('⬅️ Назад к плану', `proc_plan_${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${job.id}`)]] : []),
+        ...(job?.id ? [[Markup.button.callback('📥 Обновить по ответу', `supplier_confirm_${job.id}`)]] : []),
+        ...(job?.id ? [[Markup.button.callback('⬅️ Назад', `back_main_${job.id}`), Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`)]] : []),
         [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     }
   );
+}
+
+
+
+function cnQuestionsAreSafe(lines: string[]): boolean {
+  const text = lines.join('\n');
+  if (!text.trim()) return false;
+  if (/[а-яё]/i.test(text)) return false;
+  if (/file:\/\//i.test(text)) return false;
+  if (/\d+\.\s*\d+\./.test(text)) return false;
+  return true;
 }
 
 export async function handleSupplierQuestionsLang(ctx: Context) {
@@ -88,7 +97,14 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     const product = data.product ?? data.rawProduct;
     const x = buildDecisionContext(product ?? {});
     const questionSet = buildSupplierQuestions(product ?? {});
-    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 12);
+    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 10);
+
+    if (lang === 'cn' && !cnQuestionsAreSafe(questions)) {
+      await ctx.reply('⚠️ Китайская версия не сформирована — используйте русскую версию или переведите через байера.', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`)], [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`)]])
+      });
+      return;
+    }
 
     let text: string;
     if (lang === 'cn') {
@@ -120,18 +136,17 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
       }).eq('id', job.id).eq('user_id', userId);
     } catch {}
 
-    const afterText = text + '\n\nПосле ответа поставщика нажмите «📥 Внести ответ» — обновлю закупочный пакет.';
+    const afterText = text + '\n\nПосле ответа поставщика нажмите «📥 Обновить по ответу» — обновлю закупочный пакет.';
     await ctx.reply(afterText, {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Я отправил вопросы / жду ответ', `proc_plan_${job.id}`)],
-        [Markup.button.callback('📥 Внести ответ поставщика', `supplier_confirm_${job.id}`)],
-        [Markup.button.callback('🚀 Дальнейший план', `proc_plan_${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${job.id}`)],
-        [Markup.button.callback('🔄 Новый товар', 'new_search')],
+        [Markup.button.callback('📥 Обновить пакет по ответу', `supplier_confirm_${job.id}`)],
+        [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${job.id}`)],
+        [Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     });
   } catch (e) {
     console.error('[supplier_questions]', e);
-    await ctx.reply('⚠️ Не удалось открыть вопросы поставщику. Данные анализа сохранены — вернитесь к последнему отчёту или попробуйте ещё раз.', { ...Markup.inlineKeyboard([[Markup.button.callback('🏠 К отчёту', 'last')], [Markup.button.callback('🔄 Новый товар', 'new_search')]]) });
+    await ctx.reply('⚠️ Не удалось открыть раздел. Данные анализа сохранены — вернитесь к отчёту или откройте пакет ещё раз.', { ...Markup.inlineKeyboard([[Markup.button.callback('🏠 К отчёту', 'last')], [Markup.button.callback('🔄 Новый товар', 'new_search')]]) });
   }
 }

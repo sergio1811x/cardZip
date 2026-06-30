@@ -65,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         platform: raw?.platform ?? '1688',
         icon: '🟡',
         headline: 'Закупочная гипотеза без автоматической проверки WB/Ozon',
-        disclaimers: ['ROI не считается автоматически без ручной цены продажи или конкурентов.'],
+        disclaimers: ['Продажную цену и рынок пользователь проверяет отдельно.'],
       },
     };
     const decision = buildDecisionContext(product);

@@ -187,8 +187,8 @@ export async function calcEconomics(input: EconomicsInput): Promise<EconomicsRes
   let disclaimer = 'Расчёт ориентировочный. Комиссии, логистика, реклама, возвраты и фактическая цена продажи могут отличаться.';
   if (isSyntheticPrice) {
     disclaimer = rawWeightMissing
-      ? 'Вес с упаковкой не подтверждён: цена продажи, прибыль, маржа и ROI не рассчитываются. ' + disclaimer
-      : 'Цена продажи не задана вручную: прибыль, маржа и ROI не рассчитываются. ' + disclaimer;
+      ? 'Вес с упаковкой не подтверждён: точная экономика партии не рассчитывается. ' + disclaimer
+      : 'Цена продажи не задана вручную: точная экономика партии не рассчитывается. ' + disclaimer;
   }
   // Не дублируем про вес — это показывается в messageBuilder
   if (isCustom) {

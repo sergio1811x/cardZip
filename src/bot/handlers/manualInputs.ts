@@ -19,7 +19,7 @@ export async function handleManualWeightStart(ctx: Context): Promise<void> {
   await saveState(ctx, { ...state, type: 'weight' });
   await ctx.answerCbQuery().catch(() => {});
   await ctx.reply(
-    '⚖️ <b>Указать вес</b>\n\nВведите вес выбранного SKU с упаковкой.\n\nПримеры:\n• 0.42 кг\n• 420 г\n• 1,2 кг\n\nПосле ввода я обновлю:\n• предварительную себестоимость\n• карго\n• ТЗ байеру\n• ТЗ карго\n• риск-чеклист',
+    '⚖️ <b>Указать вес</b>\n\nВведите вес выбранного SKU с упаковкой.\n\nПримеры:\n• 0.42 кг\n• 420 г\n• 1,2 кг\n\nПосле ввода я обновлю:\n• предварительную себестоимость\n• карго\n• ТЗ байеру\n• ТЗ карго\n• чек-лист образца',
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
@@ -36,7 +36,7 @@ export async function handleManualSalePriceStart(ctx: Context): Promise<void> {
   await saveState(ctx, { ...state, type: 'sale_price' });
   await ctx.answerCbQuery().catch(() => {});
   await ctx.reply(
-    '💰 <b>Посчитать по моей цене</b>\n\nВведите предполагаемую цену продажи в ₽.\n\nПример: <b>1290</b>\n\nЯ посчитаю сценарную прибыль и ROI. Это будет сценарий по вашей цене, а не подтверждённая рыночная цена.',
+    '💰 <b>Посчитать по моей цене</b>\n\nВведите предполагаемую цену продажи в ₽.\n\nПример: <b>1290</b>\n\nЯ посчитаю ориентир по вашей цене. Это не рыночная аналитика и не обещание прибыли.',
     { parse_mode: 'HTML' }
   );
 }

@@ -99,7 +99,7 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
       ],
       canShowRoi: decision.cost.canShowRoi,
       canShowMargin: decision.cost.canShowRoi,
-      warning: decision.cost.canShowRoi ? 'Сценарий рассчитан по цене, введённой пользователем.' : 'ROI не считается автоматически без ручной цены продажи/конкурентов.',
+      warning: decision.cost.canShowRoi ? 'Сценарий рассчитан по цене, введённой пользователем.' : 'Продажную цену и рынок пользователь проверяет отдельно.',
     },
     readiness: decision.readiness,
     missingData: decision.readiness.missingData,
