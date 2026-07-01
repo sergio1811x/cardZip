@@ -1335,7 +1335,16 @@ export function buildSampleChecklist(product: any): string {
 
 export function buildSafeSummary(product: any, reason?: string): string {
   const x = buildDecisionContext(product);
-  return ['⚠️ <b>Анализ требует уточнения</b>', '', `Товар: ${html(x.title)}`, `Статус: ${html(procurementStatusText(x))}`, '', `Главный риск: ${html(reason || x.readiness.blockers[0] || x.readiness.risks[0] || 'данные недостаточно подтверждены')}`, 'Следующий шаг: отправьте вопросы поставщику и скачайте закупочный пакет.', '', 'Не делать: не закупать партию, пока не подтверждены SKU, вес, упаковка и образец.', '', 'Кредит не списан.'].join('\n');
+  return [
+    '⚠️ <b>Не удалось показать полный отчёт</b>',
+    '',
+    `Товар: ${html(x.title)}`,
+    `Статус: ${html(procurementStatusText(x))}`,
+    '',
+    `Что случилось: ${html(reason || x.readiness.blockers[0] || x.readiness.risks[0] || 'данные требуют проверки')}`,
+    '',
+    'Анализ не потерян. Вернитесь к отчёту или начните новый товар.',
+  ].join('\n');
 }
 
 export function validateGeneratedText(input: { productIntelligence?: ProductIntelligenceLike; generatedText: string; reportType: 'main' | 'detail1688' | 'seo' | 'buyerBrief' | 'supplierQuestions'; categoryType?: string; marketDecision?: MarketDecision; weightDecision?: WeightDecision }): { ok: boolean; errors: string[]; fixedText: string } {

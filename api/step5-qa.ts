@@ -190,11 +190,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ({ finalText, seoText, briefText, supplierText } = applySanitizedArtifacts(hard, { finalText, seoText, briefText, supplierText }));
 
     if (hard.block || !hard.canShowFullReport) {
-      console.warn(`[step5] hard validator blocked: ${hard.issues.map(i => i.problem).join('; ')}`);
-      progress?.message('Отчёт требует безопасного уточнения — отправляю короткое объяснение', 98);
-      progress?.stop();
-      await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Hard Validator заблокировал полный отчёт.');
-      return res.status(200).json({ ok: true, blocked: true, source: 'hard' });
+      // MVP rule: a successfully parsed product must still produce the procurement package.
+      // Missing confirmations, risky claims, weak selected SKU, no WB market data, no weight,
+      // or QA caution are warning/repair cases, not reasons to stop the analysis.
+      // The deterministic validator has already sanitized artifacts above; keep sending the
+      // repaired report and ZIP unless the deployment explicitly opts into fail-closed mode.
+      const failClosed = String(process.env.CARDZIP_VALIDATOR_FAIL_CLOSED ?? 'false').toLowerCase() === 'true';
+      console.warn(`[step5] hard validator warning-only: ${hard.issues.map(i => i.problem).join('; ')}`);
+      if (failClosed) {
+        progress?.message('Валидатор остановил отчёт в fail-closed режиме', 98);
+        progress?.stop();
+        await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Hard Validator заблокировал полный отчёт.');
+        return res.status(200).json({ ok: true, blocked: true, source: 'hard_fail_closed' });
+      }
     }
 
     progress?.step('qa');
@@ -213,15 +221,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (marketOnlyBlock) {
         console.warn(`[step5] QA market-only block downgraded to PASS: ${reason}`);
         qaResult = { ...qaResult, decision: 'PASS', canShowToUser: true, qualityScore: Math.max(6, Number(qaResult.qualityScore ?? 6)), confidence: qaResult.confidence ?? 'medium', summary: `QA warning downgraded: ${reason}`, issues: [] } as any;
-      } else if (!qaUnavailable || qaUnavailablePolicy === 'fail_closed') {
-        console.warn(`[step5] QA blocked/unavailable: ${reason}`);
-        progress?.message('QA не разрешил полный отчёт — отправляю безопасное объяснение', 98);
-        progress?.stop();
-        await sendBlocked(job, product, reason || 'QA Gate не разрешил полный отчёт.');
-        return res.status(200).json({ ok: true, blocked: true, source: 'qa' });
       } else {
-        console.warn(`[step5] QA unavailable; sending code-validated report by policy: ${reason}`);
-        qaResult = { decision: 'PASS', canShowToUser: true, qualityScore: 7, confidence: 'medium', summary: 'LLM QA unavailable; code hard validator passed.', issues: [] } as any;
+        const qaFailClosed = String(process.env.CARDZIP_QA_FAIL_CLOSED ?? 'false').toLowerCase() === 'true' || qaUnavailablePolicy === 'fail_closed';
+        if (qaFailClosed) {
+          console.warn(`[step5] QA blocked/unavailable in fail-closed mode: ${reason}`);
+          progress?.message('QA остановил отчёт в fail-closed режиме', 98);
+          progress?.stop();
+          await sendBlocked(job, product, reason || 'QA Gate не разрешил полный отчёт.');
+          return res.status(200).json({ ok: true, blocked: true, source: 'qa_fail_closed' });
+        }
+        console.warn(`[step5] QA warning-only; sending code-validated report: ${reason}`);
+        qaResult = { decision: 'PASS', canShowToUser: true, qualityScore: Math.max(6, Number((qaResult as any)?.qualityScore ?? 6)), confidence: (qaResult as any)?.confidence ?? 'medium', summary: `QA warning downgraded: ${reason}`, issues: [] } as any;
       }
     }
 
@@ -235,10 +245,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       hard = runHardValidator({ analysisSnapshot: snapshot, artifacts: { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText } });
       ({ finalText, seoText, briefText, supplierText } = applySanitizedArtifacts(hard, { finalText, seoText, briefText, supplierText }));
       if (hard.block || !hard.canShowFullReport) {
-        progress?.message('Auto-Fix не смог безопасно исправить отчёт — отправляю короткое объяснение', 98);
-        progress?.stop();
-        await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Auto-Fix не смог безопасно исправить отчёт.');
-        return res.status(200).json({ ok: true, blocked: true, source: 'autofix-hard' });
+        const failClosed = String(process.env.CARDZIP_VALIDATOR_FAIL_CLOSED ?? 'false').toLowerCase() === 'true';
+        console.warn(`[step5] post-autofix validator warning-only: ${hard.issues.map(i => i.problem).join('; ')}`);
+        if (failClosed) {
+          progress?.message('Auto-Fix не смог пройти fail-closed валидатор', 98);
+          progress?.stop();
+          await sendBlocked(job, product, hard.safeUserSummary?.mainRisk || 'Auto-Fix не смог безопасно исправить отчёт.');
+          return res.status(200).json({ ok: true, blocked: true, source: 'autofix_hard_fail_closed' });
+        }
       }
     }
 
