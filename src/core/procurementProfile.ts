@@ -97,6 +97,27 @@ export type ProductProcurementProfile = {
     confidence: 'high' | 'medium' | 'low';
     reason: string;
   };
+  classifier?: ProductKindDecision;
+  intelligenceImages?: ProductIntelligenceImage[];
+  supplierQuestionsCn?: string[];
+  supplierQuestionsCnValid?: boolean;
+};
+
+export type ProductKindDecision = {
+  productKind: ProductKind;
+  confidence: number;
+  confidenceLabel: 'high' | 'medium' | 'low';
+  visionKind: ProductKind | null;
+  textKind: ProductKind | null;
+  rulesKind: ProductKind;
+  evidence: string[];
+  disagreement: boolean;
+};
+
+export type ProductIntelligenceImage = {
+  url: string;
+  role: 'selected_sku_image' | 'main_product_image' | 'detail_image' | 'package_image';
+  note: string;
 };
 
 export type SupplierQuestionsProfileResult = {
@@ -268,22 +289,70 @@ export function supplierTypeDisplay(value: unknown): string {
   return safeRu(value) || 'продавец';
 }
 
-function detectKind(product: any, intelligence?: ProductIntelligence | any): ProductKind {
-  const raw = `${intelligence?.productIdentity?.productKind ?? ''} ${intelligence?.productIdentity?.categoryType ?? ''} ${intelligence?.productIdentity?.subCategoryType ?? ''} ${product?.categoryType ?? ''}`.toLowerCase();
-  const text = `${raw} ${product?.titleRu ?? ''} ${product?.titleEn ?? ''} ${product?.titleCn ?? ''} ${product?.categoryName ?? ''}`.toLowerCase();
-  if (/towel|килт|полотенц[еа][ -]?килт/.test(text)) return 'towel_kilt';
-  if (/зонт|umbrella|雨伞|雨傘|伞|傘/.test(text)) return 'umbrella';
-  if (/маск[аи]\s+для\s+сна|sleep\s*mask|眼罩|睡眠/.test(text)) return 'sleep_mask';
-  if (/мини[ -]?стирал|стиральн[а-яё ]*машин|washing\s*machine|洗衣机|內衣洗衣|内衣洗衣/.test(text)) return 'mini_washer';
-  if (/сабо|shoe|footwear|обув|тапоч|шл[её]пан|сандал|鞋|拖鞋|凉鞋/.test(text)) return 'footwear';
-  if (/одежд|clothing|clothes|плать|брюк|футбол|衣|裤/.test(text)) return 'clothing';
-  if (/usb|type-c|type c/.test(text)) return 'usb_device';
-  if (/насеком|insect|ловуш|粘虫|捕虫/.test(text)) return 'passive_insect_trap';
-  if (/кухон|kitchen/.test(text)) return 'kitchen_tool';
-  if (/сумк|bag|кошел|брелок/.test(text)) return 'bag_accessory';
-  if (/электр|220v|вилка|мощность|appliance|прибор/.test(text)) return 'small_appliance';
-  return 'generic_product';
+
+function normalizeProductKind(value: unknown): ProductKind | null {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  const direct = raw.match(/footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product/)?.[0];
+  if (direct && direct in KIND_RULES) return direct as ProductKind;
+  if (/зонт|umbrella|雨伞|雨傘|伞|傘/.test(raw)) return 'umbrella';
+  if (/маск[аи]\s+для\s+сна|sleep\s*mask|眼罩|睡眠/.test(raw)) return 'sleep_mask';
+  if (/мини[ -]?стирал|стиральн[а-яё ]*машин|washing\s*machine|洗衣机/.test(raw)) return 'mini_washer';
+  if (/сабо|shoe|footwear|обув|тапоч|шл[её]пан|сандал|鞋|拖鞋|凉鞋/.test(raw)) return 'footwear';
+  if (/полотенц[еа][ -]?килт|towel[_ -]?kilt/.test(raw)) return 'towel_kilt';
+  if (/одежд|clothing|clothes|плать|брюк|футбол|衣|裤/.test(raw)) return 'clothing';
+  if (/usb|type-c|type c/.test(raw)) return 'usb_device';
+  if (/насеком|insect|ловуш|粘虫|捕虫/.test(raw)) return 'passive_insect_trap';
+  if (/кухон|kitchen/.test(raw)) return 'kitchen_tool';
+  if (/сумк|bag|кошел|брелок/.test(raw)) return 'bag_accessory';
+  if (/электр|220v|вилка|мощность|appliance|прибор/.test(raw)) return 'small_appliance';
+  return null;
 }
+
+function detectKindByRules(product: any): ProductKind {
+  const text = `${product?.titleRu ?? ''} ${product?.titleEn ?? ''} ${product?.titleCn ?? ''} ${product?.categoryName ?? ''} ${JSON.stringify(product?.attributes ?? [])}`.toLowerCase();
+  return normalizeProductKind(text) ?? 'generic_product';
+}
+
+export function classifyProductKindConsensus(product: any, intelligence?: ProductIntelligence | any): ProductKindDecision {
+  const rulesKind = detectKindByRules(product);
+  const visionKind = normalizeProductKind(
+    intelligence?.productIdentity?.productKind ??
+    intelligence?.productIdentity?.categoryType ??
+    intelligence?.identity?.productType ??
+    intelligence?.identity?.productKind ??
+    product?.productContext?.identity?.productType
+  );
+  const textKind = normalizeProductKind(
+    `${intelligence?.cleanTitles?.titleForReport ?? ''} ${intelligence?.cleanTitles?.titleRuClean ?? ''} ${intelligence?.productIdentity?.coreObject ?? ''} ${product?.productContext?.titles?.cleanRu ?? ''}`
+  );
+  const votes = [visionKind, textKind, rulesKind].filter(Boolean) as ProductKind[];
+  const tally = votes.reduce<Record<string, number>>((acc, k) => { acc[k] = (acc[k] ?? 0) + 1; return acc; }, {});
+  const winner = (Object.entries(tally).sort((a,b) => b[1] - a[1])[0]?.[0] as ProductKind) || rulesKind;
+  const agree = tally[winner] ?? 1;
+  const disagreement = new Set(votes).size > 1;
+  const confidence = Math.max(0.35, Math.min(0.98, agree >= 3 ? 0.96 : agree === 2 ? 0.86 : winner === rulesKind ? 0.72 : 0.68));
+  return {
+    productKind: winner,
+    confidence,
+    confidenceLabel: confidence >= 0.9 ? 'high' : confidence >= 0.75 ? 'medium' : 'low',
+    visionKind,
+    textKind,
+    rulesKind,
+    evidence: uniq([
+      visionKind ? `vision/text LLM: ${visionKind}` : '',
+      textKind ? `title/context: ${textKind}` : '',
+      `rules: ${rulesKind}`,
+      disagreement ? 'есть расхождение классификаторов' : 'классификаторы согласованы',
+    ], 6),
+    disagreement,
+  };
+}
+
+function detectKind(product: any, intelligence?: ProductIntelligence | any): ProductKind {
+  return classifyProductKindConsensus(product, intelligence).productKind;
+}
+
 
 function collectMaterials(product: any, intelligence: any, kind: ProductKind): string[] {
   const fromIntel = [...array<string>(intelligence?.productIdentity?.material), ...array<string>(intelligence?.productIdentity?.materials)];
@@ -369,8 +438,9 @@ export function makeSelectedSkuDecision(product: any, variants = collectSkuVaria
     if (found) return { selectedSkuText: skuName(found) || `SKU ${urlSku}`, selectedPriceYuan: skuPrice(found), reliable: true, reason: 'SKU взят из URL и найден в API.' };
   }
   if (variants.length === 1) return { selectedSkuText: skuName(variants[0]) || 'единственный SKU', selectedPriceYuan: skuPrice(variants[0]), reliable: true, reason: 'В карточке один SKU.' };
-  const explicit = product?.selectedSku ?? product?.selectedSkuText;
-  if (explicit) return { selectedSkuText: safeRu(explicit), selectedPriceYuan: pos(product?.selectedSkuPriceYuan), reliable: true, reason: 'SKU передан явно.' };
+  const explicit = product?.selectedSku ?? product?.selectedSkuText ?? product?.selectedSkuName ?? product?.normalized1688?.pricing?.selectedSkuName;
+  const explicitPrice = pos(product?.selectedSkuPriceYuan ?? product?.selectedSkuPrice ?? product?.normalized1688?.pricing?.selectedSkuPriceYuan);
+  if (explicit) return { selectedSkuText: safeRu(explicit), selectedPriceYuan: explicitPrice, reliable: true, reason: 'SKU передан явно после выбора пользователя/URL.' };
   return { selectedSkuText: null, selectedPriceYuan: null, reliable: false, reason: variants.length > 1 ? 'В карточке несколько SKU, но выбранный SKU не подтверждён.' : 'SKU не найден в данных.' };
 }
 
@@ -415,7 +485,10 @@ function buildQuestions(profileBase: Pick<ProductProcurementProfile, 'identity'|
 
 export function buildProductProcurementProfile(product: any, opts: { sourceUrl?: string; intelligence?: ProductIntelligence | any } = {}): ProductProcurementProfile {
   const intelligence = opts.intelligence ?? product?.procurementProfileSourceIntelligence ?? product?.productIntelligence ?? product?.intelligence ?? product?.productContext?.productIntelligence ?? {};
-  const kind = detectKind(product, intelligence);
+  const aiDraft = record(product?.productProcurementProfileDraft ?? product?.procurementProfileDraft ?? product?.productContext?.procurementProfileDraft ?? product?.productContext?.profileDraft);
+  const classifier = classifyProductKindConsensus(product, intelligence);
+  const draftKind = normalizeProductKind(record(aiDraft.identity).productKind ?? aiDraft.productKind);
+  const kind = draftKind ?? classifier.productKind;
   const rules = KIND_RULES[kind] ?? KIND_RULES.generic_product;
   const sourceUrl = opts.sourceUrl ?? product?.sourceUrl ?? product?.inputUrl;
   const sku = buildSkuProfile(product, kind, sourceUrl);
@@ -423,8 +496,9 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
   const materials = collectMaterials(product, intelligence, kind);
   const identity = record(intelligence?.productIdentity);
   const cleanTitles = record(intelligence?.cleanTitles);
-  const titleForReport = safeRu(cleanTitles.titleForReport || cleanTitles.titleRuClean || identity.shortNameRu || identity.marketNameRu || product?.titleRu || product?.titleEn || product?.titleCn || 'Товар 1688');
-  const titleForSeo = safeSeoTitle(safeRu(cleanTitles.titleForWb || product?.seoContent?.titleRu || titleForReport), kind);
+  const draftIdentity = record(aiDraft.identity);
+  const titleForReport = safeRu(draftIdentity.titleForReport || cleanTitles.titleForReport || cleanTitles.titleRuClean || identity.shortNameRu || identity.marketNameRu || product?.titleRu || product?.titleEn || product?.titleCn || 'Товар 1688');
+  const titleForSeo = safeSeoTitle(safeRu(draftIdentity.titleForSeo || cleanTitles.titleForWb || product?.seoContent?.titleRu || titleForReport), kind);
   const missing = uniq([...(pricing.priceReliable ? [] : ['цена выбранного SKU']), ...(product?.weightKg ? [] : ['вес с упаковкой']), ...(sku.selectedSkuReliable ? [] : ['выбранный SKU']), ...array<string>(intelligence?.dataQuality?.missingCriticalFields)], 8);
   const baseProfile = {
     identity: {
@@ -435,24 +509,27 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
       titleForSeo,
       shortTitle: safeRu(identity.shortNameRu || titleForReport),
       coreObject: safeRu(identity.coreObject || titleForReport),
-      formFactor: safeRu(identity.formFactor || ''),
-      audience: safeRu(identity.audience || ''),
-      gender: safeRu(identity.gender || ''),
-      season: safeRu(identity.season || ''),
-      useCases: uniq(array<string>(identity.useCases).map(safeRu), 6),
-      materials,
-      visibleFeatures: uniq(array<string>(identity.visibleFeatures).map(safeRu), 8),
-      claimedFeatures: uniq([...array<string>(identity.importantFeatures), ...array<string>(intelligence?.claimsPolicy?.claimedButNeedProof)].map(safeRu), 8),
-      unconfirmedFeatures: uniq([...array<string>(identity.notConfirmedFeatures), ...array<string>(identity.unconfirmedFeatures)].map(safeRu), 8),
+      formFactor: safeRu(draftIdentity.formFactor || identity.formFactor || ''),
+      audience: safeRu(draftIdentity.audience || identity.audience || ''),
+      gender: safeRu(draftIdentity.gender || identity.gender || ''),
+      season: safeRu(draftIdentity.season || identity.season || ''),
+      useCases: uniq([...array<string>(draftIdentity.useCases), ...array<string>(identity.useCases)].map(safeRu), 6),
+      materials: uniq([...array<string>(draftIdentity.materials).map(safeRu), ...materials], 6),
+      visibleFeatures: uniq([...array<string>(draftIdentity.visibleFeatures), ...array<string>(identity.visibleFeatures)].map(safeRu), 8),
+      claimedFeatures: uniq([...array<string>(draftIdentity.claimedFeatures), ...array<string>(identity.importantFeatures), ...array<string>(intelligence?.claimsPolicy?.claimedButNeedProof)].map(safeRu), 8),
+      unconfirmedFeatures: uniq([...array<string>(draftIdentity.unconfirmedFeatures), ...array<string>(identity.notConfirmedFeatures), ...array<string>(identity.unconfirmedFeatures)].map(safeRu), 8),
     },
     sku,
     pricing,
   } as Pick<ProductProcurementProfile, 'identity'|'sku'|'pricing'>;
-  const mustAskSupplier = buildQuestions(baseProfile, rules);
+  const draftProcurement = record(aiDraft.procurement);
+  const mustAskSupplier = uniq([...array<string>(draftProcurement.mustAskSupplier).map(safeRu), ...buildQuestions(baseProfile, rules)], 10).slice(0, 8);
+  const images = collectProductIntelligenceImages(product, 3);
+  const supplierRaw = product?.supplierType ?? product?.normalized1688?.supplierType ?? product?.normalized1688?.debug?.sellerType;
   return {
     ...baseProfile,
     supplier: {
-      displayType: supplierTypeDisplay(product?.supplierType),
+      displayType: supplierTypeDisplay(supplierRaw),
       rating: clean(product?.supplierRating ?? product?.rating ?? '—') || '—',
       orders: clean(product?.sold ?? product?.orders ?? '—') || '—',
       name: safeRu(product?.supplierName || ''),
@@ -462,26 +539,30 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
       verdict: missing.length ? 'Партию закупать рано. Сначала запросите данные у поставщика и закажите 1–2 образца.' : 'Можно готовить заказ образца. Партию закупать только после проверки образца.',
       nextAction: 'Отправьте вопросы поставщику и скачайте закупочный пакет.',
       mustAskSupplier,
-      mustCheckBeforeSample: uniq(rules.beforeSample, 8),
-      mustCheckOnSample: uniq(rules.onSample, 12),
-      redFlags: uniq([...rules.redFlags, ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu)], 12),
+      mustCheckBeforeSample: uniq([...array<string>(draftProcurement.mustCheckBeforeSample).map(safeRu), ...rules.beforeSample], 8),
+      mustCheckOnSample: uniq([...array<string>(draftProcurement.mustCheckOnSample).map(safeRu), ...rules.onSample], 12),
+      redFlags: uniq([...array<string>(draftProcurement.redFlags).map(safeRu), ...rules.redFlags, ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu)], 12),
     },
     cargo: {
       mustAsk: uniq(['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'вес транспортной коробки', 'габариты транспортной коробки', 'фото индивидуальной упаковки', 'фото транспортной коробки', 'материал товара', 'ограничения по перевозке', ...rules.cargo], 14),
       likelySensitiveCargoIssues: uniq(kind === 'mini_washer' || kind === 'small_appliance' || kind === 'usb_device' ? ['питание/вилка/напряжение', 'аккумулятор или батарейка — уточнить', 'сертификаты для техники'] : [], 6),
     },
     content: {
-      seoAllowedClaims: uniq([...rules.seoAllowed, ...array<string>(intelligence?.reportRules?.seoAllowedClaims).map(safeRu)], 12),
-      seoForbiddenClaims: uniq([...rules.seoForbidden, ...array<string>(intelligence?.reportRules?.seoForbiddenClaims).map(safeRu), ...DANGEROUS_CLAIMS], 18),
+      seoAllowedClaims: uniq([...array<string>(record(aiDraft.content).seoAllowedClaims).map(safeRu), ...rules.seoAllowed, ...array<string>(intelligence?.reportRules?.seoAllowedClaims).map(safeRu)], 12),
+      seoForbiddenClaims: uniq([...array<string>(record(aiDraft.content).seoForbiddenClaims).map(safeRu), ...rules.seoForbidden, ...array<string>(intelligence?.reportRules?.seoForbiddenClaims).map(safeRu), ...DANGEROUS_CLAIMS], 18),
       titleWarnings: dangerousClaims(titleForSeo).map(c => `Не писать в названии без подтверждения: ${c}`),
-      infographicIdeas: uniq([...rules.infographic, ...array<string>(intelligence?.reportRules?.infographicIdeas).map(safeRu)], 7),
+      infographicIdeas: uniq([...array<string>(record(aiDraft.content).infographicIdeas).map(safeRu), ...rules.infographic, ...array<string>(intelligence?.reportRules?.infographicIdeas).map(safeRu)], 7),
     },
     dataQuality: {
       missingCriticalFields: missing,
       contradictions: uniq([...(sku.selectedSkuReliable ? [] : ['выбранный SKU не подтверждён']), ...array<any>(product?.productContext?.conflicts).map((c: any) => safeRu(c.field || c.message || c))], 8),
       confidence: (['high','medium','low'].includes(String(intelligence?.dataQuality?.overallConfidence)) ? intelligence.dataQuality.overallConfidence : missing.length > 3 ? 'low' : 'medium') as any,
-      reason: safeRu(intelligence?.dataQuality?.reason || 'Профиль собран из Product Intelligence, SKU, цены, поставщика и атрибутов 1688.'),
+      reason: safeRu(intelligence?.dataQuality?.reason || `Профиль собран из Product Intelligence v2, selected SKU, цены, поставщика, атрибутов и ${images.length ? 'фото' : 'текстовых данных'} 1688. Уверенность классификации: ${classifier.confidenceLabel}.`),
     },
+    classifier,
+    intelligenceImages: images,
+    supplierQuestionsCn: array<string>(record(draftProcurement).supplierQuestionsCn).map(safeRu),
+    supplierQuestionsCnValid: false,
   };
 }
 
@@ -496,10 +577,31 @@ export function ensureProductProcurementProfile(product: any, opts: { sourceUrl?
   return profile;
 }
 
-export function preprocessMainImageForProductIntelligence(product: any): { url: string | null; role: string; note: string } {
-  const images = array<string>(product?.images ?? product?.imageUrls ?? product?.normalized1688?.images).filter(Boolean);
-  const url = clean(product?.mainImageUrl) || images[0] || null;
-  return { url, role: 'main_product_image', note: url ? 'Фото передаётся только для определения типа товара и видимых деталей; цена, вес, MOQ и SKU берутся из API.' : 'Главное фото не найдено.' };
+export function collectProductIntelligenceImages(product: any, limit = 3): ProductIntelligenceImage[] {
+  const variants = collectSkuVariants(product);
+  const selectedName = String(product?.selectedSkuName ?? product?.selectedSkuText ?? product?.normalized1688?.pricing?.selectedSkuName ?? '').trim();
+  const selectedVariant = selectedName
+    ? variants.find((s: any) => skuName(s).toLowerCase() === selectedName.toLowerCase() || String(s?.name ?? '').toLowerCase() === selectedName.toLowerCase())
+    : null;
+  const selectedImage = clean(product?.selectedSkuImage ?? product?.selectedSkuImageUrl ?? selectedVariant?.image ?? selectedVariant?.imageUrl ?? '');
+  const rawImages = array<string>(product?.images ?? product?.imageUrls ?? product?.normalized1688?.images).filter(Boolean);
+  const mainImage = clean(product?.mainImageUrl) || rawImages[0] || '';
+  const candidates: ProductIntelligenceImage[] = [];
+  if (selectedImage) candidates.push({ url: selectedImage, role: 'selected_sku_image', note: 'Фото выбранного SKU; использовать только для типа товара, формы и видимых деталей.' });
+  if (mainImage) candidates.push({ url: mainImage, role: 'main_product_image', note: 'Главное фото карточки; цена, MOQ, остатки и SKU берутся только из API.' });
+  for (const url of rawImages) {
+    if (!url || candidates.some(img => img.url === url)) continue;
+    candidates.push({ url, role: candidates.length < 2 ? 'detail_image' : 'package_image', note: 'Дополнительное фото карточки для проверки видимых деталей.' });
+    if (candidates.length >= limit) break;
+  }
+  const seen = new Set<string>();
+  return candidates.filter(img => { if (!img.url || seen.has(img.url)) return false; seen.add(img.url); return true; }).slice(0, limit);
+}
+
+export function preprocessMainImageForProductIntelligence(product: any): { url: string | null; role: string; note: string; images: ProductIntelligenceImage[] } {
+  const images = collectProductIntelligenceImages(product, 3);
+  const first = images[0];
+  return { url: first?.url ?? null, role: first?.role ?? 'main_product_image', note: first?.note ?? 'Главное фото не найдено.', images };
 }
 
 function safeSeoTitle(title: string, kind: ProductKind): string {
@@ -628,7 +730,8 @@ function translateQuestionToCn(q: string): string {
 export function buildSupplierQuestionsFromProfile(product: any, opts: { sourceUrl?: string } = {}): SupplierQuestionsProfileResult {
   const profile = ensureProductProcurementProfile(product, opts);
   const ru = uniq(profile.procurement.mustAskSupplier, 10).slice(0, 10);
-  const cn = ru.map(translateQuestionToCn);
+  const savedCn = profile.supplierQuestionsCnValid && Array.isArray(profile.supplierQuestionsCn) ? profile.supplierQuestionsCn : [];
+  const cn = savedCn.length === ru.length ? savedCn : ru.map(translateQuestionToCn);
   const cnCheck = validateCnQuestions(ru, cn);
   const label = cnCheck.ok ? '💬 Вопросы поставщику RU/CN' : '💬 Вопросы поставщику RU';
   const lines = ['# Вопросы поставщику', '', '## Русская версия', '', 'Здравствуйте. Хотим уточнить товар перед заказом:', '', ...ru.map((q, i) => `${i + 1}. ${q}`), ''];

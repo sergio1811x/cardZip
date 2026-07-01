@@ -111,7 +111,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // No document builder is allowed to re-detect productKind or infer category from raw attributes.
     const supplierQuestionSet = buildSupplierQuestionsFromProfile(product, { sourceUrl: job.input_url });
     const translatedCn = await translateSupplierQuestionsRuToCn(supplierQuestionSet.ru).catch(() => supplierQuestionSet.cn);
-    let supplierText = formatSupplierQuestionsText(supplierQuestionSet.ru, translatedCn).text;
+    const formattedSupplierQuestions = formatSupplierQuestionsText(supplierQuestionSet.ru, translatedCn);
+    const profileForFiles = {
+      ...profileValidation.fixedProfile,
+      supplierQuestionsCn: formattedSupplierQuestions.cn,
+      supplierQuestionsCnValid: formattedSupplierQuestions.cnValid,
+    };
+    product.productProcurementProfile = profileForFiles;
+    product.procurementProfile = profileForFiles;
+    let supplierText = formattedSupplierQuestions.text;
     let briefText = buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url });
     let cargoText = buildCargoBriefFromProfile(product, { sourceUrl: job.input_url });
     let sampleChecklistText = buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url });
@@ -129,7 +137,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       { filename: 'sample_checklist.md', text: sampleChecklistText },
       { filename: 'seo_draft.md', text: seoText },
       { filename: 'README.txt', text: readmeText },
-    ], profileValidation.fixedProfile);
+    ], profileForFiles);
     if (docsValidation.errors.length) console.warn('[step5] profile document validators repaired:', docsValidation.errors.join('; '));
     for (const doc of docsValidation.fixedDocs) {
       if (doc.filename === 'supplier_questions.txt') supplierText = doc.text;
@@ -144,9 +152,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       result_json: {
         ...result,
         product,
-        productProcurementProfile: profileValidation.fixedProfile,
-        procurementProfile: profileValidation.fixedProfile,
-        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, readmeText },
+        productProcurementProfile: profileForFiles,
+        procurementProfile: profileForFiles,
+        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, supplierQuestionsCn: formattedSupplierQuestions.cn, supplierQuestionsCnValid: formattedSupplierQuestions.cnValid, cargoText, sampleChecklistText, readmeText },
       },
     }).eq('id', jobId);
 
@@ -267,9 +275,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       result_json: {
         ...result,
         product: productWithProcurementState,
-        productProcurementProfile: profileValidation.fixedProfile,
-        procurementProfile: profileValidation.fixedProfile,
-        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, cargoText, sampleChecklistText, readmeText },
+        productProcurementProfile: profileForFiles,
+        procurementProfile: profileForFiles,
+        generatedFiles: { seoText, briefText, supplierQuestions: supplierText, supplierQuestionsCn: formattedSupplierQuestions.cn, supplierQuestionsCnValid: formattedSupplierQuestions.cnValid, cargoText, sampleChecklistText, readmeText },
         finalUserCard: finalText,
         qaResult,
       },

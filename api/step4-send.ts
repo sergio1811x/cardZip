@@ -138,7 +138,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     progress?.step('writer');
     // Runs by default for paid MVP, but uses compact prompt/input.
     // It enriches SEO/files; deterministic Decision Layer remains source of truth.
-    const writerMode = String(process.env.CARDZIP_EXPERT_WRITER_MODE ?? 'always').toLowerCase();
+    const writerMode = String(process.env.CARDZIP_EXPERT_WRITER_MODE ?? 'off').toLowerCase();
     const shouldRunWriter = writerMode !== 'off' && (writerMode === 'always' || (writerMode === 'confirmed_market' && snapshot.market.marketConfirmed));
     const writerResult = shouldRunWriter ? await runExpertWriter(snapshot).catch(() => null) : null;
     if (writerResult) {

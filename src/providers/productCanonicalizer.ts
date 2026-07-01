@@ -1,5 +1,7 @@
 import type { ProductContext } from "../types";
 
+type ProductIntelligenceImageInput = { url: string; role?: string; note?: string };
+
 type RawProductForCanonicalizer = {
   offerId: string;
   titleCn: string;
@@ -7,11 +9,22 @@ type RawProductForCanonicalizer = {
   titleEn?: string;
   categoryName?: string;
   attributes?: Array<{ name: string; value: string }>;
-  skus?: Array<{ name: string; price?: number; stock?: number }>;
+  skus?: Array<{ id?: string; skuId?: string; name: string; price?: number; stock?: number; image?: string }>;
+  normalizedSkuTable?: Array<{ id?: string; label: string; priceYuan?: number; stock?: number; image?: string }>;
+  selectedSkuId?: string;
+  selectedSkuName?: string;
+  selectedSkuPriceYuan?: number;
+  selectedSkuImage?: string;
+  moq?: number;
+  supplierName?: string;
+  supplierType?: string;
+  supplierRating?: number | string;
+  orders?: number | string;
   price?: number;
   priceRange?: Array<{ minQty: number; maxQty: number; price: number }>;
   weightKg?: number;
   mainImageUrl?: string;
+  imageUrls?: ProductIntelligenceImageInput[];
   sold?: number;
   stock?: number;
 };
@@ -40,6 +53,9 @@ type CanonicalizerModelResult = Partial<ProductContext> & {
   supplierQuestions?: Partial<ProductContext["supplierQuestions"]>;
   riskTags?: unknown;
   dataQuality?: Partial<ProductContext["dataQuality"]>;
+  procurementProfile?: Record<string, unknown>;
+  productProcurementProfile?: Record<string, unknown>;
+  productKindClassifier?: Record<string, unknown>;
 };
 
 const DEFAULT_VISION_MODELS = [
@@ -458,6 +474,12 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
   if (raw.titleRu) lines.push(`Название RU: ${raw.titleRu}`);
   if (raw.titleEn) lines.push(`Название EN: ${raw.titleEn}`);
   if (raw.categoryName) lines.push(`Категория: ${raw.categoryName}`);
+  if (raw.selectedSkuName) lines.push(`Выбранный SKU: ${raw.selectedSkuName}${isPositiveNumber(raw.selectedSkuPriceYuan) ? ` — ${raw.selectedSkuPriceYuan} ¥` : ''}`);
+  if (raw.selectedSkuId) lines.push(`selectedSkuId из URL/API: ${raw.selectedSkuId}`);
+  if (isPositiveNumber(raw.moq)) lines.push(`MOQ: ${raw.moq} шт`);
+  if (raw.supplierType || raw.supplierName || raw.supplierRating || raw.orders) {
+    lines.push(`Поставщик: type=${raw.supplierType ?? 'unknown'}; name=${raw.supplierName ?? '—'}; rating=${raw.supplierRating ?? '—'}; orders=${raw.orders ?? raw.sold ?? '—'}`);
+  }
 
   if (isPositiveNumber(raw.price)) lines.push(`Цена: ${raw.price} ¥`);
   else lines.push("Цена: не распознана");
@@ -482,6 +504,20 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
     lines.push("Атрибуты поставщика:");
     raw.attributes.slice(0, 30).forEach((attr) => {
       lines.push(`- ${attr.name}: ${attr.value}`);
+    });
+  }
+
+  if (raw.imageUrls?.length) {
+    lines.push('Фото для Product Intelligence:');
+    raw.imageUrls.slice(0, 3).forEach((img) => lines.push(`- ${img.role ?? 'image'}: ${img.url}`));
+  }
+
+  if (raw.normalizedSkuTable?.length) {
+    lines.push(`Normalized SKU table (${raw.normalizedSkuTable.length}):`);
+    raw.normalizedSkuTable.slice(0, 20).forEach((sku) => {
+      const price = isPositiveNumber(sku.priceYuan) ? `${sku.priceYuan} ¥` : 'цена не указана';
+      const stock = typeof sku.stock === 'number' ? `остаток: ${sku.stock}` : 'остаток неизвестен';
+      lines.push(`- ${sku.label} — ${price}, ${stock}${sku.id ? `, id=${sku.id}` : ''}`);
     });
   }
 
@@ -557,7 +593,26 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
     "cn": ["您好，我想采购这个产品，请问：", "1. 具体问题"]
   },
   "riskTags": ["короткий риск"],
-  "dataQuality": {"score": 1, "status": "reliable|working_hypothesis|draft", "explanation": "..."}
+  "dataQuality": {"score": 1, "status": "reliable|working_hypothesis|draft", "explanation": "..."},
+  "productKindClassifier": {
+    "visionKind": "productKind или null",
+    "textKind": "productKind или null",
+    "finalKind": "productKind",
+    "confidence": 0.0,
+    "visualEvidence": ["что видно на фото"],
+    "textEvidence": ["что подтверждено названием/SKU/атрибутами"],
+    "disagreement": false
+  },
+  "procurementProfile": {
+    "identity": {
+      "productKind": "footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product",
+      "categoryType": "...", "subCategoryType": "...", "titleForReport": "...", "titleForSeo": "...", "shortTitle": "...", "coreObject": "...", "formFactor": "...", "audience": "...", "gender": "...", "season": "...",
+      "useCases": [], "materials": [], "visibleFeatures": [], "claimedFeatures": [], "unconfirmedFeatures": []
+    },
+    "procurement": {"mustAskSupplier": ["7-10 конкретных вопросов RU без дублей"], "mustCheckBeforeSample": [], "mustCheckOnSample": [], "redFlags": []},
+    "cargo": {"mustAsk": [], "likelySensitiveCargoIssues": []},
+    "content": {"seoAllowedClaims": [], "seoForbiddenClaims": [], "infographicIdeas": []}
+  }
 }
 
 Правила:
@@ -565,7 +620,9 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
 - Сохраняй максимум полезных атрибутов в facts, но помечай сомнительное: “заявлено поставщиком / подтвердить”.
 - Если атрибут замаплен неверно (“цвет: противоскользящий”), занеси в conflicts и не выводи как факт.
 - SKU раскрывай как цвет × размер × модель/комплектация; распознавай pack-count, молнию, утяжку, манжету, размерные примечания.
-- Главное фото используй только для типа товара, формы и видимых деталей. Не извлекай с фото цену, вес, MOQ, остатки или SKU. Цена, MOQ и SKU берутся только из provider/API данных. Не делай по фото claims о качестве, материале, сертификации.
+- Фото используй только для типа товара, формы и видимых деталей. Если передано selected_sku_image — оно важнее main_product_image. Не извлекай с фото цену, вес, MOQ, остатки или SKU. Цена, MOQ, supplier и selected SKU берутся только из provider/API данных.
+- selectedSkuName/selectedSkuId/selectedSkuPriceYuan являются обязательным контекстом: не противоречь им. Если selected SKU ненадёжен или конфликтует, укажи это в dataQuality/contradictions, но не придумывай другой SKU.
+- productKindClassifier: сначала классифицируй товар по фото, потом по тексту/SKU/атрибутам, затем выведи finalKind и confidence. Если есть конфликт — confidence ниже, а документы должны быть осторожными.
 - SupplierQuestions: 7-10 вопросов по выбранному SKU, весу, упаковке, комплектации, фото и доказательствам claims. Вопросы должны быть источником для profile.procurement.mustAskSupplier; не дублируй вопросы.
 - “медицинские сабо/одежда для медработников” можно как тип товара; лечебный эффект — нельзя как факт.
 - Для обуви не спрашивай мощность/220V/аккумулятор/рукав. Для техники не спрашивай стельку/размерную сетку/рукав. Для одежды не спрашивай питание/вилку.
@@ -774,7 +831,7 @@ function normalizeContext(
     ? cnQuestions
     : buildDefaultSupplierQuestions(raw, "cn");
 
-  return {
+  const ctx: ProductContext & Record<string, unknown> = {
     offerId: raw.offerId,
     identity: {
       productType,
@@ -842,6 +899,12 @@ function normalizeContext(
       explanation: safeRu(dataQuality.explanation, ""),
     },
   };
+
+  const profileDraft = result.procurementProfile ?? result.productProcurementProfile;
+  if (profileDraft && typeof profileDraft === "object") ctx.procurementProfileDraft = profileDraft;
+  if (result.productKindClassifier && typeof result.productKindClassifier === "object") ctx.productKindClassifier = result.productKindClassifier;
+
+  return ctx as ProductContext;
 }
 
 function hasUsableContext(ctx: ProductContext): boolean {
@@ -855,7 +918,7 @@ function hasUsableContext(ctx: ProductContext): boolean {
 
 async function runVisionCanonicalizer(
   prompt: string,
-  imageDataUrl: string,
+  imageDataUrls: string[],
   apiKey: string,
 ): Promise<CanonicalizerModelResult | null> {
   for (const model of VISION_MODELS) {
@@ -868,7 +931,7 @@ async function runVisionCanonicalizer(
           role: "user",
           content: [
             { type: "text", text: prompt },
-            { type: "image_url", image_url: { url: imageDataUrl } },
+            ...imageDataUrls.slice(0, 3).map((url) => ({ type: "image_url" as const, image_url: { url } })),
           ],
         },
       ],
@@ -926,11 +989,18 @@ export async function canonicalizeProduct(
   const prompt = buildPrompt(raw);
   let result: CanonicalizerModelResult | null = null;
 
-  if (raw.mainImageUrl) {
-    const imageDataUrl = await fetchImageAsDataUrl(raw.mainImageUrl);
-    if (imageDataUrl) {
-      result = await runVisionCanonicalizer(prompt, imageDataUrl, apiKey);
-    }
+  const imageSources = [
+    ...(raw.imageUrls ?? []).map((img) => img.url).filter(Boolean),
+    raw.selectedSkuImage,
+    raw.mainImageUrl,
+  ].filter(Boolean) as string[];
+  const imageDataUrls: string[] = [];
+  for (const url of Array.from(new Set(imageSources)).slice(0, 3)) {
+    const imageDataUrl = await fetchImageAsDataUrl(url);
+    if (imageDataUrl) imageDataUrls.push(imageDataUrl);
+  }
+  if (imageDataUrls.length) {
+    result = await runVisionCanonicalizer(prompt, imageDataUrls, apiKey);
   }
 
   if (!result?.identity) {

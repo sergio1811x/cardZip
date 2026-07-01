@@ -29,9 +29,14 @@ export async function handleSkuSelect(ctx: Context) {
         if (selectedSku.price) raw.priceYuan = selectedSku.price;
         if (selectedSku.image) raw.mainImageUrl = selectedSku.image;
         raw.selectedSkuName = selectedSku.name;
+        raw.selectedSkuId = selectedSku.skuId ?? selectedSku.id ?? String(idx);
+        raw.selectedSkuPriceYuan = selectedSku.price;
+        raw.selectedSkuImage = selectedSku.image ?? selectedSku.imageUrl;
         if (raw.normalized1688?.pricing) {
+          raw.normalized1688.pricing.selectedSkuId = raw.selectedSkuId;
           raw.normalized1688.pricing.selectedSkuName = selectedSku.name;
           raw.normalized1688.pricing.selectedSkuPriceYuan = selectedSku.price;
+          raw.normalized1688.pricing.selectedSkuImage = raw.selectedSkuImage;
           if (selectedSku.price && selectedSku.price > 0) {
             raw.normalized1688.pricing.displayPriceYuan = selectedSku.price;
           }

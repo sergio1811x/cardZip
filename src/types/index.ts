@@ -39,7 +39,9 @@ export interface NormalizedPriceInfo {
   volumeMinPriceYuan?: number;
   volumeMaxPriceYuan?: number;
   selectedSkuName?: string;
+  selectedSkuId?: string;
   selectedSkuPriceYuan?: number;
+  selectedSkuImage?: string;
   priceRanges?: PriceRange[];
   rawPriceFields: string[];
   isEstimatedPrice?: boolean;
