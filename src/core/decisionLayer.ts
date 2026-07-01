@@ -1,6 +1,6 @@
 import type { RawProduct1688 } from '../types';
 import { cleanChineseTitle, normalizeSkuText, normalizeMixedProductText, detectPackCount, extractShoeSize, extractLetterSize, extractSkuComponents } from './cnNormalize';
-import { ensureProductProcurementProfile } from './procurementProfile';
+import { ensureProductProcurementProfile, formatSelectedSkuLine } from './procurementProfile';
 
 export type DecisionConfidence = 'high' | 'medium' | 'low';
 
@@ -745,7 +745,7 @@ export function build1688Detail(product: any): string {
     html(p.pricing.displayPriceText),
     '',
     '<b>Выбранный SKU:</b>',
-    html(p.sku.selectedSkuText || 'не определён'),
+    html(formatSelectedSkuLine(p.identity.productKind, p.sku, p.pricing)),
     '',
     '<b>SKU:</b>',
     html(p.sku.skuSummary),

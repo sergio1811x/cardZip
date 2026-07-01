@@ -14,6 +14,7 @@ export type ProductKind =
   | 'food_warmer'
   | 'heating_appliance'
   | 'kitchen_tool'
+  | 'tool_kit'
   | 'bag_accessory'
   | 'home_textile'
   | 'beauty_accessory'
@@ -250,6 +251,27 @@ const KIND_RULES: Record<ProductKind, {
   food_warmer: electricalRules('прибор для подогрева еды'),
   heating_appliance: electricalRules('нагревательный прибор'),
   kitchen_tool: genericRules('кухонный товар'),
+  tool_kit: {
+    mustAskSupplier: [
+      'Подтвердите цену выбранного SKU.',
+      'Укажите точное количество предметов в наборе и пришлите список комплектации.',
+      'Укажите вес набора с индивидуальной упаковкой.',
+      'Укажите габариты кейса/индивидуальной упаковки.',
+      'Подтвердите материал металлических частей и материал ручек.',
+      'Пришлите фото раскрытого кейса и всех инструментов крупно.',
+      'Пришлите фото упаковки, маркировки и штрихкода, если есть.',
+      'Есть ли условия замены при браке?',
+      'Можно ли заказать 1–2 образца перед партией?',
+    ],
+    beforeSample: ['подтвердить цену SKU', 'получить список комплектации', 'получить вес и габариты упаковки', 'запросить фото раскрытого кейса', 'запросить фото всех инструментов и упаковки'],
+    onSample: ['фактическое количество предметов', 'соответствие комплектации заявленной', 'качество металла', 'качество ручек', 'люфты/зазоры', 'качество кейса', 'фиксаторы кейса', 'запах пластика/резины', 'отсутствие ржавчины/сколов', 'удобство извлечения инструментов из кейса', 'упаковку после доставки'],
+    cargo: ['вес набора с упаковкой', 'габариты кейса/упаковки', 'количество наборов в транспортной коробке', 'вес транспортной коробки', 'габариты транспортной коробки', 'фото индивидуальной упаковки', 'фото транспортной коробки', 'есть ли острые предметы', 'как зафиксированы инструменты в кейсе', 'нужна ли усиленная упаковка'],
+    redFlags: ['непонятная комплектация', 'неизвестен вес', 'неизвестны габариты', 'неподтверждён материал', 'нет фото раскрытого кейса', 'нет фото всех инструментов', 'низкое число заказов/слабый поставщик', 'риск несоответствия количества предметов'],
+    seoAllowed: ['набор инструментов для дома', 'набор инструментов в кейсе', 'для бытового ремонта', 'для сборки мебели', 'для дачи/гаража, если подходит', 'комплектация зависит от выбранного SKU'],
+    seoForbidden: ['профессиональный', 'сверхпрочный', 'неубиваемый', 'гарантия качества', 'закалённая сталь', 'сертифицированный', 'лучший', 'премиальный', ...DANGEROUS_CLAIMS],
+    infographic: ['Набор инструментов общий вид', 'Кейс раскрытый', 'Инструменты крупно', 'Комплектация', 'Упаковка'],
+    forbiddenCategoryWords: ['подошва', 'стелька', 'напряжение', 'мощность', 'тип вилки', 'срок годности', 'состав ткани'],
+  },
   bag_accessory: genericRules('аксессуар'),
   home_textile: {
     mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите состав ткани/наполнителя в процентах.', 'Пришлите размерную сетку/габариты изделия.', 'Укажите плотность/плотность наполнителя.', 'Есть ли усадка после стирки?', 'Укажите вес с упаковкой.', 'Пришлите реальные фото ткани, шва и упаковки.', 'Можно ли заказать 1–2 образца?'],
@@ -417,11 +439,14 @@ function normalizeDedupKey(value: string): string {
     .replace(/швы|качество швов/gi, 'швы')
     .replace(/\s+/g, ' ')
     .trim();
-  if (/вес.*упаков|упаков.*вес/.test(key)) return 'вес с упаковкой';
+  if (/вес.*упаков|упаков.*вес/.test(key)) return 'вес одной единицы с упаковкой';
   if (/габарит.*упаков|упаков.*габарит/.test(key)) return 'габариты индивидуальной упаковки';
   if (/количеств.*транспорт.*короб|штук.*короб/.test(key)) return 'количество в транспортной коробке';
   if (/состав.*ткан/.test(key)) return 'состав ткани';
-  if (/реальн.*фото|фото.*модел|фото.*упаков/.test(key)) return 'реальные фото товара и упаковки';
+  if (/фото.*раскрыт.*кейс|раскрыт.*кейс.*фото/.test(key)) return 'фото раскрытого кейса';
+  if (/реальн.*фото|фото.*модел|фото.*упаков|фото.*инструмент/.test(key)) return 'реальные фото выбранного sku и упаковки';
+  if (/комплектац/.test(key)) return 'точный состав комплектации';
+  if (/^материал\s*$/.test(key)) return 'материал товара';
   if (/уф|uv|upf/.test(key)) return 'подтверждение уф защиты';
   return key;
 }
@@ -457,7 +482,7 @@ export function supplierTypeDisplay(value: unknown): string {
 function normalizeProductKind(value: unknown): ProductKind | null {
   const raw = String(value ?? '').trim().toLowerCase();
   if (!raw) return null;
-  const direct = raw.match(/footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|food_warmer|heating_appliance|kitchen_tool|bag_accessory|home_textile|beauty_accessory|pet_product|toy|generic_product/)?.[0];
+  const direct = raw.match(/footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|food_warmer|heating_appliance|kitchen_tool|tool_kit|bag_accessory|home_textile|beauty_accessory|pet_product|toy|generic_product/)?.[0];
   if (direct && direct in KIND_RULES) return direct as ProductKind;
   if (/зонт|umbrella|雨伞|雨傘|伞|傘/.test(raw)) return 'umbrella';
   if (/маск[аи]\s+для\s+сна|sleep\s*mask|眼罩|睡眠/.test(raw)) return 'sleep_mask';
@@ -473,6 +498,7 @@ function normalizeProductKind(value: unknown): ProductKind | null {
   if (/балаклав|подшлемник|face\s*mask|одежд|clothing|clothes|плать|брюк|футбол|衣|裤|面罩|头套|防晒面罩/.test(raw)) return 'clothing';
   if (/usb|type-c|type c/.test(raw)) return 'usb_device';
   if (/насеком|insect|ловуш|粘虫|捕虫/.test(raw)) return 'passive_insect_trap';
+  if (/набор\s+инструмент|hand\s*tool\s*set|tool\s*kit|工具套装|工具组|多功能工具/.test(raw)) return 'tool_kit';
   if (/кухон|kitchen/.test(raw)) return 'kitchen_tool';
   if (/сумк|bag|кошел|брелок/.test(raw)) return 'bag_accessory';
   if (/электр|220v|вилка|мощность|appliance|прибор/.test(raw)) return 'small_appliance';
@@ -524,15 +550,26 @@ function detectKind(product: any, intelligence?: ProductIntelligence | any): Pro
 }
 
 
+const MATERIAL_MARKETING_ADJECTIVES = /\b(?:высококачественн(?:ая|ый|ое|ые|ой)|премиальн(?:ая|ый|ое|ые)|элитн(?:ая|ый|ое|ые)|супер|улучшенн(?:ая|ый|ое|ые))\s+/gi;
+
+function stripMaterialMarketing(value: string): string {
+  return clean(value.replace(MATERIAL_MARKETING_ADJECTIVES, '')).replace(/^./, c => c.toUpperCase());
+}
+
 function collectMaterials(product: any, intelligence: any, kind: ProductKind): string[] {
   const fromIntel = [...array<string>(intelligence?.productIdentity?.material), ...array<string>(intelligence?.productIdentity?.materials)];
   const attrs = array<any>(product?.attributes ?? product?.normalized1688?.attributes);
   const fromAttrs = attrs.filter(a => /материал|材质|面料|成分|material/i.test(String(a?.name ?? ''))).map(a => safeRu(a?.value));
-  let items = uniq([...fromIntel, ...fromAttrs].map(safeRu), 6);
+  let items = uniq([...fromIntel, ...fromAttrs].map(safeRu).map(stripMaterialMarketing), 6).slice(0, 3);
   if (kind === 'umbrella') {
     const joined = items.join(' ').toLowerCase();
     const hasMetal = /желез|сплав|металл|iron|alloy|钢|铁|合金/i.test(joined + ' ' + JSON.stringify(product?.attributes ?? ''));
     items = ['ткань купола', hasMetal ? 'железо/сплав — подтвердить' : 'материал спиц — подтвердить'];
+  }
+  if (kind === 'tool_kit') {
+    const joined = items.join(' ').toLowerCase();
+    const metalMatch = /углеродист\w*\s+сталь|нержавеющ\w*\s+сталь|сплав|сталь/i.exec(joined);
+    items = [metalMatch ? metalMatch[0] : 'металл'];
   }
   return items.length ? items : ['уточнить у поставщика'];
 }
@@ -597,13 +634,13 @@ function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): P
   if (colors.length) dims.push('цвет');
   if (sizeMatches.length) dims.push('размер');
   if (plugStandards.length) dims.push('стандарт питания/вилка');
-  if (ambiguousParams.length) dims.push('параметр SKU');
+  if (ambiguousParams.length) dims.push(kind === 'tool_kit' ? 'комплектация/модель' : 'параметр SKU');
   if (!dims.length && variants.length > 1) dims.push('вариант');
   const count = variants.length || labels.length;
   const skuSummary = count
     ? `${count} ${pluralRu(count, 'вариант', 'варианта', 'вариантов')} · ${dims.join(' × ') || 'вариант'}`
     : 'SKU нужно уточнить';
-  const normalizedExamples = labels.slice(0, 5).map(l => ambiguousParams.length ? l.replace(/\b(8|16|40|120)\b/g, 'Параметр $1') : l);
+  const normalizedExamples = labels.slice(0, 5).map(l => ambiguousParams.length ? l.replace(/\b(8|16|40|120)\b/g, kind === 'tool_kit' ? 'Комплектация $1' : 'Параметр $1') : l);
   const selected = makeSelectedSkuDecision(product, variants, sourceUrl);
   return {
     skuSummary,
@@ -620,7 +657,11 @@ function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): P
     skuRisk: selected.reliable ? 'ok' : count > 1 ? 'needs_selection' : 'unknown',
     skuWarnings: uniq([
       !selected.reliable && count > 1 ? 'выбранный SKU не определён' : '',
-      ambiguousParams.length ? `значение параметров SKU ${ambiguousParams.join(' / ')} нужно уточнить` : '',
+      ambiguousParams.length
+        ? (kind === 'tool_kit'
+          ? `комплектации/параметры ${ambiguousParams.join(' / ')} — уточнить точный состав`
+          : `значение параметров SKU ${ambiguousParams.join(' / ')} нужно уточнить`)
+        : '',
     ], 4),
     normalizedExamples,
     ambiguousParams,
@@ -648,12 +689,12 @@ function buildPricing(product: any, selected: SelectedSkuDecision): ProductProcu
   const max = pos(product?.priceRange?.max ?? product?.maxPriceYuan) ?? (skuPrices.length ? Math.max(...skuPrices) : min);
   const selectedPrice = selected.selectedPriceYuan ?? (selected.reliable ? pos(product?.priceYuan ?? product?.price) : null);
   const displayPriceText = selectedPrice
-    ? `Выбранный SKU: ${cny(selectedPrice)}`
+    ? `${cny(selectedPrice)} ≈ ${rub(Math.round(selectedPrice * YUAN_TO_RUB))}`
     : min && max && min !== max
-      ? `Цена по SKU: ${String(min).replace('.', ',')}–${String(max).replace('.', ',')} ¥`
+      ? `${String(min).replace('.', ',')}–${String(max).replace('.', ',')} ¥`
       : min
-        ? `Цена: ${cny(min)}`
-        : 'Цена: нужно уточнить';
+        ? cny(min)
+        : 'нужно уточнить';
   return {
     displayPriceText,
     selectedPriceYuan: selectedPrice,
@@ -672,7 +713,8 @@ function buildQuestions(profileBase: Pick<ProductProcurementProfile, 'identity'|
     .replace('Подтвердите цену выбранного SKU.', priceText.includes('¥') ? `Подтвердите цену выбранного SKU: ${priceText}.` : 'Подтвердите цену выбранного SKU.')
     .replace('Укажите вес с упаковкой.', 'Укажите вес с упаковкой выбранного SKU.')
   );
-  const merged = params.length ? [
+  const alreadyAsksComposition = rules.mustAskSupplier.some(q => /комплектац/i.test(q));
+  const merged = params.length && !alreadyAsksComposition ? [
     ...base.filter(q => !/Что означает параметр|параметр SKU/i.test(q)),
     `Что означают параметры SKU ${params.join(' / ')}: диаметр, длина, размер, комплектация или другой параметр?`,
   ] : base;
@@ -712,6 +754,9 @@ function buildKindVerdict(kind: ProductKind, product: any, needsSupplierData: bo
   }
   if (kind === 'toy') {
     return 'Товар нельзя закупать партией без проверки безопасности. Перед образцом нужно подтвердить возрастную маркировку, сертификаты безопасности и мелкие детали. На образце проверить прочность, острые края и запах.';
+  }
+  if (kind === 'tool_kit') {
+    return 'Товар нельзя закупать партией без проверки образца. Сначала подтвердите точный состав комплектации, материал металлических частей и ручек, вес и габариты кейса. На образце проверьте фактическую комплектацию, качество металла, ручек, кейса и фиксаторов.';
   }
   return needsSupplierData
     ? 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите выбранный SKU, цену, вес, упаковку, материал и реальные фото.'
@@ -846,11 +891,56 @@ function safeSeoTitle(title: string, kind: ProductKind): string {
   for (const claim of DANGEROUS_CLAIMS) out = out.replace(new RegExp(escapeRegExp(claim), 'gi'), '').trim();
   if (/балаклав|подшлемник/i.test(out)) return 'Балаклава защитная от солнца и ветра для велосипеда и активного отдыха';
   if (kind === 'umbrella' && /зонт/i.test(out) && !/крюч|чехол/i.test(out)) out = 'Зонт автоматический складной с крючком и чехлом';
+  if (kind === 'tool_kit') out = 'Набор инструментов для дома в кейсе';
   return out.replace(/\s{2,}/g, ' ').trim() || 'Товар 1688';
 }
 
 function dangerousClaims(text: string): string[] { return DANGEROUS_CLAIMS.filter(c => new RegExp(escapeRegExp(c), 'i').test(text)); }
 function pluralRu(n: number, one: string, few: string, many: string): string { const v = Math.abs(n) % 100; const v1 = v % 10; if (v > 10 && v < 20) return many; if (v1 > 1 && v1 < 5) return few; if (v1 === 1) return one; return many; }
+
+const MATERIAL_SUFFIX_BY_KIND: Partial<Record<ProductKind, string>> = {
+  tool_kit: 'подтвердить марку стали и материал ручек',
+};
+
+function materialsDisplayLine(p: Pick<ProductProcurementProfile, 'identity'>): string {
+  const joined = p.identity.materials.slice(0, 3).join(', ');
+  if (!joined || /уточнить/i.test(joined)) return 'уточнить у поставщика';
+  if (/подтверд/i.test(joined)) return joined;
+  return `${joined} — ${MATERIAL_SUFFIX_BY_KIND[p.identity.productKind] ?? 'подтвердить'}`;
+}
+
+function formatPriceLine(pricing: ProductProcurementProfile['pricing']): string {
+  if (pricing.selectedPriceYuan) {
+    return `${cny(pricing.selectedPriceYuan)} ≈ ${rub(Math.round(pricing.selectedPriceYuan * YUAN_TO_RUB))}`;
+  }
+  if (pricing.minPriceYuan && pricing.maxPriceYuan && pricing.minPriceYuan !== pricing.maxPriceYuan) {
+    return `${String(pricing.minPriceYuan).replace('.', ',')}–${String(pricing.maxPriceYuan).replace('.', ',')} ¥`;
+  }
+  if (pricing.minPriceYuan) return cny(pricing.minPriceYuan);
+  return 'нужно уточнить';
+}
+
+export function formatSelectedSkuLine(kind: ProductKind, sku: ProductProcurementProfile['sku'], pricing: ProductProcurementProfile['pricing']): string {
+  if (!sku.selectedSkuText) {
+    return sku.selectedSkuReliable
+      ? 'не определён'
+      : `не определён. ${pricing.minPriceYuan && pricing.maxPriceYuan ? `Цена по SKU: ${String(pricing.minPriceYuan).replace('.', ',')}${pricing.maxPriceYuan !== pricing.minPriceYuan ? `–${String(pricing.maxPriceYuan).replace('.', ',')}` : ''} ¥.` : 'Нужен выбор SKU.'}`;
+  }
+  if (kind === 'tool_kit') {
+    const modelNumber = sku.selectedSkuText.match(/\d{2,5}/)?.[0];
+    return `набор ${modelNumber ?? sku.selectedSkuText} — состав нужно подтвердить`;
+  }
+  return pricing.selectedPriceYuan ? `${sku.selectedSkuText} — ${cny(pricing.selectedPriceYuan)}` : sku.selectedSkuText;
+}
+
+function selectedSkuShortLabel(kind: ProductKind, sku: ProductProcurementProfile['sku']): string {
+  if (!sku.selectedSkuText) return 'самый массовый/целевой SKU после подтверждения у поставщика';
+  if (kind === 'tool_kit') {
+    const modelNumber = sku.selectedSkuText.match(/\d{2,5}/)?.[0];
+    return modelNumber ? `набор ${modelNumber}` : sku.selectedSkuText;
+  }
+  return sku.selectedSkuText;
+}
 
 export function buildMainReportFromProfile(product: any, statusInfo?: { creditsRemaining?: number }, opts: { sourceUrl?: string } = {}): string {
   const p = ensureProductProcurementProfile(product, opts);
@@ -866,14 +956,14 @@ export function buildMainReportFromProfile(product: any, statusInfo?: { creditsR
     `Поставщик: ${escapeHtml(p.supplier.displayType)}${p.supplier.rating && p.supplier.rating !== '—' ? ` · рейтинг ${escapeHtml(p.supplier.rating)}` : ''}${p.supplier.orders && p.supplier.orders !== '—' ? ` · заказов ${escapeHtml(p.supplier.orders)}` : ''}`,
     '',
     '📌 <b>Товар</b>',
-    `• Цена: ${escapeHtml(p.pricing.displayPriceText.replace(/^Цена:\s*/i, '').replace(/^Цена по SKU:\s*/i, 'по SKU: '))}`,
-    `• Выбранный SKU: ${escapeHtml(p.sku.selectedSkuText || (p.sku.selectedSkuReliable ? 'не определён' : `не определён. ${p.pricing.minPriceYuan && p.pricing.maxPriceYuan ? `Цена по SKU: ${String(p.pricing.minPriceYuan).replace('.', ',')}${p.pricing.maxPriceYuan !== p.pricing.minPriceYuan ? `–${String(p.pricing.maxPriceYuan).replace('.', ',')}` : ''} ¥.` : 'Нужен выбор SKU.'}`))}`,
+    `• Цена: ${escapeHtml(p.pricing.displayPriceText)}`,
+    `• Выбранный SKU: ${escapeHtml(formatSelectedSkuLine(p.identity.productKind, p.sku, p.pricing))}`,
     `• MOQ: ${moq ? `${Math.round(moq)} шт` : 'уточнить'}`,
     `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
     p.sku.colors.length ? `• Цвета: ${escapeHtml(p.sku.colors.join(', '))}` : '',
-    p.sku.sizes.length ? `• Размеры: ${escapeHtml(p.sku.sizes.join(', '))}` : (p.sku.ambiguousParams.length ? `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — значение нужно уточнить` : ''),
+    p.sku.sizes.length ? `• Размеры: ${escapeHtml(p.sku.sizes.join(', '))}` : (p.sku.ambiguousParams.length ? (p.identity.productKind === 'tool_kit' ? `• Комплектации/параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — уточнить точный состав` : `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — значение нужно уточнить`) : ''),
     p.sku.plugStandards.length ? `• Стандарт питания/вилка: ${escapeHtml(p.sku.plugStandards.join(', '))}` : '',
-    `• Материал: ${escapeHtml(p.identity.materials.slice(0, 3).join(', '))}${/подтверд/i.test(p.identity.materials.slice(0, 3).join(' ')) ? '' : ' — подтвердить'}`,
+    `• Материал: ${escapeHtml(materialsDisplayLine(p))}`,
     `• Вес: ${weight ? `${weight} кг` : 'не указан'}`,
     '',
     '<b>🟡 Статус: нужны данные поставщика</b>',
@@ -927,8 +1017,11 @@ export function validateMainReport(text: string): { ok: boolean; errors: string[
   if (/0(?:[,.]0+)?\s*[₽¥￥]/.test(fixed)) errors.push('zero money');
   if (/\b(?:seller|factory|merchant)\b/i.test(fixed)) errors.push('english supplier type');
   if (/ориентир\s+0[,.]\d+\s*кг|category default/i.test(fixed)) errors.push('category default weight');
+  if (/Цена:\s*Выбранный SKU/i.test(fixed)) errors.push('price mixed with selected sku line');
+  if (/черновик карточки на основе данных 1688/i.test(fixed)) errors.push('internal seo boilerplate');
   fixed = fixed.replace(/\bseller\b/gi, 'продавец').replace(/\bmerchant\b/gi, 'проверенный продавец').replace(/\bfactory\b/gi, 'фабрика');
   fixed = fixed.replace(/0(?:[,.]0+)?\s*[₽¥￥]/g, 'нужно уточнить');
+  fixed = fixed.replace(/Цена:\s*Выбранный SKU:\s*/gi, 'Цена: ');
   return { ok: errors.length === 0, errors, fixedText: fixed };
 }
 
@@ -972,10 +1065,13 @@ function translateQuestionToCn(q: string): string {
   if (/материал/.test(lower)) return '请确认产品材料和关键部件材料。';
   if (/спиц/.test(lower)) return '请确认所选SKU的伞骨数量。';
   if (/чехол/.test(lower)) return '是否包含收纳套？请发送产品打开、折叠状态和包装的实拍图。';
+  if (/раскрыт.*кейс|кейс.*раскрыт/.test(lower)) return '请发送打开的工具箱和所有工具的实拍图（近景）。';
+  if (/штрихкод/.test(lower)) return '请发送包装、标签和条形码的实拍图（如有）。';
+  if (/замен\w*.*брак|брак\w*.*замен/.test(lower)) return '如果产品有质量问题，是否可以更换？';
   if (/фото/.test(lower)) return '请发送产品实拍图（含包装）。';
   if (/комплектац/.test(lower)) return '请确认所选SKU的完整配置。';
   if (/moq|минимальн/.test(lower)) return '请确认最小起订量和发货时间。';
-  if (/образец/.test(lower)) return '是否可以先购买1-2件样品？';
+  if (/образц|образец/.test(lower)) return '是否可以先购买1-2件样品？';
   return '请确认该问题中的相关产品信息。';
 }
 
@@ -1041,6 +1137,8 @@ export function validateSupplierQuestions(text: string): { ok: boolean; errors: 
   const ruLines = text.split('\n').filter(l => /^\d+[.)]\s/.test(l) && /[А-Яа-яЁё]/.test(l));
   if (uniq(ruLines.map(l => l.replace(/^\d+[.)]\s*/, ''))).length !== ruLines.length) errors.push('duplicates');
   if (ruLines.length > 10) errors.push('too many questions');
+  if (ruLines.some(l => /\bвес\b/i.test(l) && !/с упаковкой/i.test(l))) errors.push('weight question without packaging');
+  if (/['‘’]\s*\d/.test(text)) errors.push('stray quote before sku number');
   return { ok: errors.length === 0, errors, fixedText: text };
 }
 
@@ -1054,10 +1152,10 @@ export function buildBuyerBriefFromProfile(product: any, opts: { sourceUrl?: str
     `Название: ${p.identity.titleForReport}`,
     `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? '—'}`,
     `Цена: ${p.pricing.displayPriceText}`,
-    `SKU: ${p.sku.selectedSkuText ?? 'не определён'}`,
+    `Выбранный SKU: ${formatSelectedSkuLine(p.identity.productKind, p.sku, p.pricing)}`,
     `SKU в карточке: ${p.sku.skuSummary}`,
     `Цвета: ${p.sku.colors.length ? p.sku.colors.join(', ') : 'уточнить'}`,
-    `Материал: ${p.identity.materials.join(', ')}`,
+    `Материал: ${materialsDisplayLine(p)}`,
     `MOQ: ${pos(product?.moq) ? `${Math.round(pos(product?.moq)!)} шт.` : 'уточнить'}`,
     '', '## 2. Поставщик',
     `Название: ${p.supplier.name || 'не указано'}`,
@@ -1085,7 +1183,7 @@ export function buildCargoBriefFromProfile(product: any, opts: { sourceUrl?: str
     '## Товар',
     `Название: ${p.identity.titleForReport}`,
     `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? '—'}`,
-    `SKU: ${p.sku.selectedSkuText ?? 'не определён'}`,
+    `Выбранный SKU: ${formatSelectedSkuLine(p.identity.productKind, p.sku, p.pricing)}`,
     `Цена: ${p.pricing.displayPriceText}`,
     '', '## Что нужно запросить для доставки',
     ...list(p.cargo.mustAsk, 16),
@@ -1094,7 +1192,7 @@ export function buildCargoBriefFromProfile(product: any, opts: { sourceUrl?: str
     '', '## Текущий статус',
     `Вес: ${weight ? `${weight} кг` : 'не указан'}`,
     'Габариты: не указаны',
-    `SKU: ${p.sku.selectedSkuText ?? 'не определён'}`,
+    `Выбранный SKU: ${formatSelectedSkuLine(p.identity.productKind, p.sku, p.pricing)}`,
     '', '## Важно',
     'Карго не рассчитывается точно без веса и габаритов выбранного SKU.',
   ].join('\n');
@@ -1102,13 +1200,18 @@ export function buildCargoBriefFromProfile(product: any, opts: { sourceUrl?: str
 
 export function buildSampleChecklistFromProfile(product: any, opts: { sourceUrl?: string } = {}): string {
   const p = ensureProductProcurementProfile(product, opts);
-  const measure = uniq(['вес с упаковкой', 'габариты индивидуальной упаковки', ...p.cargo.mustAsk.filter(v => /длина|диаметр|размер|объ[её]м|вес|габарит/i.test(v))], 8);
+  const measure = uniq([
+    p.identity.productKind === 'tool_kit' ? 'вес набора с упаковкой' : 'вес с упаковкой',
+    p.identity.productKind === 'tool_kit' ? 'габариты кейса/упаковки' : 'габариты индивидуальной упаковки',
+    ...(p.identity.productKind === 'tool_kit' ? ['размеры ключевых инструментов'] : []),
+    ...p.cargo.mustAsk.filter(v => /длина|диаметр|размер|объ[её]м|вес|габарит/i.test(v)),
+  ], 8);
   return [
     '# Чек-лист образца', '',
     '## До заказа образца',
     ...list(p.procurement.mustCheckBeforeSample, 8),
     '', '## Какой SKU взять',
-    `- ${p.sku.selectedSkuText ?? 'самый массовый/целевой SKU после подтверждения у поставщика'}`,
+    `- ${selectedSkuShortLabel(p.identity.productKind, p.sku)}`,
     '- Количество: 1–2 единицы, не партия',
     '', '## Что проверить на образце',
     ...list(p.procurement.mustCheckOnSample, 12),
@@ -1129,12 +1232,19 @@ export function buildSeoDraftFromProfile(product: any, opts: { sourceUrl?: strin
   const useCases = p.identity.useCases.length ? p.identity.useCases.join(', ') : 'повседневного использования';
   const material = p.identity.materials.join(', ');
   const balaclava = p.identity.productKind === 'clothing' && /балаклав|подшлемник/i.test(`${p.identity.titleForReport} ${p.identity.titleForSeo} ${p.identity.coreObject}`);
+  const toolKit = p.identity.productKind === 'tool_kit';
   const bullets = balaclava ? [
     'Лёгкая балаклава для велосипеда, туризма и активного отдыха',
     'Закрывает голову, лицо и шею от ветра, пыли и солнца',
     'Сетчатая зона для более комфортного дыхания',
     p.sku.colors.length ? `Несколько цветов в карточке 1688: ${p.sku.colors.join(', ')}` : 'Несколько вариантов в карточке 1688',
     'Перед продажей подтвердите состав, размер и УФ-защиту',
+  ] : toolKit ? [
+    'Набор инструментов для бытового ремонта и сборки мебели',
+    'Комплектация зависит от выбранного SKU — подтвердите состав набора',
+    'Кейс помогает хранить инструменты в одном месте',
+    'Материал металлических частей нужно подтвердить у поставщика',
+    'Перед продажей проверьте образец, вес, упаковку и комплектацию',
   ] : uniq([
     `${p.identity.shortTitle || title} для ${useCases}`,
     material && !/уточнить/.test(material) ? `Материал: ${material}${/подтверд/i.test(material) ? '' : ' — подтвердите у поставщика'}` : 'Материал нужно подтвердить у поставщика',
@@ -1173,12 +1283,22 @@ function seoDescription(p: ProductProcurementProfile, title: string): string {
   if (p.identity.productKind === 'umbrella') {
     return 'Складной автоматический зонт с крючком и чехлом подходит для повседневного использования в дороге, на прогулке и в поездках. Перед публикацией подтвердите размер, материал купола и спиц, механизм, комплектацию и заявленную защиту от солнца.';
   }
-  return `${title} — черновик карточки для WB/Ozon на основе данных 1688. Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.`;
+  if (p.identity.productKind === 'tool_kit') {
+    return 'Набор инструментов в кейсе подходит для бытового ремонта, сборки мебели и мелких работ дома, на даче или в гараже. Комплектация зависит от выбранного SKU, поэтому перед публикацией нужно подтвердить состав набора, материал инструментов, вес, размеры кейса и реальные фото упаковки у поставщика.';
+  }
+  return `${title} подходит для использования по назначению. Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.`;
 }
 
 function seoCharacteristics(p: ProductProcurementProfile): Array<{ name: string; value: string; status: string }> {
   const balaclava = p.identity.productKind === 'clothing' && /балаклав|подшлемник/i.test(`${p.identity.titleForReport} ${p.identity.titleForSeo} ${p.identity.coreObject}`);
-  const rows = balaclava ? [
+  const toolKit = p.identity.productKind === 'tool_kit';
+  const rows = toolKit ? [
+    { name: 'Тип', value: 'набор инструментов в кейсе', status: 'подтвердить состав' },
+    { name: 'Комплектация', value: p.sku.skuSummary, status: 'уточнить точный состав по SKU' },
+    { name: 'Материал', value: materialsDisplayLine(p), status: 'подтвердить марку стали и материал ручек' },
+    { name: 'Вес', value: 'не указан', status: 'нужен вес набора с упаковкой' },
+    { name: 'Кейс', value: 'пластиковый/металлический — уточнить', status: 'проверить фиксаторы на образце' },
+  ] : balaclava ? [
     { name: 'Тип', value: 'балаклава защитная', status: 'подтвердить назначение' },
     ...(p.sku.colors.length ? [{ name: 'Цвета', value: p.sku.colors.join(', '), status: 'по SKU карточки' }] : []),
     { name: 'Материал', value: p.identity.materials.join(', ') || 'полиэстер/ткань', status: 'подтвердить состав в процентах' },
@@ -1262,6 +1382,8 @@ export function validateDocuments(docs: Array<{ filename: string; text: string }
       const bulletSection = text.match(/## Буллеты\n([\s\S]*?)(?:\n## |$)/)?.[1] ?? '';
       const bullets = bulletSection.match(/^\d+\.\s+/gm)?.length ?? 0;
       if (bullets !== 5) errors.push(`${doc.filename}: bullets not 5`);
+      if (/черновик карточки на основе данных 1688/i.test(text)) { errors.push(`${doc.filename}: internal seo boilerplate`); text = text.replace(/\s*—?\s*черновик карточки для WB\/Ozon на основе данных 1688\.?/gi, '.'); }
+      if (/для ремонт(?!а)\b/i.test(text)) { errors.push(`${doc.filename}: bad russian grammar`); text = text.replace(/для ремонт(?!а)\b/gi, 'для ремонта'); }
     }
     return { ...doc, text: text.replace(/\n{3,}/g, '\n\n').trim() + '\n' };
   });
