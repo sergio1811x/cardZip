@@ -108,6 +108,42 @@ export interface UserAnalysis {
   finished_at: string;
 }
 
+/**
+ * Canonical single-job loader used by EVERY inline-button handler.
+ *
+ * Rules that make callbacks reliable:
+ * - `.maybeSingle()` (not `.single()`): 0 rows returns null WITHOUT a thrown/DB error,
+ *   so a legitimately-missing job is distinguishable from a real query failure.
+ * - The Supabase `error` is logged, never swallowed. Historically each handler had its
+ *   own copy of this query with `const { data } = ...` (error dropped), which is why a
+ *   failing "Вопросы поставщику" button was impossible to diagnose from logs.
+ * - Selects `*` so callers get result_json + input_url + id from one shape. No handler
+ *   should invent its own column subset again.
+ */
+export async function getJobForUser(userId: string, jobId: string): Promise<DbJob | null> {
+  if (!userId || !jobId) {
+    console.error('[getJobForUser] missing key', { hasUserId: !!userId, hasJobId: !!jobId });
+    return null;
+  }
+  const { data, error } = await supabase
+    .from('jobs')
+    .select('*')
+    .eq('id', jobId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) {
+    console.error('[getJobForUser] supabase error', {
+      userId,
+      jobId,
+      message: error.message,
+      code: (error as any).code,
+      details: (error as any).details,
+    });
+    return null;
+  }
+  return (data as DbJob) ?? null;
+}
+
 export async function getUserAnalyses(userId: string, limit = 10, offset = 0): Promise<UserAnalysis[]> {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const { data } = await supabase

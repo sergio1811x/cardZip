@@ -1,25 +1,21 @@
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import { supabase } from '../../db/supabase';
+import { getJobForUser } from '../../db/queries/jobs';
 import { buildSupplierQuestionsFromProfile, ensureProductProcurementProfile } from '../../core/procurementProfile';
 
-async function findJob(userId: string, jobId?: string) {
-  if (jobId) {
-    const { data } = await supabase
-      .from('jobs')
-      .select('id, result_json, procurement_status')
-      .eq('user_id', userId)
-      .eq('id', jobId)
-      .single();
-    return data;
-  }
-
-  // New MVP buttons must always carry analysisId/jobId. Do not silently open
-  // the latest product from a generic callback: it can show the wrong analysis.
-  return null;
-}
-
+/**
+ * Robust jobId extraction. Reads straight from callbackQuery.data (which always
+ * carries `supplier_questions:{jobId}` / `sq:ru:{jobId}`), instead of trusting
+ * telegraf's ctx.match — the previous ctx.match-based helper was the suspected
+ * cause of the "Не удалось открыть раздел" failures. Falls back to ctx.match.
+ */
 function callbackJobId(ctx: Context): string | undefined {
+  const data = (ctx.callbackQuery as any)?.data as string | undefined;
+  if (data) {
+    const m = data.match(/^(?:supplier_questions|sq(?:[:_](?:ru|cn))?)[:_](.+)$/);
+    if (m?.[1]) return m[1];
+  }
   const match = (ctx as any).match as RegExpMatchArray | undefined;
   return match?.[2] || match?.[1];
 }
@@ -48,15 +44,21 @@ export async function handleSupplierQuestions(ctx: Context) {
   }
 
   const jobId = callbackJobId(ctx);
-  const job = await findJob(userId, jobId).catch(() => null);
-  if (!job) {
+  const job = jobId ? await getJobForUser(userId, jobId).catch(() => null) : null;
+  if (!job || !job.result_json) {
+    console.error('[callback-analysis-not-found]', {
+      userId,
+      analysisId: jobId,
+      callbackData: (ctx.callbackQuery as any)?.data,
+      reason: !jobId ? 'no_job_id_in_callback' : !job ? 'job_not_found' : 'empty_result_json',
+    });
     await replyOpenSectionFallback(ctx, jobId);
     return;
   }
 
   const data = job.result_json as any;
   const product = data.product ?? data.rawProduct ?? {};
-  ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
+  ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
   const questionSet = buildSupplierQuestionsFromProfile(product);
   const firstRow = questionSet.cnValid
     ? [Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`), Markup.button.callback('📋 Скопировать CN', `sq_cn:${job.id}`)]
@@ -89,19 +91,22 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
 
   const match = (ctx as any).match as RegExpMatchArray | undefined;
   const lang = match?.[1] as 'ru' | 'cn' | undefined;
-  const jobId = match?.[2];
+  const jobId = match?.[2] || callbackJobId(ctx);
   if (!lang) return;
 
   try {
-    const job = await findJob(userId, jobId);
+    const job = jobId ? await getJobForUser(userId, jobId).catch(() => null) : null;
     if (!job?.result_json) {
+      console.error('[callback-analysis-not-found]', {
+        userId, analysisId: jobId, callbackData: (ctx.callbackQuery as any)?.data, reason: 'sq_lang_lookup_failed',
+      });
       await replyOpenSectionFallback(ctx, jobId);
       return;
     }
 
     const data = job.result_json as any;
     const product = data.product ?? data.rawProduct ?? {};
-    const profile = ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
+    const profile = ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
     const questionSet = buildSupplierQuestionsFromProfile(product);
     const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 10);
 

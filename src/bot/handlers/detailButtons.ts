@@ -1,7 +1,7 @@
 import type { Context } from 'telegraf';
 import { Input, Markup } from 'telegraf';
 import AdmZip from 'adm-zip';
-import { supabase } from '../../db/supabase';
+import { getJobForUser } from '../../db/queries/jobs';
 import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail, buildMainMessage } from '../../core/messageBuilder';
 import { buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
 import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateZip, ensureProductProcurementProfile } from '../../core/procurementProfile';
@@ -11,15 +11,9 @@ import type { ProductWithContent } from '../../types';
 async function getJobData(ctx: Context, jobId: string): Promise<any | null> {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) return null;
-
-  const { data: job } = await supabase
-    .from('jobs')
-    .select('result_json, input_url')
-    .eq('id', jobId)
-    .eq('user_id', userId)
-    .single();
-
-  return job ?? null;
+  // Single canonical job loader shared with every other handler (supplierQuestions,
+  // last, supplierConfirm...). Keeps ZIP, callbacks and /last reading the exact same row.
+  return getJobForUser(userId, jobId);
 }
 
 function detailKeyboard(jobId: string) {
@@ -133,7 +127,7 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   const generatedFiles = result?.generatedFiles ?? {};
   const offerId = String(product?.productId ?? result?.offerId ?? job.id ?? Date.now()).replace(/[^a-zA-Z0-9_-]/g, '').slice(-12) || Date.now().toString().slice(-8);
   const prefix = `cardzip_${offerId}_${safePrefix(product, offerId)}`.replace(/_+/g, '_').replace(/_$/g, '');
-  const imageUrls = (result?.imageUrls ?? product?.imageUrls ?? product?.images ?? []) as string[];
+  const imageUrls = (result?.imageUrls ?? (product as any)?.imageUrls ?? product?.images ?? []) as string[];
 
   if (product) ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
   const supplierText = product ? buildSupplierQuestionsText(product) : (generatedFiles?.supplierQuestions ?? generatedFiles?.supplierText ?? '');
