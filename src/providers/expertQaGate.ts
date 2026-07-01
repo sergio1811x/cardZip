@@ -2,8 +2,8 @@ import type { AnalysisSnapshot, QaResult, GeneratedArtifacts } from '../types';
 
 const QA_MODELS = [
   'deepseek/deepseek-v4-pro',
-  'deepseek/deepseek-chat-v3.2',
-  'qwen/qwen3-235b-a22b',
+  'qwen/qwen3.7-plus',
+  'minimax/minimax-m2.7',
 ];
 
 function cleanJson(raw: string): string {

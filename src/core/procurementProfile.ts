@@ -954,7 +954,7 @@ function safeSeoTitle(title: string, kind: ProductKind): string {
   if (/балаклав|подшлемник/i.test(out)) return 'Балаклава защитная от солнца и ветра для велосипеда и активного отдыха';
   if (kind === 'umbrella' && /зонт/i.test(out) && !/крюч|чехол/i.test(out)) out = 'Зонт автоматический складной с крючком и чехлом';
   if (kind === 'tool_kit') out = 'Набор инструментов для дома в кейсе';
-  return out.replace(/\s{2,}/g, ' ').trim() || 'Товар 1688';
+  return out.replace(/1688/gi, '').replace(/\s{2,}/g, ' ').trim() || 'Товар для маркетплейса';
 }
 
 function dangerousClaims(text: string): string[] { return DANGEROUS_CLAIMS.filter(c => new RegExp(escapeRegExp(c), 'i').test(text)); }
@@ -1004,6 +1004,14 @@ function selectedSkuShortLabel(kind: ProductKind, sku: ProductProcurementProfile
   return sku.selectedSkuText;
 }
 
+function formatProcurementStatus(profile: ProductProcurementProfile): string {
+  const raw = String(profile.procurement.status ?? '').trim();
+  if (/статус:/i.test(raw)) return raw;
+  if (/готов/i.test(raw)) return '🟢 Статус: готов к заказу образца';
+  if (/нужн|данн|уточн/i.test(raw)) return '🟡 Статус: нужны данные поставщика';
+  return raw ? `🟡 Статус: ${raw.replace(/^[🟢🟡🔴]\s*/, '').toLowerCase()}` : '🟡 Статус: нужны данные поставщика';
+}
+
 export function buildMainReportFromProfile(product: any, statusInfo?: { creditsRemaining?: number }, opts: { sourceUrl?: string } = {}): string {
   const p = ensureProductProcurementProfile(product, opts);
   const priceYuan = p.pricing.selectedPriceYuan ?? p.pricing.minPriceYuan;
@@ -1028,7 +1036,7 @@ export function buildMainReportFromProfile(product: any, statusInfo?: { creditsR
     `• Материал: ${escapeHtml(materialsDisplayLine(p))}`,
     `• Вес: ${weight ? `${weight} кг` : 'не указан'}`,
     '',
-    '<b>🟡 Статус: нужны данные поставщика</b>',
+    `<b>${escapeHtml(formatProcurementStatus(p))}</b>`,
     '',
     '⚠️ <b>Что уточнить</b>',
     ...p.procurement.mustAskSupplier.slice(0, 5).map(q => `• ${escapeHtml(q)}`),
@@ -1051,8 +1059,10 @@ export function buildMainReportFromProfile(product: any, statusInfo?: { creditsR
     '',
     '<b>Что сделать:</b>',
     '1. Нажмите «💬 Вопросы поставщику».',
-    '2. Отправьте текст поставщику в чат 1688.',
+    '2. Отправьте текст поставщику.',
     '3. Скачайте закупочный пакет.',
+    typeof statusInfo?.creditsRemaining === 'number' ? '' : '',
+    typeof statusInfo?.creditsRemaining === 'number' ? `📦 Осталось: ${Math.max(0, Math.floor(statusInfo.creditsRemaining))} анализов` : '',
   ].filter(Boolean);
   return lines.join('\n');
 }
@@ -1172,6 +1182,12 @@ export function formatSupplierQuestionsText(ru: string[], cn: string[]): Supplie
   return { ru: cleanRu, cn: cnCheck.ok ? cn : [], cnValid: cnCheck.ok, text: lines.join('\n'), label: cnCheck.ok ? '💬 Вопросы поставщику RU/CN' : '💬 Вопросы поставщику RU', errors: cnCheck.errors };
 }
 
+function getModelListFromEnv(raw: string | undefined, fallback: string[]): string[] {
+  if (!raw) return fallback;
+  const parsed = raw.split(',').map((v) => v.trim()).filter(Boolean);
+  return parsed.length ? parsed : fallback;
+}
+
 export async function translateSupplierQuestionsRuToCn(ru: string[]): Promise<string[]> {
   const cleanRu = uniq(ru, 10).slice(0, 10);
   const fallback = cleanRu.map(q => translateQuestionToCn(q));
@@ -1179,30 +1195,39 @@ export async function translateSupplierQuestionsRuToCn(ru: string[]): Promise<st
   const apiKey = g.process?.env?.OPENROUTER_API_KEY;
   if (!apiKey || typeof g.fetch !== 'function' || !g.AbortSignal) return fallback;
 
-  try {
-    const res = await g.fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: g.process?.env?.CARDZIP_CN_TRANSLATOR_MODEL || 'google/gemini-2.5-flash-lite',
-        max_tokens: 900,
-        temperature: 0,
-        messages: [
-          { role: 'system', content: 'Ты переводчик закупочных вопросов RU→CN для 1688. Верни строго JSON: {"questionsCn":[""]}. Не добавляй и не удаляй вопросы. Не используй русский. Десятичные числа пиши через точку: 12.5 元.' },
-          { role: 'user', content: JSON.stringify({ questionsRu: cleanRu }) },
-        ],
-      }),
-      signal: g.AbortSignal.timeout(12_000),
-    });
-    if (!res.ok) return fallback;
-    const data = await res.json() as any;
-    const raw = String(data.choices?.[0]?.message?.content ?? '').replace(/```json\s*/i, '').replace(/```/g, '').trim();
-    const parsed = JSON.parse(raw);
-    const cn = Array.isArray(parsed?.questionsCn) ? parsed.questionsCn.map(String) : [];
-    return validateCnQuestions(cleanRu, cn).ok ? cn : fallback;
-  } catch {
-    return fallback;
+  const models = getModelListFromEnv(
+    g.process?.env?.CARDZIP_CN_TRANSLATOR_MODELS ?? g.process?.env?.CARDZIP_CN_TRANSLATOR_MODEL,
+    ['google/gemini-2.5-flash-lite', 'deepseek/deepseek-v4-flash', 'stepfun/step-3.7-flash'],
+  );
+
+  for (const model of models) {
+    try {
+      const res = await g.fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          max_tokens: 900,
+          temperature: 0,
+          messages: [
+            { role: 'system', content: 'Ты переводчик закупочных вопросов RU→CN для 1688/Taobao/Tmall. Верни строго JSON: {"questionsCn":[""]}. Переводи 1:1: не добавляй, не удаляй, не объединяй и не переставляй вопросы. Количество и порядок questionsCn должны точно совпадать с questionsRu. Не используй русский. Десятичные числа пиши через точку: 12.5 元.' },
+            { role: 'user', content: JSON.stringify({ questionsRu: cleanRu }) },
+          ],
+        }),
+        signal: g.AbortSignal.timeout(12_000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json() as any;
+      const raw = String(data.choices?.[0]?.message?.content ?? '').replace(/```json\s*/i, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(raw);
+      const cn = Array.isArray(parsed?.questionsCn) ? parsed.questionsCn.map(String) : [];
+      if (validateCnQuestions(cleanRu, cn).ok) return cn;
+    } catch {
+      continue;
+    }
   }
+
+  return fallback;
 }
 
 export function validateSupplierQuestions(text: string): { ok: boolean; errors: string[]; fixedText: string } {
@@ -1300,38 +1325,125 @@ export function buildSampleChecklistFromProfile(product: any, opts: { sourceUrl?
   ].join('\n');
 }
 
+function sanitizeSeoPublishLine(value: string): string {
+  let out = fixMixedRuTypos(safeRu(value));
+  out = out
+    .replace(/\b(?:1688|taobao|tmall|алибаба|поставщик|закупочн(?:ая|ую|ой)|yuan|юан[ьяе]*)\b/gi, '')
+    .replace(/\s+([,.!?;:])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  for (const claim of DANGEROUS_CLAIMS) {
+    out = out.replace(new RegExp(`\\b${escapeRegExp(claim)}\\b`, 'gi'), '').replace(/\s{2,}/g, ' ').trim();
+  }
+  return out.replace(/^[—:,;\s]+|[—:,;\s]+$/g, '').trim();
+}
+
+function seoUseCases(p: ProductProcurementProfile): string[] {
+  const raw = uniq([
+    ...p.identity.useCases,
+    p.identity.audience && !/уточнить|не указан/i.test(p.identity.audience) ? p.identity.audience : '',
+  ], 6);
+  return raw
+    .map(sanitizeSeoPublishLine)
+    .filter(v => v.length > 2 && !/подтверд|уточн|нужно/i.test(v))
+    .slice(0, 4);
+}
+
+function seoFeatureClaims(p: ProductProcurementProfile): string[] {
+  return uniq([
+    ...p.identity.visibleFeatures,
+    ...p.content.seoAllowedClaims,
+  ], 8)
+    .map(sanitizeSeoPublishLine)
+    .filter(v => v.length > 2 && !/подтверд|уточн|если/i.test(v))
+    .slice(0, 3);
+}
+
+function seoMaterialClaim(p: ProductProcurementProfile): string | null {
+  const material = uniq(p.identity.materials.map(sanitizeSeoPublishLine), 3)
+    .filter(v => v && !/уточн|подтверд|не указан/i.test(v))
+    .join(', ');
+  return material || null;
+}
+
+function seoVariantLine(p: ProductProcurementProfile): string | null {
+  const variants = [
+    p.sku.colors.length ? `цвета: ${p.sku.colors.join(', ')}` : '',
+    p.sku.sizes.length ? `размеры: ${p.sku.sizes.join(', ')}` : '',
+    p.sku.models.length ? `модели: ${p.sku.models.slice(0, 5).join(', ')}` : '',
+    p.sku.packCounts.length ? `комплектации: ${p.sku.packCounts.slice(0, 5).join(', ')}` : '',
+  ].filter(Boolean);
+  return variants.length ? `Варианты в карточке: ${variants.join('; ')}` : null;
+}
+
+function ensureFiveSeoBullets(lines: string[], p: ProductProcurementProfile): string[] {
+  const fallback = [
+    `${p.identity.shortTitle || p.identity.coreObject || 'Товар'} для повседневного использования`,
+    'В карточке делайте акцент на тип товара и реальные сценарии применения',
+    'Финальные свойства, состав и комплектацию подтвердите по выбранному SKU',
+    'Перед публикацией проверьте образец, упаковку и реальные фото',
+    'Не указывайте неподтверждённые свойства как факт',
+  ];
+  const cleanBullets = uniq([...lines, ...fallback]
+    .map(sanitizeSeoPublishLine)
+    .map(v => v.replace(/^Сценарии использования:\s*$/i, '').trim())
+    .filter(v => v.length > 4), 10);
+  return cleanBullets.slice(0, 5);
+}
+
 export function buildSeoDraftFromProfile(product: any, opts: { sourceUrl?: string } = {}): string {
   const p = ensureProductProcurementProfile(product, opts);
   const title = safeSeoTitle(p.identity.titleForSeo, p.identity.productKind);
-  const useCases = p.identity.useCases.length ? p.identity.useCases.join(', ') : 'повседневного использования';
-  const material = p.identity.materials.join(', ');
+  const useCases = seoUseCases(p);
+  const features = seoFeatureClaims(p);
+  const material = seoMaterialClaim(p);
+  const variantLine = seoVariantLine(p);
   const balaclava = p.identity.productKind === 'clothing' && /балаклав|подшлемник/i.test(`${p.identity.titleForReport} ${p.identity.titleForSeo} ${p.identity.coreObject}`);
   const toolKit = p.identity.productKind === 'tool_kit';
-  const bullets = balaclava ? [
-    'Лёгкая балаклава для велосипеда, туризма и активного отдыха',
-    'Закрывает голову, лицо и шею от ветра, пыли и солнца',
-    'Сетчатая зона для более комфортного дыхания',
-    p.sku.colors.length ? `Несколько цветов в карточке 1688: ${p.sku.colors.join(', ')}` : 'Несколько вариантов в карточке 1688',
-    'Перед продажей подтвердите состав, размер и УФ-защиту',
+  const umbrella = p.identity.productKind === 'umbrella';
+
+  const candidateBullets = balaclava ? [
+    'Лёгкая балаклава для велосипеда, прогулок, туризма и активного отдыха',
+    'Закрывает голову, лицо и шею от ветра и пыли',
+    'Сетчатая зона помогает сохранить комфорт при движении',
+    variantLine ?? 'Варианты цвета и размера проверьте по выбранному SKU',
+    'Перед публикацией подтвердите состав, замеры и заявленную УФ-защиту',
   ] : toolKit ? [
-    'Набор инструментов для бытового ремонта и сборки мебели',
-    'Комплектация зависит от выбранного SKU — подтвердите состав набора',
+    'Набор инструментов для бытового ремонта, сборки мебели и мелких работ',
     'Кейс помогает хранить инструменты в одном месте',
-    'Материал металлических частей нужно подтвердить у поставщика',
-    'Перед продажей проверьте образец, вес, упаковку и комплектацию',
-  ] : uniq([
-    `${p.identity.shortTitle || title} для ${useCases}`,
-    material && !/уточнить/.test(material) ? `Материал: ${material}${/подтверд/i.test(material) ? '' : ' — подтвердите у поставщика'}` : 'Материал нужно подтвердить у поставщика',
-    p.sku.colors.length ? `Доступные цвета: ${p.sku.colors.join(', ')}` : 'Цвет и SKU выберите по карточке 1688',
-    p.sku.skuSummary ? `SKU в карточке: ${p.sku.skuSummary}` : 'SKU нужно уточнить перед закупкой',
-    'Перед продажей проверьте образец, вес и упаковку',
-  ], 5).slice(0, 5);
-  while (bullets.length < 5) bullets.push('Характеристику нужно подтвердить перед публикацией');
+    variantLine ?? 'Комплектация зависит от выбранного SKU',
+    'Материал металлических частей и ручек подтвердите у поставщика',
+    'Перед публикацией проверьте образец, вес, упаковку и комплектацию',
+  ] : umbrella ? [
+    'Складной зонт для поездок, прогулок и повседневного использования',
+    'Автоматический механизм, чехол и крючок указывайте только после подтверждения комплектации',
+    variantLine ?? 'Цвет и комплектацию выберите по нужному SKU',
+    'Размер купола, длину в сложенном виде и материал спиц подтвердите перед публикацией',
+    'Не пишите про UPF или ветроустойчивость без документов и теста образца',
+  ] : [
+    useCases.length ? `Сценарии использования: ${useCases.join(', ')}` : `${p.identity.shortTitle || title} для повседневного использования`,
+    features.length ? `Особенности: ${features.join(', ')}` : 'Основные свойства опишите только после проверки выбранного SKU',
+    material ? `Материал: ${material}` : 'Материал и состав вынесите в карточку только после подтверждения',
+    variantLine ?? (p.sku.skuSummary ? `Варианты SKU: ${p.sku.skuSummary}` : 'Цвет, размер и комплектацию уточните по выбранному SKU'),
+    'Перед публикацией проверьте образец, вес, упаковку и реальные фото',
+  ];
+
+  const bullets = ensureFiveSeoBullets(candidateBullets, p);
   const characteristics = seoCharacteristics(p);
+  const keywords = uniq([
+    title,
+    sanitizeSeoPublishLine(p.identity.coreObject),
+    sanitizeSeoPublishLine(p.identity.shortTitle),
+    ...useCases,
+    ...p.sku.colors.map(c => sanitizeSeoPublishLine(`${p.identity.coreObject} ${c}`)),
+  ], 14).filter(Boolean).join(', ');
+
   return [
-    '# SEO-черновик WB/Ozon', '',
-    '## Название', title, '',
-    '## Описание',
+    '# SEO-черновик для маркетплейса', '',
+    '## Статус',
+    'Черновик можно использовать только после проверки выбранного SKU, образца, упаковки и подтверждённых характеристик.', '',
+    '## Название для карточки', title, '',
+    '## Описание-черновик',
     seoDescription(p, title),
     '', '## Буллеты',
     ...bullets.map((b, i) => `${i + 1}. ${b}`),
@@ -1339,28 +1451,36 @@ export function buildSeoDraftFromProfile(product: any, opts: { sourceUrl?: strin
     '| Параметр | Значение | Статус |', '|---|---|---|',
     ...characteristics.map(c => `| ${c.name} | ${c.value} | ${c.status} |`),
     '', '## Ключевые слова',
-    uniq([title, p.identity.coreObject, p.identity.shortTitle, ...p.identity.useCases, ...p.sku.colors.map(c => `${p.identity.coreObject} ${c}`)], 12).join(', '),
+    keywords || title,
     '', '## Что уточнить перед публикацией',
     ...list([...p.procurement.mustAskSupplier.slice(0, 6), ...p.dataQuality.missingCriticalFields], 10),
     '', '## Нельзя писать как факт',
-    ...list(p.content.seoForbiddenClaims, 12),
+    ...list(p.content.seoForbiddenClaims, 14),
     '', '## Идеи для инфографики',
-    ...p.content.infographicIdeas.slice(0, 6).map((idea, i) => `${i + 1}. ${idea}`),
+    ...p.content.infographicIdeas.slice(0, 6).map((idea, i) => `${i + 1}. ${sanitizeSeoPublishLine(idea) || idea}`),
   ].join('\n');
 }
 
-
 function seoDescription(p: ProductProcurementProfile, title: string): string {
+  const useCases = seoUseCases(p);
+  const features = seoFeatureClaims(p);
+  const material = seoMaterialClaim(p);
+  const base = sanitizeSeoPublishLine(title) || 'Товар для маркетплейса';
   if (p.identity.productKind === 'clothing' && /балаклав|подшлемник/i.test(`${p.identity.titleForReport} ${p.identity.titleForSeo} ${p.identity.coreObject}`)) {
-    return 'Лёгкая балаклава из полиэстера подходит для поездок на велосипеде, туризма, прогулок и защиты лица от ветра, пыли и солнца. Сетчатая зона помогает легче дышать при активном движении. Перед публикацией подтвердите состав ткани, размеры, упаковку и заявленную УФ-защиту у поставщика.';
+    return 'Лёгкая балаклава подходит для велосипеда, прогулок, туризма и активного отдыха. Она закрывает голову, лицо и шею от ветра и пыли, а сетчатая зона помогает сохранить комфорт при движении. Перед публикацией подтвердите состав ткани, замеры, упаковку и заявленную УФ-защиту.';
   }
   if (p.identity.productKind === 'umbrella') {
-    return 'Складной автоматический зонт с крючком и чехлом подходит для повседневного использования в дороге, на прогулке и в поездках. Перед публикацией подтвердите размер, материал купола и спиц, механизм, комплектацию и заявленную защиту от солнца.';
+    return 'Складной зонт подходит для повседневного использования, поездок и прогулок. В карточке можно сделать акцент на формате, механизме, комплектации, цветах и размерах, но материал купола, количество спиц, длину в сложенном виде и защиту от солнца нужно подтвердить до публикации.';
   }
   if (p.identity.productKind === 'tool_kit') {
-    return 'Набор инструментов в кейсе подходит для бытового ремонта, сборки мебели и мелких работ дома, на даче или в гараже. Комплектация зависит от выбранного SKU, поэтому перед публикацией нужно подтвердить состав набора, материал инструментов, вес, размеры кейса и реальные фото упаковки у поставщика.';
+    return 'Набор инструментов в кейсе подходит для бытового ремонта, сборки мебели и мелких работ дома, на даче или в гараже. Комплектация зависит от выбранного SKU, поэтому перед публикацией нужно подтвердить состав набора, материал инструментов, вес, размеры кейса и реальные фото упаковки.';
   }
-  return `${title} подходит для использования по назначению. Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.`;
+  const parts = [base];
+  if (useCases.length) parts.push(`Сценарии использования: ${useCases.join(', ')}.`);
+  if (features.length) parts.push(`В карточке можно выделить: ${features.join(', ')}.`);
+  if (material) parts.push(`Материал: ${material}.`);
+  parts.push('Перед публикацией подтвердите материал, комплектацию, вес, упаковку, выбранный SKU и реальные фото. Неподтверждённые свойства не указывайте как факт.');
+  return parts.join(' ');
 }
 
 function seoCharacteristics(p: ProductProcurementProfile): Array<{ name: string; value: string; status: string }> {
@@ -1400,8 +1520,8 @@ export function buildReadmeFromProfile(product: any, opts: { sourceUrl?: string 
     '2. 02_ТЗ_байеру.md — что закупаем, какой SKU выбран и что проверить.',
     '3. 03_ТЗ_карго.md — вес, габариты, упаковка и ограничения для доставки.',
     '4. 04_Чеклист_образца.md — что проверить до образца, на образце и перед партией.',
-    '5. 05_SEO_черновик.md — черновик карточки WB/Ozon и идеи инфографики.',
-    '6. 06_Фото_товара.zip — фото товара с 1688, если удалось скачать.',
+    '5. 05_SEO_черновик.md — SEO-черновик для маркетплейса и идеи инфографики.',
+    '6. 06_Фото_товара.zip — фото товара, если удалось скачать.',
     '', 'Рекомендуемый порядок:',
     '1. Отправьте 01_Вопросы_поставщику.txt поставщику.',
     '2. Получите вес, габариты, фото и подтверждение SKU.',
@@ -1409,7 +1529,7 @@ export function buildReadmeFromProfile(product: any, opts: { sourceUrl?: string 
     '4. Передайте 03_ТЗ_карго.md карго.',
     '5. Закажите 1–2 образца.',
     '6. Проверьте образец по 04_Чеклист_образца.md.',
-    '7. Используйте 05_SEO_черновик.md как черновик карточки.',
+    '7. Используйте 05_SEO_черновик.md как безопасный черновик карточки после подтверждения данных.',
   ].join('\n');
 }
 
@@ -1453,12 +1573,14 @@ export function validateDocuments(docs: Array<{ filename: string; text: string }
       }
     }
     if (/seo/i.test(doc.filename)) {
-      const bulletSection = text.match(/## Буллеты\n([\s\S]*?)(?:\n## |$)/)?.[1] ?? '';
+      const bulletSection = text.match(/## Буллеты(?: для карточки)?\n([\s\S]*?)(?:\n## |$)/)?.[1] ?? '';
       const bullets = bulletSection.match(/^\d+\.\s+/gm)?.length ?? 0;
       if (bullets !== 5) errors.push(`${doc.filename}: bullets not 5`);
-      if (/черновик карточки на основе данных 1688/i.test(text)) { errors.push(`${doc.filename}: internal seo boilerplate`); text = text.replace(/\s*—?\s*черновик карточки для WB\/Ozon на основе данных 1688\.?/gi, '.'); }
+      if (/черновик карточки на основе данных 1688|WB\/Ozon на основе данных/i.test(text)) { errors.push(`${doc.filename}: internal seo boilerplate`); text = text.replace(/\s*—?\s*черновик карточки для WB\/Ozon на основе данных 1688\.?/gi, '.'); }
       if (/для ремонт(?!а)\b/i.test(text)) { errors.push(`${doc.filename}: bad russian grammar`); text = text.replace(/для ремонт(?!а)\b/gi, 'для ремонта'); }
       if (/для приготовление\b/i.test(text)) { errors.push(`${doc.filename}: bad russian grammar`); text = text.replace(/для приготовление\b/gi, 'для приготовления'); }
+      if (/для ежедневная\b/i.test(text)) { errors.push(`${doc.filename}: bad russian grammar`); text = text.replace(/для ежедневная гигиена/gi, 'для ежедневной гигиены').replace(/для ежедневная\b/gi, 'для ежедневной'); }
+      if (/карточк[еаи] 1688/i.test(text)) { errors.push(`${doc.filename}: source mention in seo`); text = text.replace(/(?:в|по) карточк[еаи] 1688/gi, 'в карточке').replace(/1688/gi, '').replace(/\s{2,}/g, ' '); }
     }
     return { ...doc, text: text.replace(/\n{3,}/g, '\n\n').trim() + '\n' };
   });

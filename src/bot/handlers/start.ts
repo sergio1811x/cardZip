@@ -8,7 +8,7 @@ export async function handleStart(ctx: Context): Promise<void> {
 
   await ctx.reply(
     `👋 <b>CardZip — закупочный ассистент для 1688</b>\n\n` +
-      `Скиньте ссылку на товар с 1688.\n` +
+      `Скиньте ссылку на товар с 1688 / Taobao / Tmall.\n` +
       `Я подготовлю закупочный пакет:\n\n` +
       `• понятный разбор товара и SKU\n` +
       `• цену, MOQ и данные поставщика\n` +

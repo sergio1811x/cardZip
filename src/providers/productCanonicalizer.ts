@@ -58,16 +58,16 @@ type CanonicalizerModelResult = Partial<ProductContext> & {
   productKindClassifier?: Record<string, unknown>;
 };
 
-const DEFAULT_VISION_MODELS = [
+const DEFAULT_MULTIMODAL_MODELS = [
+  "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash-lite",
-  "google/gemini-2.5-flash",
+  "stepfun/step-3.7-flash",
 ];
 
 const DEFAULT_TEXT_MODELS = [
-  "deepseek/deepseek-chat-v3.1",
-  "qwen/qwen3-32b",
-  "google/gemini-2.5-flash-lite",
-  "z-ai/glm-4.5-air",
+  "deepseek/deepseek-v4-pro",
+  "qwen/qwen3.7-plus",
+  "minimax/minimax-m2.7",
 ];
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -107,9 +107,9 @@ function getEnvList(name: string, fallback: string[]): string[] {
   return parsed.length ? parsed : fallback;
 }
 
-const VISION_MODELS = getEnvList(
-  "PRODUCT_CANONICALIZER_VISION_MODELS",
-  DEFAULT_VISION_MODELS,
+const MULTIMODAL_MODELS = getEnvList(
+  "PRODUCT_CANONICALIZER_MULTIMODAL_MODELS",
+  DEFAULT_MULTIMODAL_MODELS,
 );
 const TEXT_MODELS = getEnvList(
   "PRODUCT_CANONICALIZER_TEXT_MODELS",
@@ -540,7 +540,7 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
 
 const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
 
-Роль: эксперт по товарам 1688. Цель — единый ProductContext/ProductProcurementProfile для закупочного пакета: отчёт, SKU, вопросы, SEO, байер/карго, риски. WB-поиск — только optional keywords, не ядро. Остальные генераторы будут строиться только от этого профиля и не должны заново угадывать товар.
+Роль: эксперт по товарам 1688/Taobao/Tmall. Цель — правильно опознать товар по фото + названию + характеристикам + SKU и собрать единый ProductContext/ProductProcurementProfile для закупочного пакета: отчёт, SKU, вопросы, SEO, байер/карго, риски. Остальные генераторы будут строиться только от этого профиля и не должны заново угадывать товар.
 
 Верни СТРОГО JSON без markdown:
 {
@@ -558,7 +558,7 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
     "titleCn": "CN название без мусора",
     "cleanRu": "чистое русское название",
     "shortRu": "2-5 слов",
-    "wbTitleDraft": "черновое название WB/Ozon без рискованных claims"
+    "wbTitleDraft": "черновое название карточки маркетплейса без рискованных claims"
   },
   "facts": {"Материал":"переведённое значение"},
   "sku": {
@@ -620,10 +620,10 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
 - Сохраняй максимум полезных атрибутов в facts, но помечай сомнительное: “заявлено поставщиком / подтвердить”.
 - Если атрибут замаплен неверно (“цвет: противоскользящий”), занеси в conflicts и не выводи как факт.
 - SKU раскрывай как цвет × размер × модель/комплектация; распознавай pack-count, молнию, утяжку, манжету, размерные примечания.
-- Фото используй только для типа товара, формы и видимых деталей. Если передано selected_sku_image — оно важнее main_product_image. Не извлекай с фото цену, вес, MOQ, остатки или SKU. Цена, MOQ, supplier и selected SKU берутся только из provider/API данных.
+- Фото используй обязательно, если оно передано: сначала определи видимый тип товара, форму, материал/текстуру, комплектацию, упаковку, видимые маркировки и опасные claims. Если передано selected_sku_image — оно важнее main_product_image. Не извлекай с фото цену, вес, MOQ, остатки или SKU. Цена, MOQ, supplier и selected SKU берутся только из provider/API данных.
 - selectedSkuName/selectedSkuId/selectedSkuPriceYuan являются обязательным контекстом: не противоречь им. Если selected SKU ненадёжен или конфликтует, укажи это в dataQuality/contradictions, но не придумывай другой SKU.
-- productKindClassifier: сначала классифицируй товар по фото, потом по тексту/SKU/атрибутам, затем выведи finalKind и confidence. Если есть конфликт — confidence ниже, а документы должны быть осторожными.
-- SupplierQuestions: 7-10 вопросов по выбранному SKU, весу, упаковке, комплектации, фото и доказательствам claims. Вопросы должны быть источником для profile.procurement.mustAskSupplier; не дублируй вопросы.
+- productKindClassifier: сначала классифицируй товар по фото, потом сверяй с названием/SKU/атрибутами, затем выведи finalKind и confidence. Если фото и текст конфликтуют — не выбирай наугад: снизь confidence, опиши disagreement и сделай документы осторожными.
+- SupplierQuestions: 7-10 вопросов по выбранному SKU, весу, упаковке, комплектации, фото, материалам, документам и доказательствам claims. Вопросы должны быть источником для profile.procurement.mustAskSupplier; не дублируй вопросы.
 - “медицинские сабо/одежда для медработников” можно как тип товара; лечебный эффект — нельзя как факт.
 - Для обуви не спрашивай мощность/220V/аккумулятор/рукав. Для техники не спрашивай стельку/размерную сетку/рукав. Для одежды не спрашивай питание/вилку.
 - dataQuality.score 1-10: снижай за отсутствие веса, SKU selection, цены, фото, упаковки.
@@ -916,13 +916,13 @@ function hasUsableContext(ctx: ProductContext): boolean {
   );
 }
 
-async function runVisionCanonicalizer(
+async function runMultimodalCanonicalizer(
   prompt: string,
   imageDataUrls: string[],
   apiKey: string,
 ): Promise<CanonicalizerModelResult | null> {
-  for (const model of VISION_MODELS) {
-    console.log(`[canonicalizer] Trying vision ${model}...`);
+  for (const model of MULTIMODAL_MODELS) {
+    console.log(`[canonicalizer] Trying multimodal ${model}...`);
     const result = await callOpenRouter(
       model,
       [
@@ -939,7 +939,7 @@ async function runVisionCanonicalizer(
     );
 
     if (result?.identity) {
-      console.log(`[canonicalizer] Vision success with ${model}`);
+      console.log(`[canonicalizer] Multimodal success with ${model}`);
       return result;
     }
   }
@@ -1000,7 +1000,7 @@ export async function canonicalizeProduct(
     if (imageDataUrl) imageDataUrls.push(imageDataUrl);
   }
   if (imageDataUrls.length) {
-    result = await runVisionCanonicalizer(prompt, imageDataUrls, apiKey);
+    result = await runMultimodalCanonicalizer(prompt, imageDataUrls, apiKey);
   }
 
   if (!result?.identity) {

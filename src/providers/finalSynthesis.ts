@@ -292,13 +292,13 @@ function buildPrompt(
 
   return `CardZip 2.0 SEO Writer.
 
-Сделай безопасный, продающий черновик WB/Ozon-карточки по данным 1688. Это не WB-аналитика и не расчёт прибыли.
+Сделай безопасный, продающий SEO-черновик карточки маркетплейса. Это закупочный черновик, не аналитика рынка и не расчёт прибыли.
 
 Данные:
 - Тип: ${ctx.identity?.productType ?? ''}
 - Категория: ${ctx.identity?.categoryType ?? ''}
 - Название: ${ctx.titles?.shortRu ?? ''}
-- WB draft: ${ctx.titles?.wbTitleDraft ?? ''}
+- Draft title: ${ctx.titles?.wbTitleDraft ?? ''}
 - Сценарии: ${(ctx.identity?.useCases ?? []).join(', ')}
 - Facts: ${JSON.stringify(safeFacts)}
 - Allowed claims: ${allowedClaims.join(', ') || 'нет'}
@@ -438,7 +438,7 @@ async function callOpenRouter(
       {
         role: 'system',
         content: [
-          'Ты создаёшь безопасный черновик WB-карточки.',
+          'Ты создаёшь безопасный черновик карточки маркетплейса.',
           'Ты не придумываешь свойства.',
           'Ты возвращаешь только валидный JSON.',
         ].join('\n'),
@@ -543,7 +543,7 @@ function fallbackSeo(ctx: ProductContext): AiContentResult {
       normalizeText(ctx.titles?.wbTitleDraft) ||
       normalizeText(ctx.titles?.shortRu) ||
       normalizeText(ctx.titles?.cleanRu) ||
-      'Товар для Wildberries';
+      'Товар для маркетплейса';
 
   return {
     titleRu: safeTitle,

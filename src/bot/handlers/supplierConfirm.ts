@@ -72,7 +72,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
       'Что сделать сейчас:\n' +
       '1. Нажмите «💬 Вопросы поставщику».\n' +
       '2. Скопируйте вопросы.\n' +
-      '3. Отправьте их в чат 1688.\n' +
+      '3. Отправьте их поставщику.\n' +
       '4. Когда поставщик ответит — нажмите «📥 Обновить по ответу».',
       {
         parse_mode: 'HTML',
@@ -291,10 +291,9 @@ interface ExtractedData {
 }
 
 const EXTRACT_MODELS = [
+  { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite', key: 'OPENROUTER_API_KEY' },
   { base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-flash', key: 'OPENROUTER_API_KEY' },
-  { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite-preview-09-2025', key: 'OPENROUTER_API_KEY' },
-  { base: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-4-scout', key: 'OPENROUTER_API_KEY' },
-  { base: 'https://api.fireworks.ai/inference/v1', model: 'accounts/fireworks/models/deepseek-v4-flash', key: 'FIREWORKS_API_KEY' },
+  { base: 'https://openrouter.ai/api/v1', model: 'stepfun/step-3.7-flash', key: 'OPENROUTER_API_KEY' },
 ];
 
 const EXTRACT_PROMPT = `Извлеки из текста ответа поставщика:

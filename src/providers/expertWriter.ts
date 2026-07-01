@@ -1,9 +1,9 @@
 import type { AnalysisSnapshot } from "../types";
 
 const WRITER_MODELS = [
-  "deepseek/deepseek-v4-pro",
-  "deepseek/deepseek-chat-v3.2",
-  "qwen/qwen3-235b-a22b",
+  "google/gemini-2.5-flash-lite",
+  "deepseek/deepseek-v4-flash",
+  "stepfun/step-3.7-flash",
 ];
 
 function cleanJson(raw: string): string {
@@ -36,7 +36,7 @@ const EXPERT_WRITER_PROMPT = `CardZip 2.0 Expert Writer.
 
 Роль: закупщик и редактор закупочного пакета 1688. Улучшай данные: переводи, структурируй, помечай достоверность. Не выкидывай факты поставщика, если их можно безопасно показать как “заявлено / подтвердить”.
 
-Источник правды: AnalysisSnapshot. WB/Ozon-аналитика не обязательна. Авто-экономика прибыли не нужна; не выводи ROI в пользовательских текстах MVP.
+Источник правды: AnalysisSnapshot. Это закупочный пакет, а не обещание WB/Ozon-продаж. Авто-экономика прибыли не нужна; не выводи ROI, маржу и доходность в пользовательских текстах MVP.
 
 Сделай результат полезным для селлера, байера, карго и контентщика.
 
@@ -50,7 +50,7 @@ const EXPERT_WRITER_PROMPT = `CardZip 2.0 Expert Writer.
 Верни только JSON:
 {
   "userCard":"короткий отчёт: товар, цена, SKU, готовность, риски, cost-only экономика, 3-5 вопросов, next step",
-  "seoTitle":"продающее название WB/Ozon без неподтверждённых claims",
+  "seoTitle":"продающее название для маркетплейса без неподтверждённых claims",
   "seoDescription":"2-4 предложения для карточки; без 1688 и служебных слов; спорные свойства осторожно",
   "seoBullets":["5 буллетов для карточки/инфографики"],
   "seoKeywords":["8-12 ключевых фраз"],

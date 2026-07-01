@@ -20,7 +20,7 @@ export async function handleLast(ctx: Context): Promise<void> {
     .single();
 
   if (!lastJob?.result_json) {
-    await ctx.reply('У вас пока нет завершённых анализов. Отправьте ссылку на товар с 1688.');
+    await ctx.reply('У вас пока нет завершённых анализов. Отправьте ссылку на товар с 1688 / Taobao / Tmall.');
     return;
   }
 

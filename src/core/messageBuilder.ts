@@ -28,7 +28,7 @@ function topLevelKeyboard(jobId: string) {
 
 
 export function buildMainMessage(product: any, jobId: string, status: any, _category?: any): { text: string; keyboard: any } {
-  const text = buildMainReportFromProfile(product, undefined);
+  const text = buildMainReportFromProfile(product, typeof status?.creditsRemaining === 'number' ? { creditsRemaining: status.creditsRemaining } : undefined);
   const keyboard = topLevelKeyboard(jobId);
   return { text, keyboard };
 }

@@ -27,7 +27,7 @@ const PACKAGES: Record<string, PackageConfig> = {
     credits: 10,
     unlimitedDays: 0,
     unlimitedLimit: 0,
-    description: '10 анализов товаров из Китая. Аналоги на WB, экономика и ТЗ байеру. Кредиты не сгорают.',
+    description: '10 закупочных пакетов по ссылкам 1688/Taobao/Tmall: отчёт, вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист, SEO-черновик и фото. Кредиты не сгорают.',
   },
   pack30: {
     stars: 300,
@@ -35,7 +35,7 @@ const PACKAGES: Record<string, PackageConfig> = {
     credits: 30,
     unlimitedDays: 0,
     unlimitedLimit: 0,
-    description: '30 анализов товаров из Китая. Аналоги на WB, экономика и ТЗ байеру. Кредиты не сгорают.',
+    description: '30 закупочных пакетов по ссылкам 1688/Taobao/Tmall: отчёт, вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист, SEO-черновик и фото. Кредиты не сгорают.',
   },
   week: {
     stars: 500,
@@ -43,7 +43,7 @@ const PACKAGES: Record<string, PackageConfig> = {
     credits: 0,
     unlimitedDays: 7,
     unlimitedLimit: 100,
-    description: 'Доступ на 7 дней: до 100 анализов товаров из Китая. Аналоги на WB, экономика и ТЗ байеру.',
+    description: 'Доступ на 7 дней: до 100 закупочных пакетов по ссылкам 1688/Taobao/Tmall. Безлимит ограничен лимитом безопасности.',
   },
 };
 

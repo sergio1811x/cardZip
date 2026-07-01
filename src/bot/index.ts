@@ -101,7 +101,7 @@ bot.action('example_result', async (ctx) => {
 ` +
       `• чек-лист образца
 ` +
-      `• SEO-черновик и идеи инфографики
+      `• SEO-черновик для маркетплейса и идеи инфографики
 
 ` +
       `Отправьте ссылку 1688 — соберу такой пакет по вашему товару.`,
@@ -118,19 +118,19 @@ bot.action('how_it_works', async (ctx) => {
 ` +
       `2. CardZip разбирает товар, SKU, цену, MOQ и поставщика.
 ` +
-      `3. Я готовлю закупочный пакет: вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист образца, SEO и фото.
+      `3. Я готовлю закупочный пакет: вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист образца, SEO-черновик и фото.
 ` +
       `4. После ответа поставщика можно обновить пакет по весу, цене, MOQ и упаковке.
 
 ` +
-      `Я не обещаю прибыль и не ищу аналоги WB — задача CardZip подготовить товар к закупке без китайского хаоса.`,
+      `Я не обещаю прибыльность и не заменяю ручную проверку рынка — задача CardZip подготовить товар к закупке без китайского хаоса.`,
     { parse_mode: 'HTML' },
   );
 });
 
 bot.action('new_search', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply('Отправь ссылку на товар с 1688.com 👇');
+  await ctx.reply('Отправьте ссылку на товар с 1688 / Taobao / Tmall 👇');
 });
 bot.action('last', async (ctx) => {
   await ctx.answerCbQuery();
@@ -183,7 +183,7 @@ bot.action('reset_tariffs', async (ctx) => {
   return handleResetTariffs(ctx);
 });
 
-// ─── Детальные кнопки (экономика, WB, материалы) ────────────────────────────
+// ─── Детальные кнопки (себестоимость, данные товара, материалы) ──────────────
 bot.action(/^product_details?[:_](.+)$/, handleProductDetail);
 bot.action(/^proc_plan_(.+)$/, handleProcurementPlan);
 bot.action(/^econ_detail_(.+)$/, handleEconDetail);
@@ -198,7 +198,7 @@ bot.action(/^risk_detail_(.+)$/, handleRiskDetail);
 bot.action(/^sample_detail_(.+)$/, handleSampleDetail);
 bot.action(/^back_main[:_](.+)$/, handleBackToMain);
 
-// ─── Ручные вводы: вес, цена продажи, конкуренты ───────────────────────────
+// ─── Ручные вводы: вес, сценарная цена, конкуренты вручную ─────────────────
 bot.action(/^weight_input:(.+)$/, handleManualWeightStart);
 bot.action(/^manual_price_(.+)$/, handleManualSalePriceStart);
 bot.action(/^manual_competitors_(.+)$/, handleManualCompetitorsStart);

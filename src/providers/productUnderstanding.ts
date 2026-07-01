@@ -153,13 +153,13 @@ export async function analyzeProduct(raw: {
     raw.skus.slice(0, 8).forEach(s => { info += `\n  ${s.name} — ${s.price ?? '?'} ¥`; });
   }
 
-  const prompt = `Ты анализируешь товар с 1688 для продажи на Wildberries.
+  const prompt = `Ты анализируешь товар с 1688 для закупочного пакета CardZip.
 
 Твоя задача:
 1. Понять, что это за товар.
 2. Определить категорию товара.
 3. Дать короткое рыночное название на русском.
-4. Подготовить структуру для поиска аналогов на Wildberries.
+4. Подготовить безопасные поисковые термины для ручной проверки конкурентов, если пользователь захочет проверить рынок отдельно.
 
 Верни строго JSON без markdown:
 
@@ -190,12 +190,12 @@ export async function analyzeProduct(raw: {
     "hardConflicts": ["если найдено → товар точно НЕ аналог"],
     "softConflicts": ["похожие но другие товары"],
     "compatibleAlternatives": ["допустимые рыночные альтернативы (портмоне мужское, бумажник мужской, ...)"],
-    "categoryHypotheses": ["гипотезы WB-категорий"],
-    "searchIntent": "что ищет покупатель на WB",
+    "categoryHypotheses": ["гипотезы категорий маркетплейса"],
+    "searchIntent": "как покупатель может искать товар на маркетплейсе",
     "mustKeep": ["признаки, которые НЕЛЬЗЯ убирать из поиска"],
     "canDrop": ["признаки, которые МОЖНО убрать если поиск слишком узкий (артикул, модель, редкий цвет, ...)"],
-    "doNotSearch": ["слова, которые НЕ НАДО использовать в WB-запросах (артикулы, модели, маркетинг, китайские фразы)"],
-    "marketSynonyms": ["как товар может называться на WB"],
+    "doNotSearch": ["слова, которые НЕ НАДО использовать в поисковых запросах (артикулы, модели, маркетинг, китайские фразы)"],
+    "marketSynonyms": ["как товар может называться на маркетплейсе"],
     "directAnalogBlockers": ["что запрещает считать товар прямым аналогом"],
     "kitType": "body_only|basic_kit|full_kit|unknown",
     "kitContents": [],
@@ -204,18 +204,18 @@ export async function analyzeProduct(raw: {
   "lexicon": {
     "mainTerms": ["основные термины товара"],
     "alternateNames": ["синонимы (портмоне, бумажник, ...)"],
-    "marketNames": ["как товар называется на рынке WB"],
-    "buyerSearchTerms": ["как покупатели ищут на WB"],
+    "marketNames": ["как товар называется на маркетплейсе"],
+    "buyerSearchTerms": ["как покупатели ищут на маркетплейсе"],
     "attributeTerms": ["ключевые атрибуты"],
     "materialAliases": ["все варианты написания материала"],
     "hardNegativeTerms": ["слова-маркеры нерелевантных товаров"],
     "softNegativeTerms": ["маркеры похожих но не аналогичных"],
     "broadCategoryTerms": ["широкие категорийные термины"]
   },
-  "wbCoreQuery": "рыночный запрос WB 1-3 слова, конкретный подтип, не широкий",
+  "wbCoreQuery": "поисковый запрос 1-3 слова, конкретный подтип, не широкий",
   "queryLadder": {
     "L1_exact": ["точные запросы: productType + ключевые атрибуты, 2-4 слова"],
-    "L2_commercial": ["запросы языком покупателя WB, как ищет обычный человек"],
+    "L2_commercial": ["запросы языком покупателя, как ищет обычный человек"],
     "L3_subtype": ["запросы по подтипу/формату товара"],
     "L4_core": ["запросы по базовому объекту + широкий признак"],
     "L5_category": ["самые широкие категорийные запросы, 1-2 слова"]
@@ -224,7 +224,7 @@ export async function analyzeProduct(raw: {
 
 Правила:
 - categoryType выбирай только из списка.
-- wbCoreQuery: 1-3 слова, как товар реально ищут на WB.
+- wbCoreQuery: 1-3 слова, как товар реально могут искать на маркетплейсе.
 - Китайские термины переводи на русский смысл.
 
 Для обуви (categoryType=shoes):
@@ -509,7 +509,7 @@ export async function generateProductIntelligence(raw: {
   }
 
   const prompt = `${INTELLIGENCE_PROMPT}\n\nДанные товара:\n${info}`;
-  const systemMsg = 'Ты — товарный аналитик для Wildberries. Анализируешь товары с 1688. Верни СТРОГО JSON.';
+  const systemMsg = 'Ты — товарный аналитик CardZip для закупочного пакета. Анализируешь товары с 1688. Верни СТРОГО JSON.';
 
   try {
     let result: any = null;
@@ -601,19 +601,19 @@ export async function expandQueries(
   frequentTokens: string[],
   frequentBigrams: string[]
 ): Promise<string[]> {
-  const prompt = `На основе товара и частотных слов из WB сгенерируй 5-10 ДОПОЛНИТЕЛЬНЫХ русских запросов.
+  const prompt = `На основе товара и опциональных частотных слов маркетплейса сгенерируй 5-10 ДОПОЛНИТЕЛЬНЫХ русских запросов.
 
 ТОВАР: ${structure.productType} (${structure.coreObject})
 Аудитория: ${structure.audience}
 
-Частотные слова WB: ${frequentTokens.slice(0, 15).join(', ')}
-Частотные биграммы WB: ${frequentBigrams.slice(0, 10).join(', ')}
+Частотные слова маркетплейса: ${frequentTokens.slice(0, 15).join(', ')}
+Частотные биграммы маркетплейса: ${frequentBigrams.slice(0, 10).join(', ')}
 
-Сгенерируй запросы которых НЕ было в первом поиске. Используй реальные WB-термины.
+Сгенерируй запросы которых НЕ было в первом поиске. Используй реальные покупательские термины.
 Только русский, 2-4 слова. JSON: {"queries": ["запрос1", "запрос2"]}`;
 
   try {
-    const result = await callLlm(prompt, 'Генератор WB-запросов. ТОЛЬКО JSON.');
+    const result = await callLlm(prompt, 'Генератор поисковых запросов. ТОЛЬКО JSON.');
     return validateQueries(
       (result?.queries ?? []).map((q: string) => ({ query: q, purpose: 'adaptive', priority: 2 }))
     );
@@ -740,8 +740,8 @@ marketSynonyms: ${structure.marketSynonyms?.join(', ') || 'нет'}
 Топ найденных карточек: ${topFoundTitles.slice(0, 8).join(' | ')}
 Топ отклонённых карточек: ${topRejectedTitles.slice(0, 5).join(' | ')}
 
-Частотные слова WB: ${mining.tokens.slice(0, 10).join(', ')}
-Частотные биграммы WB: ${mining.bigrams.slice(0, 5).join(', ')}
+Частотные слова маркетплейса: ${mining.tokens.slice(0, 10).join(', ')}
+Частотные биграммы маркетплейса: ${mining.bigrams.slice(0, 5).join(', ')}
 
 Проанализируй почему не нашлись аналоги и сгенерируй НОВЫЕ запросы:
 - Убери слова из doNotSearch/canDrop
