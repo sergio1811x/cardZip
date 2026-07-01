@@ -24,29 +24,29 @@ async function getJobData(ctx: Context, jobId: string): Promise<any | null> {
 
 function detailKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
-    [Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+    [Markup.button.callback('⬅️ Назад', `back_main:${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`)],
+    [Markup.button.callback('📁 Закупочный пакет', `package:${jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
 
 function materialsKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬇️ Скачать ZIP', `materials_zip_${jobId}`)],
-    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${jobId}`), Markup.button.callback('📦 Данные товара', `product_detail_${jobId}`)],
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
+    [Markup.button.callback('⬇️ Скачать ZIP', `package_zip:${jobId}`)],
+    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions:${jobId}`), Markup.button.callback('📦 Данные товара', `product_details:${jobId}`)],
+    [Markup.button.callback('⬅️ Назад', `back_main:${jobId}`)],
   ]);
 }
 
 function groupBackKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬅️ Назад', `materials_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад', `package:${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
 
 function safeSectionErrorKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`)],
+    [Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`), Markup.button.callback('📁 Закупочный пакет', `package:${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
@@ -136,12 +136,12 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   const readmeText = product ? buildReadmeText(product, imageUrls.length > 0) : 'CardZip — закупочный пакет';
 
   let docs = [
-    { filename: 'supplier_questions.txt', text: String(supplierText), title: '💬 Вопросы поставщику — supplier_questions.txt', description: 'Текст на русском и китайском: цена, вес, SKU, упаковка, фото.' },
-    { filename: 'buyer_brief.md', text: String(buyerText), title: '📄 ТЗ байеру — buyer_brief.md', description: 'Что закупаем, какой SKU, какие риски и что проверить.' },
-    { filename: 'cargo_brief.md', text: String(cargoText), title: '🚚 ТЗ карго — cargo_brief.md', description: 'Вес, габариты, упаковка и ограничения для расчёта доставки.' },
-    { filename: 'sample_checklist.md', text: String(sampleText), title: '🧪 Чек-лист образца — sample_checklist.md', description: 'Что проверить перед партией: механизм, спицы, купол, упаковку.' },
-    { filename: 'seo_draft.md', text: String(seoText), title: '📝 SEO-черновик — seo_draft.md', description: 'Название, описание, характеристики и идеи инфографики.' },
-    { filename: 'README.txt', text: readmeText, title: 'ℹ️ README.txt', description: 'Что внутри пакета и порядок работы.' },
+    { filename: '01_Вопросы_поставщику.txt', text: String(supplierText), title: '💬 Вопросы поставщику — 01_Вопросы_поставщику.txt', description: 'Текст для чата 1688: цена, SKU, вес, упаковка, фото.' },
+    { filename: '02_ТЗ_байеру.md', text: String(buyerText), title: '📄 ТЗ байеру — 02_ТЗ_байеру.md', description: 'Что закупаем, какой SKU выбран, что проверить перед заказом.' },
+    { filename: '03_ТЗ_карго.md', text: String(cargoText), title: '🚚 ТЗ карго — 03_ТЗ_карго.md', description: 'Что запросить для расчёта доставки: вес, габариты, короб, ограничения.' },
+    { filename: '04_Чеклист_образца.md', text: String(sampleText), title: '🧪 Чек-лист образца — 04_Чеклист_образца.md', description: 'Что проверить на образце перед партией.' },
+    { filename: '05_SEO_черновик.md', text: String(seoText), title: '📝 SEO-черновик — 05_SEO_черновик.md', description: 'Название, описание, характеристики и идеи инфографики.' },
+    { filename: '00_Инструкция.txt', text: readmeText, title: 'ℹ️ 00_Инструкция.txt', description: 'Что внутри пакета и порядок работы.' },
   ].filter(d => d.text && d.text.trim().length > 0);
 
   if (product) {
@@ -207,7 +207,7 @@ export async function handleWbDetail(ctx: Context): Promise<void> {
 }
 
 export async function handleProductDetail(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^product_detail_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^product_details?[:_](.+)$/);
   if (!match) return;
 
   const jobId = match[1];
@@ -246,7 +246,7 @@ export async function handleSampleDetail(ctx: Context): Promise<void> {
 }
 
 export async function handleBackToMain(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^back_main_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^back_main[:_](.+)$/);
   if (!match) return;
 
   const jobId = match[1];
@@ -263,7 +263,7 @@ export async function handleBackToMain(ctx: Context): Promise<void> {
 }
 
 export async function handleMaterialsResend(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^(?:materials_|package:)(.+)$/);
   if (!match) return;
 
   const jobId = match[1];
@@ -278,37 +278,38 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
   const preview = [
     '📁 <b>Закупочный пакет готов</b>',
     '',
-    'Я собрал документы для закупки и проверки товара.',
+    'Я собрал документы, которые можно передать поставщику, байеру и карго.',
     '',
     '<b>Что внутри:</b>',
     '',
     '💬 <b>Вопросы поставщику</b>',
-    'supplier_questions.txt',
-    'Текст на русском и китайском: цена, вес, SKU, упаковка, фото.',
+    '01_Вопросы_поставщику.txt',
+    'Текст для чата 1688: цена, SKU, вес, упаковка, фото.',
     '',
     '📄 <b>ТЗ байеру</b>',
-    'buyer_brief.md',
-    'Что закупаем, какой SKU, какие риски и что проверить.',
+    '02_ТЗ_байеру.md',
+    'Что закупаем, какой SKU выбран, что проверить перед заказом.',
     '',
     '🚚 <b>ТЗ карго</b>',
-    'cargo_brief.md',
-    'Вес, габариты, упаковка и ограничения для расчёта доставки.',
+    '03_ТЗ_карго.md',
+    'Что запросить для расчёта доставки: вес, габариты, короб, ограничения.',
     '',
     '🧪 <b>Чек-лист образца</b>',
-    'sample_checklist.md',
-    'Что проверить перед партией: механизм, спицы, купол, упаковку.',
+    '04_Чеклист_образца.md',
+    'Что проверить на образце перед партией.',
     '',
     '📝 <b>SEO-черновик</b>',
-    'seo_draft.md',
+    '05_SEO_черновик.md',
     'Название, описание, характеристики и идеи инфографики.',
     '',
     '📷 <b>Фото товара</b>',
-    'photos.zip',
+    '06_Фото_товара.zip',
     imageUrls.length ? 'Фото из карточки 1688.' : 'Фото не удалось скачать автоматически — используйте карточку 1688 вручную.',
     '',
     '<b>Что сделать сейчас:</b>',
-    '1. Сначала отправьте вопросы поставщику.',
-    '2. После ответа передайте пакет байеру/карго.',
+    '1. Откройте «Вопросы поставщику».',
+    '2. Отправьте текст в чат 1688.',
+    '3. После ответа используйте ТЗ байеру и карго.',
   ].join('\n');
   await ctx.reply(preview, {
     parse_mode: 'HTML',
@@ -317,7 +318,7 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
 }
 
 export async function handleMaterialsInside(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_inside_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_inside[:_](.+)$/);
   if (!match) return;
   const jobId = match[1];
   const job = await getJobData(ctx, jobId);
@@ -332,17 +333,17 @@ export async function handleMaterialsInside(ctx: Context): Promise<void> {
     '',
     ...docs.map(d => `${d.title}\n${d.description}`),
     '',
-    imageUrls.length ? '📷 photos.zip\nФото товара с 1688 будут внутри ZIP.' : '📷 photos.zip\nФото не удалось получить автоматически. Используйте фото из карточки 1688 вручную.',
+    imageUrls.length ? '📷 06_Фото_товара.zip\nФото товара с 1688 будут внутри ZIP.' : '📷 06_Фото_товара.zip\nФото не удалось получить автоматически. Используйте фото из карточки 1688 вручную.',
     '',
     '<b>Что делать сейчас:</b>',
-    'отправьте supplier_questions.txt поставщику, затем используйте buyer_brief.md и cargo_brief.md для команды.',
+    'отправьте 01_Вопросы_поставщику.txt поставщику, затем используйте 02_ТЗ_байеру.md и 03_ТЗ_карго.md для команды.',
   ];
   await ctx.reply(lines.join('\n\n'), { parse_mode: 'HTML', ...groupBackKeyboard(jobId) });
 }
 
 // Legacy group callback kept for old inline buttons. It no longer exposes removed MVP documents.
 export async function handleMaterialsGroup(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_group_(questions|buyer_cargo|check|card)_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_group[:_](questions|buyer_cargo|check|card)[:_](.+)$/);
   if (!match) return;
   const jobId = match[2];
   await ctx.answerCbQuery().catch(() => {});
@@ -350,7 +351,7 @@ export async function handleMaterialsGroup(ctx: Context): Promise<void> {
 }
 
 export async function handleMaterialsDoc(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_doc_(questions|buyer|cargo|sample|seo|readme)_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_doc[:_](questions|buyer|cargo|sample|seo|readme)[:_](.+)$/);
   if (!match) return;
   const [, type, jobId] = match;
   const job = await getJobData(ctx, jobId);
@@ -360,12 +361,12 @@ export async function handleMaterialsDoc(ctx: Context): Promise<void> {
   }
   const { docs } = buildMaterials(job);
   const selected = docs.find((d) => {
-    if (type === 'questions') return d.filename === 'supplier_questions.txt';
-    if (type === 'buyer') return d.filename === 'buyer_brief.md';
-    if (type === 'cargo') return d.filename === 'cargo_brief.md';
-    if (type === 'sample') return d.filename === 'sample_checklist.md';
-    if (type === 'seo') return d.filename === 'seo_draft.md';
-    if (type === 'readme') return d.filename === 'README.txt';
+    if (type === 'questions') return d.filename === '01_Вопросы_поставщику.txt';
+    if (type === 'buyer') return d.filename === '02_ТЗ_байеру.md';
+    if (type === 'cargo') return d.filename === '03_ТЗ_карго.md';
+    if (type === 'sample') return d.filename === '04_Чеклист_образца.md';
+    if (type === 'seo') return d.filename === '05_SEO_черновик.md';
+    if (type === 'readme') return d.filename === '00_Инструкция.txt';
     return false;
   });
   if (!selected) {
@@ -378,7 +379,7 @@ export async function handleMaterialsDoc(ctx: Context): Promise<void> {
 }
 
 export async function handleMaterialsZip(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_zip_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^(?:materials_zip_|package_zip:)(.+)$/);
   if (!match) return;
   const jobId = match[1];
   const job = await getJobData(ctx, jobId);
@@ -389,18 +390,18 @@ export async function handleMaterialsZip(ctx: Context): Promise<void> {
   for (const doc of docs) zip.addFile(doc.filename, Buffer.from(doc.text, 'utf-8'));
   if (imageUrls?.length) {
     const imgZip = await zipBuilder.buildFromUrls(imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null);
-    if (imgZip) zip.addFile('photos.zip', imgZip);
+    if (imgZip) zip.addFile('06_Фото_товара.zip', imgZip);
   } else {
-    zip.addFile('photos.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки 1688 вручную.\n', 'utf-8'));
+    zip.addFile('06_Фото_товара.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки 1688 вручную.\n', 'utf-8'));
   }
   await ctx.telegram.sendDocument(ctx.chat!.id, Input.fromBuffer(zip.toBuffer(), `${prefix}.zip`)).catch(() => {});
-  await ctx.reply('✅ ZIP отправлен. Начните с supplier_questions.txt: отправьте вопросы поставщику, затем передайте buyer_brief.md байеру и cargo_brief.md карго.', materialsKeyboard(jobId)).catch(() => {});
+  await ctx.reply('✅ ZIP отправлен. Начните с 01_Вопросы_поставщику.txt: отправьте вопросы поставщику, затем передайте ТЗ байеру и карго.', materialsKeyboard(jobId)).catch(() => {});
 }
 
 export async function handleMaterialsList(ctx: Context): Promise<void> {
-  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_list_(.+)$/);
+  const match = (ctx.callbackQuery as any)?.data?.match(/^materials_list[:_](.+)$/);
   if (!match) return;
   const jobId = match[1];
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply('📁 В новом MVP отдельная массовая отправка файлов отключена. Скачайте ZIP — внутри 5 документов, README и photos.zip.', materialsKeyboard(jobId)).catch(() => {});
+  await ctx.reply('📁 В новом MVP отдельная массовая отправка файлов отключена. Скачайте ZIP — внутри 5 документов, README и 06_Фото_товара.zip.', materialsKeyboard(jobId)).catch(() => {});
 }

@@ -27,7 +27,7 @@ async function findJobForConfirm(userId: string, jobId?: string) {
 async function replyOpenSectionFallback(ctx: Context, jobId?: string) {
   const keyboard = jobId
     ? Markup.inlineKeyboard([
-        [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`)],
+        [Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`), Markup.button.callback('📁 Закупочный пакет', `package:${jobId}`)],
         [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ])
     : Markup.inlineKeyboard([
@@ -77,8 +77,8 @@ export async function handleSupplierConfirmStart(ctx: Context) {
       {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('💬 Открыть вопросы', `supplier_questions_${job.id}`)],
-          [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${job.id}`)],
+          [Markup.button.callback('💬 Открыть вопросы', `supplier_questions:${job.id}`)],
+          [Markup.button.callback('⬅️ Назад', `supplier_questions:${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main:${job.id}`)],
           [Markup.button.callback('🔄 Новый товар', 'new_search')],
         ]),
       },
@@ -112,8 +112,8 @@ export async function handleSupplierConfirmStart(ctx: Context) {
     {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${job.id}`)],
-        [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`), Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`)],
+        [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions:${job.id}`)],
+        [Markup.button.callback('⬅️ Назад', `supplier_questions:${job.id}`), Markup.button.callback('📁 Закупочный пакет', `package:${job.id}`)],
         [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     }
@@ -149,7 +149,7 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     const extracted = await extractSupplierData(text);
 
     if (!extracted) {
-      await ctx.reply('⚠️ Не нашёл вес, габариты или цену в ответе. Можно вставить ответ ещё раз, вручную указать вес или отправить поставщику уточняющий вопрос.', { ...Markup.inlineKeyboard([[Markup.button.callback('📁 Открыть пакет', `materials_${pending.jobId}`)]]) });
+      await ctx.reply('⚠️ Не нашёл вес, габариты или цену в ответе. Можно вставить ответ ещё раз, вручную указать вес или отправить поставщику уточняющий вопрос.', { ...Markup.inlineKeyboard([[Markup.button.callback('📁 Открыть пакет', `package:${pending.jobId}`)]]) });
       return true;
     }
 
@@ -265,7 +265,7 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
     console.error('[supplier-confirm-error]', e);
     await ctx.reply('⚠️ Не удалось обработать ответ поставщика. Данные анализа сохранены — вернитесь к отчёту или откройте пакет ещё раз.', {
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('🏠 К отчёту', `back_main_${pending.jobId}`), Markup.button.callback('📁 Закупочный пакет', `materials_${pending.jobId}`)],
+        [Markup.button.callback('🏠 К отчёту', `back_main:${pending.jobId}`), Markup.button.callback('📁 Закупочный пакет', `package:${pending.jobId}`)],
         [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     });

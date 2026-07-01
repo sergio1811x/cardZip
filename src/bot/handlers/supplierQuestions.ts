@@ -21,13 +21,13 @@ async function findJob(userId: string, jobId?: string) {
 
 function callbackJobId(ctx: Context): string | undefined {
   const match = (ctx as any).match as RegExpMatchArray | undefined;
-  return match?.[1] || match?.[2];
+  return match?.[2] || match?.[1];
 }
 
 async function replyOpenSectionFallback(ctx: Context, jobId?: string) {
   const keyboard = jobId
     ? Markup.inlineKeyboard([
-        [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`)],
+        [Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`), Markup.button.callback('📁 Закупочный пакет', `package:${jobId}`)],
         [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ])
     : Markup.inlineKeyboard([
@@ -59,8 +59,8 @@ export async function handleSupplierQuestions(ctx: Context) {
   ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
   const questionSet = buildSupplierQuestionsFromProfile(product);
   const firstRow = questionSet.cnValid
-    ? [Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`), Markup.button.callback('📋 Скопировать CN', `sq_cn_${job.id}`)]
-    : [Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`)];
+    ? [Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`), Markup.button.callback('📋 Скопировать CN', `sq_cn:${job.id}`)]
+    : [Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`)];
 
   await ctx.reply(
     `${questionSet.cnValid ? '💬 <b>Вопросы поставщику RU/CN</b>' : '💬 <b>Вопросы поставщику RU</b>'}\n\n` +
@@ -72,8 +72,8 @@ export async function handleSupplierQuestions(ctx: Context) {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
         firstRow,
-        [Markup.button.callback('📥 Обновить по ответу', `supplier_confirm_${job.id}`)],
-        [Markup.button.callback('⬅️ Назад', `back_main_${job.id}`), Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`)],
+        [Markup.button.callback('📥 Обновить по ответу', `supplier_confirm:${job.id}`)],
+        [Markup.button.callback('⬅️ Назад', `back_main:${job.id}`), Markup.button.callback('📁 Закупочный пакет', `package:${job.id}`)],
         [Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     }
@@ -107,7 +107,7 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
 
     if (lang === 'cn' && !questionSet.cnValid) {
       await ctx.reply('⚠️ Китайская версия не сформирована — используйте русскую версию или переведите через байера.', {
-        ...Markup.inlineKeyboard([[Markup.button.callback('📋 Скопировать RU', `sq_ru_${job.id}`)], [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`)]])
+        ...Markup.inlineKeyboard([[Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`)], [Markup.button.callback('⬅️ Назад', `supplier_questions:${job.id}`)]])
       });
       return;
     }
@@ -146,9 +146,9 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     await ctx.reply(afterText, {
       parse_mode: 'HTML',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('📥 Обновить пакет по ответу', `supplier_confirm_${job.id}`)],
-        [Markup.button.callback('⬅️ Назад', `supplier_questions_${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main_${job.id}`)],
-        [Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+        [Markup.button.callback('📥 Обновить пакет по ответу', `supplier_confirm:${job.id}`)],
+        [Markup.button.callback('⬅️ Назад', `supplier_questions:${job.id}`), Markup.button.callback('🏠 К отчёту', `back_main:${job.id}`)],
+        [Markup.button.callback('📁 Закупочный пакет', `package:${job.id}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
       ]),
     });
   } catch (e) {

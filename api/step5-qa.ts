@@ -35,11 +35,14 @@ function isOnlyNonBlockingMarketOrCautionIssue(reason: string): boolean {
 
 function applyCreditsLine(text: string, creditsRemaining: number): string {
   const line = `📦 Осталось: ${Math.max(0, creditsRemaining)} анализов`;
-  if (/📦 Осталось:\s*\d+\s+анализов/i.test(text)) {
-    return text.replace(/📦 Осталось:\s*\d+\s+анализов/i, line);
-  }
-  return `${text.replace(/\s+$/g, '')}\n\n${line}`;
+  const withoutOldCounters = String(text ?? '')
+    .replace(/\n*Осталось анализов:\s*\d+\s*/gi, '')
+    .replace(/\n*📦\s*Осталось:\s*\d+\s+анализов\s*/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
+  return `${withoutOldCounters}\n\n${line}`;
 }
+
 
 function applySanitizedArtifacts(hard: { fixedArtifacts?: Record<string, unknown> }, artifacts: { finalText: string; seoText: string; briefText: string; supplierText: string }) {
   const fixed = hard.fixedArtifacts ?? {};
@@ -131,21 +134,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     progress?.step('validate');
     const docsValidation = validateDocuments([
-      { filename: 'supplier_questions.txt', text: supplierText },
-      { filename: 'buyer_brief.md', text: briefText },
-      { filename: 'cargo_brief.md', text: cargoText },
-      { filename: 'sample_checklist.md', text: sampleChecklistText },
-      { filename: 'seo_draft.md', text: seoText },
-      { filename: 'README.txt', text: readmeText },
+      { filename: '01_Вопросы_поставщику.txt', text: supplierText },
+      { filename: '02_ТЗ_байеру.md', text: briefText },
+      { filename: '03_ТЗ_карго.md', text: cargoText },
+      { filename: '04_Чеклист_образца.md', text: sampleChecklistText },
+      { filename: '05_SEO_черновик.md', text: seoText },
+      { filename: '00_Инструкция.txt', text: readmeText },
     ], profileForFiles);
     if (docsValidation.errors.length) console.warn('[step5] profile document validators repaired:', docsValidation.errors.join('; '));
     for (const doc of docsValidation.fixedDocs) {
-      if (doc.filename === 'supplier_questions.txt') supplierText = doc.text;
-      if (doc.filename === 'buyer_brief.md') briefText = doc.text;
-      if (doc.filename === 'cargo_brief.md') cargoText = doc.text;
-      if (doc.filename === 'sample_checklist.md') sampleChecklistText = doc.text;
-      if (doc.filename === 'seo_draft.md') seoText = doc.text;
-      if (doc.filename === 'README.txt') readmeText = doc.text;
+      if (doc.filename === '01_Вопросы_поставщику.txt') supplierText = doc.text;
+      if (doc.filename === '02_ТЗ_байеру.md') briefText = doc.text;
+      if (doc.filename === '03_ТЗ_карго.md') cargoText = doc.text;
+      if (doc.filename === '04_Чеклист_образца.md') sampleChecklistText = doc.text;
+      if (doc.filename === '05_SEO_черновик.md') seoText = doc.text;
+      if (doc.filename === '00_Инструкция.txt') readmeText = doc.text;
     }
 
     await supabase.from('jobs').update({

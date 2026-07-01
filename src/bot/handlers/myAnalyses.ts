@@ -108,8 +108,8 @@ export async function handleAnalysisDetail(ctx: Context): Promise<void> {
 
 
   const buttons = [];
-  buttons.push([Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${job.id}`)]);
-  buttons.push([Markup.button.callback('📁 Закупочный пакет', `materials_${job.id}`), Markup.button.callback('📦 Данные товара', `product_detail_${job.id}`)]);
+  buttons.push([Markup.button.callback('💬 Вопросы поставщику', `supplier_questions:${job.id}`)]);
+  buttons.push([Markup.button.callback('📁 Закупочный пакет', `package:${job.id}`), Markup.button.callback('📦 Данные товара', `product_details:${job.id}`)]);
   buttons.push([Markup.button.callback('⬅️ К списку', 'my_analyses')]);
 
   const keyboard = Markup.inlineKeyboard(buttons);

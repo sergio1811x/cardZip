@@ -13,23 +13,23 @@ import {
 
 function detailKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`)],
-    [Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`), Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`)],
+    [Markup.button.callback('⬅️ Назад', `back_main:${jobId}`)],
+    [Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`), Markup.button.callback('📁 Закупочный пакет', `package:${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
 
 function topLevelKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
-    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${jobId}`)],
-    [Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`), Markup.button.callback('📦 Данные товара', `product_detail_${jobId}`)],
+    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions:${jobId}`)],
+    [Markup.button.callback('📁 Закупочный пакет', `package:${jobId}`), Markup.button.callback('📦 Данные товара', `product_details:${jobId}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ]);
 }
 
 
 export function buildMainMessage(product: any, jobId: string, status: any, _category?: any): { text: string; keyboard: any } {
-  const text = buildMainReportFromProfile(product, { creditsRemaining: status?.creditsRemaining });
+  const text = buildMainReportFromProfile(product, undefined);
   const keyboard = topLevelKeyboard(jobId);
   return { text, keyboard };
 }
@@ -80,8 +80,8 @@ export function buildEconomicsDetail(product: any, jobId: string): { text: strin
   return {
     text: lines.join('\n'),
     keyboard: Markup.inlineKeyboard([
-      [Markup.button.callback('⚖️ Указать вес', `weight_input:${jobId}`), Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${jobId}`)],
-      [Markup.button.callback('⬅️ Назад', `back_main_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
+      [Markup.button.callback('⚖️ Указать вес', `weight_input:${jobId}`), Markup.button.callback('💬 Вопросы поставщику', `supplier_questions:${jobId}`)],
+      [Markup.button.callback('⬅️ Назад', `back_main:${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`)],
       [Markup.button.callback('🔄 Новый товар', 'new_search')],
     ]),
   };
@@ -104,8 +104,8 @@ export function buildProcurementPlanDetail(product: any, jobId: string): { text:
   return {
     text: lines.join('\n'),
     keyboard: Markup.inlineKeyboard([
-      [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${jobId}`)],
-      [Markup.button.callback('📁 Закупочный пакет', `materials_${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main_${jobId}`)],
+      [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions:${jobId}`)],
+      [Markup.button.callback('📁 Закупочный пакет', `package:${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`)],
       [Markup.button.callback('🔄 Новый товар', 'new_search')],
     ]),
   };

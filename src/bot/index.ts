@@ -154,11 +154,11 @@ bot.action('supplier_questions', async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierQuestions(ctx);
 });
-bot.action(/^supplier_questions_(.+)$/, async (ctx) => {
+bot.action(/^supplier_questions[:_](.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierQuestions(ctx);
 });
-bot.action(/^sq_(ru|cn)(?:_(.+))?$/, async (ctx) => {
+bot.action(/^sq[:_](ru|cn)(?:[:_](.+))?$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierQuestionsLang(ctx);
 });
@@ -184,19 +184,19 @@ bot.action('reset_tariffs', async (ctx) => {
 });
 
 // ─── Детальные кнопки (экономика, WB, материалы) ────────────────────────────
-bot.action(/^product_detail_(.+)$/, handleProductDetail);
+bot.action(/^product_details?[:_](.+)$/, handleProductDetail);
 bot.action(/^proc_plan_(.+)$/, handleProcurementPlan);
 bot.action(/^econ_detail_(.+)$/, handleEconDetail);
 bot.action(/^wb_detail_(.+)$/, handleWbDetail);
-bot.action(/^materials_zip_(.+)$/, handleMaterialsZip);
-bot.action(/^materials_inside_(.+)$/, handleMaterialsInside);
-bot.action(/^materials_group_(questions|buyer_cargo|check|card)_(.+)$/, handleMaterialsGroup);
-bot.action(/^materials_doc_(questions|buyer|cargo|sample|seo|readme)_(.+)$/, handleMaterialsDoc);
-bot.action(/^materials_list_(.+)$/, handleMaterialsList);
-bot.action(/^materials_(.+)$/, handleMaterialsResend);
+bot.action(/^(?:materials_zip_|package_zip:)(.+)$/, handleMaterialsZip);
+bot.action(/^materials_inside[:_](.+)$/, handleMaterialsInside);
+bot.action(/^materials_group[:_](questions|buyer_cargo|check|card)[:_](.+)$/, handleMaterialsGroup);
+bot.action(/^materials_doc[:_](questions|buyer|cargo|sample|seo|readme)[:_](.+)$/, handleMaterialsDoc);
+bot.action(/^materials_list[:_](.+)$/, handleMaterialsList);
+bot.action(/^(?:materials_|package:)(.+)$/, handleMaterialsResend);
 bot.action(/^risk_detail_(.+)$/, handleRiskDetail);
 bot.action(/^sample_detail_(.+)$/, handleSampleDetail);
-bot.action(/^back_main_(.+)$/, handleBackToMain);
+bot.action(/^back_main[:_](.+)$/, handleBackToMain);
 
 // ─── Ручные вводы: вес, цена продажи, конкуренты ───────────────────────────
 bot.action(/^weight_input:(.+)$/, handleManualWeightStart);
@@ -213,7 +213,7 @@ bot.action('supplier_confirm', async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierConfirmStart(ctx);
 });
-bot.action(/^supplier_confirm_(.+)$/, async (ctx) => {
+bot.action(/^supplier_confirm[:_](.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierConfirmStart(ctx);
 });

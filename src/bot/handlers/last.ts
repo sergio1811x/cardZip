@@ -59,8 +59,8 @@ export async function handleLast(ctx: Context): Promise<void> {
   lines.push(`Анализ от ${date}`);
 
   const buttons: any[][] = [
-    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions_${lastJob.id}`)],
-    [Markup.button.callback('📁 Закупочный пакет', `materials_${lastJob.id}`), Markup.button.callback('📦 Данные товара', `product_detail_${lastJob.id}`)],
+    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions:${lastJob.id}`)],
+    [Markup.button.callback('📁 Закупочный пакет', `package:${lastJob.id}`), Markup.button.callback('📦 Данные товара', `product_details:${lastJob.id}`)],
     [Markup.button.callback('🔄 Новый товар', 'new_search')],
   ];
 
