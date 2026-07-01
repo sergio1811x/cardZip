@@ -13,6 +13,7 @@ export type ProductKind =
   | 'small_appliance'
   | 'food_warmer'
   | 'heating_appliance'
+  | 'juicer'
   | 'kitchen_tool'
   | 'tool_kit'
   | 'bag_accessory'
@@ -250,6 +251,28 @@ const KIND_RULES: Record<ProductKind, {
   small_appliance: electricalRules('малая техника'),
   food_warmer: electricalRules('прибор для подогрева еды'),
   heating_appliance: electricalRules('нагревательный прибор'),
+  juicer: {
+    mustAskSupplier: [
+      'Подтвердите цену выбранного SKU.',
+      'Укажите вес одной единицы с индивидуальной упаковкой.',
+      'Укажите габариты индивидуальной упаковки.',
+      'Подтвердите напряжение, мощность и тип вилки выбранного SKU.',
+      'Укажите диаметр загрузочной горловины и комплектацию.',
+      'Укажите режимы/скорости и объём контейнера, если он есть.',
+      'Можно ли мыть съёмные детали в посудомоечной машине?',
+      'Есть ли сертификаты/декларации и инструкция?',
+      'Пришлите видео работы, фото маркировки, вилки, упаковки и комплектации.',
+      'Можно ли заказать 1–2 образца перед партией?',
+    ],
+    beforeSample: ['подтвердить напряжение/мощность/тип вилки', 'получить сертификаты/декларации', 'получить видео работы', 'запросить инструкцию и фото маркировки'],
+    onSample: ['включение от нужного напряжения', 'фактическую мощность по маркировке', 'качество отжима на яблоке/моркови/цитрусе', 'влажность жмыха', 'шум и вибрацию', 'устойчивость на столе', 'разборку/сборку', 'очистку фильтра/сетки', 'качество кабеля и вилки', 'запах при первом включении'],
+    cargo: ['вес с упаковкой', 'габариты упаковки', 'есть ли мотор', 'есть ли батарея/аккумулятор', 'тип вилки/кабеля', 'как упакованы ножи/сито/съёмные детали', 'сертификаты/декларации'],
+    redFlags: ['нет данных по напряжению/мощности/вилке', 'нет сертификатов', 'нет видео работы', 'сильный запах при включении', 'протечки сока', 'слабый отжим', 'сильная вибрация'],
+    seoAllowed: ['электрическая соковыжималка', 'мощность и напряжение, если подтверждены', 'режимы/скорости, если подтверждены'],
+    seoForbidden: ['сохраняет витамины', 'полезно для здоровья', 'для детского питания', 'бесшумная', 'безопасная', 'сертифицированная', 'мощная', 'профессиональная', 'можно мыть в посудомоечной машине', 'защита от перегрева', ...DANGEROUS_CLAIMS],
+    infographic: ['Соковыжималка общий вид', 'Загрузочная горловина и чаша', 'Напряжение и мощность', 'Комплектация', 'Упаковка'],
+    forbiddenCategoryWords: ['подошва', 'стелька', 'размерная сетка', 'срок годности', 'консистенция', 'состав ткани в процентах'],
+  },
   kitchen_tool: genericRules('кухонный товар'),
   tool_kit: {
     mustAskSupplier: [
@@ -469,6 +492,23 @@ function uniq(list: Array<string | null | undefined>, limit = 30): string[] {
   return dedupNormalizedList(list, limit);
 }
 
+const BAD_RISK_TAGS = new Set(['электричество', 'бытовая техника', 'малая техника', 'товар', 'материал', 'комплектация']);
+
+function removeBadRiskTags(list: string[]): string[] {
+  return list.filter(item => !BAD_RISK_TAGS.has(fixMixedRuTypos(String(item ?? '')).trim().toLowerCase().replace(/[.!]+$/, '')));
+}
+
+function sanitizeDraftAskList(list: string[]): string[] {
+  return list.filter(q => {
+    const text = String(q ?? '');
+    if (!text.trim()) return false;
+    if (/['‘’]\s*\d/.test(text)) return false;
+    if (/\bвес\b/i.test(text) && !/упаков/i.test(text)) return false;
+    if (/(?:габарит|размер)ы?\b/i.test(text) && !/упаков/i.test(text)) return false;
+    return true;
+  });
+}
+
 export function supplierTypeDisplay(value: unknown): string {
   const raw = String(value ?? '').trim().toLowerCase();
   if (!raw || /unknown|неизвест|не указан/.test(raw)) return 'не указан';
@@ -482,13 +522,14 @@ export function supplierTypeDisplay(value: unknown): string {
 function normalizeProductKind(value: unknown): ProductKind | null {
   const raw = String(value ?? '').trim().toLowerCase();
   if (!raw) return null;
-  const direct = raw.match(/footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|food_warmer|heating_appliance|kitchen_tool|tool_kit|bag_accessory|home_textile|beauty_accessory|pet_product|toy|generic_product/)?.[0];
+  const direct = raw.match(/footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|food_warmer|heating_appliance|juicer|kitchen_tool|tool_kit|bag_accessory|home_textile|beauty_accessory|pet_product|toy|generic_product/)?.[0];
   if (direct && direct in KIND_RULES) return direct as ProductKind;
   if (/зонт|umbrella|雨伞|雨傘|伞|傘/.test(raw)) return 'umbrella';
   if (/маск[аи]\s+для\s+сна|sleep\s*mask|眼罩|睡眠/.test(raw)) return 'sleep_mask';
   if (/мини[ -]?стирал|стиральн[а-яё ]*машин|washing\s*machine|洗衣机/.test(raw)) return 'mini_washer';
   if (/подогреватель\s+еды|грелка\s+для\s+еды|food\s*warmer|lunch\s*box.*(?:нагрев|heat)|暖菜|热饭|加热饭盒/.test(raw)) return 'food_warmer';
   if (/обогреватель|грелка|нагреватель|heating\s*pad|heater|电热|加热器|暖手/.test(raw)) return 'heating_appliance';
+  if (/соковыжимал|juicer|榨汁机|原汁机/.test(raw)) return 'juicer';
   if (/сабо|shoe|footwear|обув|тапоч|шл[её]пан|сандал|鞋|拖鞋|凉鞋/.test(raw)) return 'footwear';
   if (/полотенц[еа][ -]?килт|towel[_ -]?kilt/.test(raw)) return 'towel_kilt';
   if (/плед|одеял|подушк|постельн|шторы|home\s*textile|blanket|pillow|bedding/.test(raw)) return 'home_textile';
@@ -578,8 +619,22 @@ function collectSkuVariants(product: any): any[] {
   return array(product?.skus).length ? array(product.skus) : array(product?.normalized1688?.skuVariants);
 }
 
+export function cleanSelectedSkuText(text: string): string {
+  return String(text ?? '')
+    .replace(/\/\s*$/g, '')
+    .replace(/^\s*\//g, '')
+    .replace(/\s+\/\s+/g, ' · ')
+    .replace(/['‘’]\s*(\d+)\s*['‘’]/g, '$1')
+    .replace(/[;·]\s*/g, ' · ')
+    .replace(/(?:\s*·\s*){2,}/g, ' · ')
+    .replace(/^\s*·\s*/g, '')
+    .replace(/\s*·\s*$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function skuName(s: any): string {
-  return safeRu(s?.name ?? s?.label ?? s?.skuName ?? s?.propertiesName ?? s?.raw ?? '').replace(/;\s*/g, ' · ');
+  return cleanSelectedSkuText(safeRu(s?.name ?? s?.label ?? s?.skuName ?? s?.propertiesName ?? s?.raw ?? '').replace(/;\s*/g, ' · '));
 }
 
 function skuRawText(s: any): string {
@@ -601,6 +656,10 @@ const PLUG_STANDARD_PATTERNS: Array<[RegExp, string]> = [
   [/澳规|австралийский\s+стандарт|au\s*plug/i, 'стандарт питания/вилка: AU'],
   [/国标|китайский\s+стандарт|cn\s*plug/i, 'стандарт питания/вилка: CN'],
 ];
+
+export function plugStandardsDisplayValue(plugStandards: string[]): string {
+  return plugStandards.map(v => v.replace(/^стандарт питания\/вилка:\s*/i, '')).join(', ');
+}
 
 function extractPlugStandards(labels: string[]): string[] {
   const found = new Set<string>();
@@ -678,7 +737,7 @@ export function makeSelectedSkuDecision(product: any, variants = collectSkuVaria
   if (variants.length === 1) return { selectedSkuText: skuName(variants[0]) || 'единственный SKU', selectedPriceYuan: skuPrice(variants[0]), reliable: true, reason: 'В карточке один SKU.' };
   const explicit = product?.selectedSku ?? product?.selectedSkuText ?? product?.selectedSkuName ?? product?.normalized1688?.pricing?.selectedSkuName;
   const explicitPrice = pos(product?.selectedSkuPriceYuan ?? product?.selectedSkuPrice ?? product?.normalized1688?.pricing?.selectedSkuPriceYuan);
-  if (explicit) return { selectedSkuText: safeRu(explicit), selectedPriceYuan: explicitPrice, reliable: true, reason: 'SKU передан явно после выбора пользователя/URL.' };
+  if (explicit) return { selectedSkuText: cleanSelectedSkuText(safeRu(explicit).replace(/;\s*/g, ' · ')), selectedPriceYuan: explicitPrice, reliable: true, reason: 'SKU передан явно после выбора пользователя/URL.' };
   return { selectedSkuText: null, selectedPriceYuan: null, reliable: false, reason: variants.length > 1 ? 'В карточке несколько SKU, но выбранный SKU не подтверждён.' : 'SKU не найден в данных.' };
 }
 
@@ -743,6 +802,9 @@ function buildKindVerdict(kind: ProductKind, product: any, needsSupplierData: bo
   if (kind === 'small_appliance' || kind === 'food_warmer' || kind === 'heating_appliance') {
     return 'Товар можно рассматривать только после проверки технических характеристик. Перед образцом нужно подтвердить напряжение, мощность, тип вилки, сертификаты и видео работы. Партию закупать рано.';
   }
+  if (kind === 'juicer') {
+    return 'Товар можно рассматривать только после проверки технических характеристик. Перед образцом нужно подтвердить напряжение, мощность, тип вилки, сертификаты, комплектацию и видео работы. Партию закупать рано.';
+  }
   if (kind === 'home_textile') {
     return 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите состав ткани/наполнителя, размеры, вес и упаковку. На образце проверить швы, усадку после стирки и запах.';
   }
@@ -803,7 +865,7 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
     pricing,
   } as Pick<ProductProcurementProfile, 'identity'|'sku'|'pricing'>;
   const draftProcurement = record(aiDraft.procurement);
-  const mustAskSupplier = uniq([...array<string>(draftProcurement.mustAskSupplier).map(safeRu), ...buildQuestions(baseProfile, rules)], 10).slice(0, 9);
+  const mustAskSupplier = uniq([...buildQuestions(baseProfile, rules), ...sanitizeDraftAskList(array<string>(draftProcurement.mustAskSupplier).map(safeRu))], 10).slice(0, 9);
   const images = collectProductIntelligenceImages(product, 3);
   const supplierRaw = product?.supplierType ?? product?.normalized1688?.supplierType ?? product?.normalized1688?.debug?.sellerType;
   return {
@@ -819,9 +881,9 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
       verdict: buildKindVerdict(kind, product, missing.length > 0),
       nextAction: 'Отправьте вопросы поставщику и скачайте закупочный пакет.',
       mustAskSupplier,
-      mustCheckBeforeSample: uniq([...array<string>(draftProcurement.mustCheckBeforeSample).map(safeRu), ...rules.beforeSample], 8),
-      mustCheckOnSample: uniq([...array<string>(draftProcurement.mustCheckOnSample).map(safeRu), ...rules.onSample], 12),
-      redFlags: uniq([...array<string>(draftProcurement.redFlags).map(safeRu), ...rules.redFlags, ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu)], 12),
+      mustCheckBeforeSample: uniq([...rules.beforeSample, ...sanitizeDraftAskList(array<string>(draftProcurement.mustCheckBeforeSample).map(safeRu))], 8),
+      mustCheckOnSample: uniq([...rules.onSample, ...array<string>(draftProcurement.mustCheckOnSample).map(safeRu)], 12),
+      redFlags: removeBadRiskTags(uniq([...rules.redFlags, ...array<string>(draftProcurement.redFlags).map(safeRu), ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu)], 12)),
     },
     cargo: {
       mustAsk: uniq(['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'вес транспортной коробки', 'габариты транспортной коробки', 'фото индивидуальной упаковки', 'фото транспортной коробки', 'материал товара', 'ограничения по перевозке', ...rules.cargo], 14),
@@ -962,7 +1024,7 @@ export function buildMainReportFromProfile(product: any, statusInfo?: { creditsR
     `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
     p.sku.colors.length ? `• Цвета: ${escapeHtml(p.sku.colors.join(', '))}` : '',
     p.sku.sizes.length ? `• Размеры: ${escapeHtml(p.sku.sizes.join(', '))}` : (p.sku.ambiguousParams.length ? (p.identity.productKind === 'tool_kit' ? `• Комплектации/параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — уточнить точный состав` : `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — значение нужно уточнить`) : ''),
-    p.sku.plugStandards.length ? `• Стандарт питания/вилка: ${escapeHtml(p.sku.plugStandards.join(', '))}` : '',
+    p.sku.plugStandards.length ? `• Стандарт питания/вилка: ${escapeHtml(plugStandardsDisplayValue(p.sku.plugStandards))}` : '',
     `• Материал: ${escapeHtml(materialsDisplayLine(p))}`,
     `• Вес: ${weight ? `${weight} кг` : 'не указан'}`,
     '',
@@ -1025,7 +1087,7 @@ export function validateMainReport(text: string): { ok: boolean; errors: string[
   return { ok: errors.length === 0, errors, fixedText: fixed };
 }
 
-export function validateCnQuestions(ru: string[], cn: string[]): { ok: boolean; errors: string[] } {
+export function validateCnQuestions(ru: string[], cn: string[], kind?: ProductKind): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
   if (!cn.length) errors.push('CN empty');
   if (cn.length !== ru.length) errors.push('CN count differs');
@@ -1036,10 +1098,12 @@ export function validateCnQuestions(ru: string[], cn: string[]): { ok: boolean; 
   if (/\b(?:material|размерная сетка|вес|габарит|цвет|поставщик)\b/i.test(joined)) errors.push('language mix');
   if (/\d+,\d+\s*元/.test(joined)) errors.push('comma decimal');
   if (/\d+[.)]\s*\d+[.)]/.test(joined)) errors.push('nested numbering');
+  if (/请确认该问题中的相关产品信息/.test(joined)) errors.push('CN placeholder fallback');
+  if (kind !== 'umbrella' && /折叠后的长度|展开后的尺寸/.test(joined)) errors.push('foldable phrasing on non-umbrella product');
   return { ok: errors.length === 0, errors };
 }
 
-function translateQuestionToCn(q: string): string {
+function translateQuestionToCn(q: string, kind?: ProductKind): string {
   const lower = q.toLowerCase();
   const price = q.match(/(\d+(?:[,.]\d+)?)\s*¥/)?.[1]?.replace(',', '.');
   const params = q.match(/SKU\s+([\d\s/]+)/i)?.[1]?.replace(/\s+/g, ' ').trim();
@@ -1060,8 +1124,16 @@ function translateQuestionToCn(q: string): string {
   if (/съёмные детали|проглат/.test(lower)) return '产品是否有可拆卸小零件（存在误吞风险）？';
   if (/животн/.test(lower)) return '请确认产品适合的宠物体型/体重。';
   if (/параметр/.test(lower)) return `请说明SKU参数${params ? ` ${params}` : ''}分别代表什么：伞面直径、折叠长度、数量规格还是其他参数？`;
-  if (/длин/.test(lower)) return '请提供产品折叠后的长度。';
-  if (/диаметр/.test(lower)) return '请提供展开后的尺寸或直径。';
+  if (/длин/.test(lower)) {
+    if (kind === 'umbrella') return '请提供产品折叠后的长度。';
+    if (/кабел/.test(lower)) return '请提供电源线的长度。';
+    return '请提供产品的长度尺寸。';
+  }
+  if (/диаметр/.test(lower)) {
+    if (kind === 'umbrella') return '请提供展开后的尺寸或直径。';
+    if (/горловин/.test(lower)) return '请提供加料口的直径。';
+    return '请提供该部位的直径尺寸。';
+  }
   if (/материал/.test(lower)) return '请确认产品材料和关键部件材料。';
   if (/спиц/.test(lower)) return '请确认所选SKU的伞骨数量。';
   if (/чехол/.test(lower)) return '是否包含收纳套？请发送产品打开、折叠状态和包装的实拍图。';
@@ -1072,6 +1144,8 @@ function translateQuestionToCn(q: string): string {
   if (/комплектац/.test(lower)) return '请确认所选SKU的完整配置。';
   if (/moq|минимальн/.test(lower)) return '请确认最小起订量和发货时间。';
   if (/образц|образец/.test(lower)) return '是否可以先购买1-2件样品？';
+  if (/посудомоечн/.test(lower)) return '可拆卸部件是否可以用洗碗机清洗？';
+  if (/режим|скорост|объём контейнера|объем контейнера/.test(lower)) return '请确认档位/转速数量，以及容器容量（如有）。';
   return '请确认该问题中的相关产品信息。';
 }
 
@@ -1079,8 +1153,8 @@ export function buildSupplierQuestionsFromProfile(product: any, opts: { sourceUr
   const profile = ensureProductProcurementProfile(product, opts);
   const ru = uniq(profile.procurement.mustAskSupplier, 10).slice(0, 10);
   const savedCn = profile.supplierQuestionsCnValid && Array.isArray(profile.supplierQuestionsCn) ? profile.supplierQuestionsCn : [];
-  const cn = savedCn.length === ru.length ? savedCn : ru.map(translateQuestionToCn);
-  const cnCheck = validateCnQuestions(ru, cn);
+  const cn = savedCn.length === ru.length ? savedCn : ru.map(q => translateQuestionToCn(q, profile.identity.productKind));
+  const cnCheck = validateCnQuestions(ru, cn, profile.identity.productKind);
   const label = cnCheck.ok ? '💬 Вопросы поставщику RU/CN' : '💬 Вопросы поставщику RU';
   const lines = ['# Вопросы поставщику', '', '## Русская версия', '', 'Здравствуйте. Хотим уточнить товар перед заказом:', '', ...ru.map((q, i) => `${i + 1}. ${q}`), ''];
   if (cnCheck.ok) lines.push('## Китайская версия', '', '您好。下单前想确认以下产品信息：', '', ...cn.map((q, i) => `${i + 1}. ${q}`));
@@ -1100,7 +1174,7 @@ export function formatSupplierQuestionsText(ru: string[], cn: string[]): Supplie
 
 export async function translateSupplierQuestionsRuToCn(ru: string[]): Promise<string[]> {
   const cleanRu = uniq(ru, 10).slice(0, 10);
-  const fallback = cleanRu.map(translateQuestionToCn);
+  const fallback = cleanRu.map(q => translateQuestionToCn(q));
   const g: any = globalThis as any;
   const apiKey = g.process?.env?.OPENROUTER_API_KEY;
   if (!apiKey || typeof g.fetch !== 'function' || !g.AbortSignal) return fallback;
@@ -1384,6 +1458,7 @@ export function validateDocuments(docs: Array<{ filename: string; text: string }
       if (bullets !== 5) errors.push(`${doc.filename}: bullets not 5`);
       if (/черновик карточки на основе данных 1688/i.test(text)) { errors.push(`${doc.filename}: internal seo boilerplate`); text = text.replace(/\s*—?\s*черновик карточки для WB\/Ozon на основе данных 1688\.?/gi, '.'); }
       if (/для ремонт(?!а)\b/i.test(text)) { errors.push(`${doc.filename}: bad russian grammar`); text = text.replace(/для ремонт(?!а)\b/gi, 'для ремонта'); }
+      if (/для приготовление\b/i.test(text)) { errors.push(`${doc.filename}: bad russian grammar`); text = text.replace(/для приготовление\b/gi, 'для приготовления'); }
     }
     return { ...doc, text: text.replace(/\n{3,}/g, '\n\n').trim() + '\n' };
   });

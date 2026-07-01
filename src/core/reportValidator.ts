@@ -920,6 +920,15 @@ export function validateReport(
     hasDirectAnalogs: boolean;
     wb429: boolean;
     intelligence?: ProductIntelligence | null;
+    // Skip step 5 (forbidden-category-term deletion). Use this when the text was
+    // already built and validated per-productKind by procurementProfile.ts, whose
+    // classifier (vision + text + rules consensus) and per-kind forbidden-word list
+    // cover far more product types than this module's fixed 11-bucket categoryRules.
+    // Without this flag, a product type this module doesn't recognize (anything
+    // outside shoes/clothes/electronics/home/beauty/accessory/kitchen/fishing/tools/
+    // passive_insect_trap) silently falls back to a wrong bucket and this step blindly
+    // deletes real spec words (e.g. "напряжение"/"мощность") from the final report.
+    skipCategoryTermCheck?: boolean;
   },
 ): ValidationResult {
   const errors: string[] = [];
@@ -964,11 +973,13 @@ export function validateReport(
   }
 
   // 5. No forbidden category terms
-  for (const forbidden of rules.forbiddenFields) {
-    const pattern = new RegExp(forbidden, "gi");
-    if (pattern.test(fixed)) {
-      errors.push(`forbidden term for ${categoryType}: ${forbidden}`);
-      fixed = fixed.replace(pattern, "");
+  if (!context.skipCategoryTermCheck) {
+    for (const forbidden of rules.forbiddenFields) {
+      const pattern = new RegExp(forbidden, "gi");
+      if (pattern.test(fixed)) {
+        errors.push(`forbidden term for ${categoryType}: ${forbidden}`);
+        fixed = fixed.replace(pattern, "");
+      }
     }
   }
 

@@ -182,6 +182,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       hasDirectAnalogs: true,
       wb429: false,
       intelligence: decisionContext.intelligence as any,
+      // mainText already went through buildMainReportFromProfile + validateMainReport
+      // (procurementProfile.ts), which classifies productKind via vision/text/rules
+      // consensus and applies its own per-kind forbidden-word list. Re-checking it
+      // against this module's fixed 11-category keyword classifier only adds risk:
+      // any productKind that classifier doesn't recognize gets its real spec words
+      // (e.g. "напряжение"/"мощность" for an unrecognized appliance type) deleted.
+      skipCategoryTermCheck: true,
     });
     let finalText = softValidation.ok ? mainText : softValidation.fixedText;
 

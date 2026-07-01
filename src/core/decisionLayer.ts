@@ -1,6 +1,6 @@
 import type { RawProduct1688 } from '../types';
 import { cleanChineseTitle, normalizeSkuText, normalizeMixedProductText, detectPackCount, extractShoeSize, extractLetterSize, extractSkuComponents } from './cnNormalize';
-import { ensureProductProcurementProfile, formatSelectedSkuLine } from './procurementProfile';
+import { ensureProductProcurementProfile, formatSelectedSkuLine, plugStandardsDisplayValue } from './procurementProfile';
 
 export type DecisionConfidence = 'high' | 'medium' | 'low';
 
@@ -750,7 +750,7 @@ export function build1688Detail(product: any): string {
     '<b>SKU:</b>',
     html(p.sku.skuSummary),
     ...(skuExamples.length ? skuExamples.map(html) : ['• SKU не указаны']),
-    ...(p.sku.plugStandards.length ? [`• стандарт питания/вилка: ${html(p.sku.plugStandards.join(', '))}`] : []),
+    ...(p.sku.plugStandards.length ? [`• стандарт питания/вилка: ${html(plugStandardsDisplayValue(p.sku.plugStandards))}`] : []),
     '',
     '<b>Поставщик:</b>',
     `• название: ${html(p.supplier.name || 'не указано')}`,
