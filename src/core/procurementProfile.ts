@@ -11,8 +11,14 @@ export type ProductKind =
   | 'passive_insect_trap'
   | 'usb_device'
   | 'small_appliance'
+  | 'food_warmer'
+  | 'heating_appliance'
   | 'kitchen_tool'
   | 'bag_accessory'
+  | 'home_textile'
+  | 'beauty_accessory'
+  | 'pet_product'
+  | 'toy'
   | 'generic_product';
 
 export type SelectedSkuDecision = {
@@ -50,6 +56,7 @@ export type ProductProcurementProfile = {
     colors: string[];
     sizes: string[];
     models: string[];
+    plugStandards: string[];
     packageTypes: string[];
     packCounts: string[];
     skuRisk: string;
@@ -137,6 +144,8 @@ const DANGEROUS_CLAIMS = [
   'медицинский', 'ортопедический', 'лечебный', 'антибактериальный', 'сертифицированный',
   'гипоаллергенный', 'безопасный для детей', 'профессиональный', 'оригинальный бренд',
   '100% водонепроницаемый', 'UPF50+', 'дезинфекция', 'стерилизация',
+  'пищевой силикон', 'графеновый', 'защита от перегрева', 'быстрый нагрев',
+  'равномерный нагрев', 'энергосберегающий', 'влагозащищённый', 'гарантия',
 ];
 
 const KIND_RULES: Record<ProductKind, {
@@ -237,11 +246,81 @@ const KIND_RULES: Record<ProductKind, {
     forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'аккумулятор', 'лампа'],
   },
   usb_device: genericRules('USB-товар'),
-  small_appliance: genericRules('малая техника'),
+  small_appliance: electricalRules('малая техника'),
+  food_warmer: electricalRules('прибор для подогрева еды'),
+  heating_appliance: electricalRules('нагревательный прибор'),
   kitchen_tool: genericRules('кухонный товар'),
   bag_accessory: genericRules('аксессуар'),
+  home_textile: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите состав ткани/наполнителя в процентах.', 'Пришлите размерную сетку/габариты изделия.', 'Укажите плотность/плотность наполнителя.', 'Есть ли усадка после стирки?', 'Укажите вес с упаковкой.', 'Пришлите реальные фото ткани, шва и упаковки.', 'Можно ли заказать 1–2 образца?'],
+    beforeSample: ['подтвердить состав ткани/наполнителя', 'получить размеры', 'получить вес и упаковку', 'запросить фото ткани и шва'],
+    onSample: ['состав и плотность ткани/наполнителя', 'швы и строчку', 'усадку после стирки', 'цветопередачу', 'запах после распаковки', 'упаковку'],
+    cargo: ['вес с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'материал/наполнитель для маркировки груза'],
+    redFlags: ['не подтверждён состав ткани/наполнителя', 'нет размеров', 'сильная усадка', 'плохие швы', 'нет реальных фото'],
+    seoAllowed: ['домашний текстиль', 'состав, если подтверждён', 'размер/комплект, если подтверждён'],
+    seoForbidden: ['гипоаллергенный без документов', 'антибактериальный без документов', 'ортопедический без документов', ...DANGEROUS_CLAIMS],
+    infographic: ['Домашний текстиль общий вид', 'Ткань/наполнитель крупно', 'Размер/комплект', 'Цвета', 'Упаковка'],
+    forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'аккумулятор', 'подошва', 'стелька'],
+  },
+  beauty_accessory: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Подтвердите материал и покрытие изделия.', 'Контактирует ли изделие с кожей/волосами напрямую?', 'Укажите комплектацию.', 'Укажите вес с упаковкой.', 'Укажите габариты индивидуальной упаковки.', 'Пришлите реальные фото изделия и упаковки.', 'Можно ли заказать 1–2 образца?'],
+    beforeSample: ['подтвердить материал/покрытие', 'уточнить контакт с кожей/волосами', 'получить вес и габариты', 'запросить фото изделия и упаковки'],
+    onSample: ['качество материала/покрытия', 'острые края/заусенцы', 'запах после распаковки', 'комплектацию', 'вес и упаковку'],
+    cargo: ['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'материал для маркировки груза'],
+    redFlags: ['не подтверждён материал/покрытие', 'острые края/заусенцы', 'резкий запах', 'нет реальных фото'],
+    seoAllowed: ['аксессуар для красоты', 'материал, если подтверждён', 'сценарии использования'],
+    seoForbidden: ['гипоаллергенный без документов', 'безопасный для кожи без документов', 'сертифицированный без документов', ...DANGEROUS_CLAIMS],
+    infographic: ['Аксессуар общий вид', 'Материал/покрытие крупно', 'Комплектация', 'Цвета', 'Упаковка'],
+    forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'подошва', 'стелька'],
+  },
+  pet_product: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Подтвердите материал и безопасность материала для животного.', 'Укажите размер/подходящий вес животного.', 'Укажите вес с упаковкой.', 'Укажите габариты индивидуальной упаковки.', 'Есть ли мелкие съёмные детали, которые животное может проглотить?', 'Пришлите реальные фото товара и упаковки.', 'Можно ли заказать 1–2 образца?'],
+    beforeSample: ['подтвердить материал', 'уточнить размер/вес животного', 'получить вес и габариты', 'уточнить мелкие детали/риск проглатывания', 'запросить фото товара и упаковки'],
+    onSample: ['прочность материала', 'мелкие детали и риск проглатывания', 'запах после распаковки', 'соответствие заявленному размеру', 'упаковку'],
+    cargo: ['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'материал для маркировки груза'],
+    redFlags: ['не подтверждён материал', 'есть мелкие съёмные детали без подтверждения безопасности', 'нет размера/веса животного', 'нет реальных фото'],
+    seoAllowed: ['товар для животных', 'материал, если подтверждён', 'размер/вес животного, если подтверждён'],
+    seoForbidden: ['ветеринарный без документов', 'гипоаллергенный без документов', 'безопасный для животных без документов', ...DANGEROUS_CLAIMS],
+    infographic: ['Товар для животных общий вид', 'Материал крупно', 'Размер/вес животного', 'Комплектация', 'Упаковка'],
+    forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'подошва', 'стелька'],
+  },
+  toy: {
+    mustAskSupplier: ['Подтвердите цену выбранного SKU.', 'Укажите рекомендуемый возраст.', 'Подтвердите материал.', 'Есть ли мелкие съёмные детали (риск проглатывания)?', 'Есть ли сертификаты безопасности игрушки?', 'Укажите вес с упаковкой.', 'Укажите габариты индивидуальной упаковки.', 'Пришлите реальные фото товара и упаковки.'],
+    beforeSample: ['подтвердить материал', 'уточнить возрастную маркировку', 'уточнить мелкие детали/риск проглатывания', 'получить сертификаты безопасности', 'запросить фото товара и упаковки'],
+    onSample: ['прочность материала', 'мелкие детали и риск проглатывания', 'острые края/заусенцы', 'запах после распаковки', 'возрастную маркировку', 'упаковку'],
+    cargo: ['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'батарейки/аккумулятор — уточнить'],
+    redFlags: ['нет сертификатов безопасности', 'мелкие детали без подтверждения безопасности для возраста', 'нет возрастной маркировки', 'нет реальных фото'],
+    seoAllowed: ['игрушка', 'материал, если подтверждён', 'рекомендуемый возраст, если подтверждён'],
+    seoForbidden: ['безопасно для детей без документов', 'сертифицировано без документов', 'гипоаллергенный без документов', ...DANGEROUS_CLAIMS],
+    infographic: ['Игрушка общий вид', 'Материал крупно', 'Возрастная маркировка', 'Комплектация', 'Упаковка'],
+    forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'подошва', 'стелька'],
+  },
   generic_product: genericRules('товар'),
 };
+
+function electricalRules(label: string): typeof KIND_RULES[ProductKind] {
+  return {
+    mustAskSupplier: [
+      'Подтвердите цену выбранного SKU.',
+      'Укажите напряжение (В) выбранного SKU.',
+      'Укажите мощность (Вт) выбранного SKU.',
+      'Какой тип вилки у выбранного SKU?',
+      'Подтвердите совместимость с электросетью РФ/ЕАЭС.',
+      'Есть ли сертификаты/декларации соответствия?',
+      'Пришлите видео работы выбранного SKU.',
+      'Пришлите инструкцию и фото маркировки/шильдика.',
+      'Укажите вес и габариты упаковки выбранного SKU.',
+    ],
+    beforeSample: ['подтвердить напряжение/мощность/тип вилки', 'получить сертификаты/декларации', 'получить видео работы', 'запросить инструкцию и фото маркировки'],
+    onSample: ['включается ли от нужного напряжения', 'реальную мощность', 'нагрев и наличие защиты от перегрева, если заявлена', 'запах при первом включении', 'качество кабеля и вилки', 'маркировку и шильдик', 'инструкцию', 'упаковку после доставки'],
+    cargo: ['вес с упаковкой', 'габариты упаковки', 'напряжение', 'тип вилки/кабеля', 'аккумулятор или батарейка — уточнить', 'сертификаты для техники'],
+    redFlags: ['нет данных по напряжению/мощности/вилке', 'нет сертификатов', 'нет видео работы', 'сильный запах при включении', 'защита от перегрева заявлена без подтверждения'],
+    seoAllowed: [label, 'мощность и напряжение, если подтверждены', 'режимы работы, если подтверждены'],
+    seoForbidden: ['защита от перегрева', 'быстрый нагрев', 'равномерный нагрев', 'энергосберегающий', 'влагозащищённый', ...DANGEROUS_CLAIMS],
+    infographic: [label, 'Панель/режимы', 'Напряжение и мощность', 'Комплектация', 'Упаковка'],
+    forbiddenCategoryWords: ['подошва', 'стелька', 'размерная сетка', 'срок годности', 'консистенция', 'состав ткани в процентах'],
+  };
+}
 
 function genericRules(label: string) {
   return {
@@ -301,15 +380,26 @@ function cny(v: number | null | undefined): string { return v && Number.isFinite
 function cnyDot(v: number | null | undefined): string { return v && Number.isFinite(v) && v > 0 ? `${String(Math.round(v * 100) / 100)} 元` : '需要确认'; }
 function rub(v: number | null | undefined): string { return v && Number.isFinite(v) && v > 0 ? `${Math.round(v).toLocaleString('ru-RU')} ₽` : 'нужно уточнить'; }
 
+const LATIN_TO_CYRILLIC_LOOKALIKE: Record<string, string> = {
+  p: 'р', c: 'с', e: 'е', o: 'о', a: 'а', x: 'х', y: 'у', k: 'к', m: 'м', t: 'т',
+  H: 'Н', B: 'В', C: 'С',
+};
+
 function fixMixedRuTypos(text: string): string {
   return String(text ?? '')
     .replace(/поставщpику/g, 'поставщику')
     .replace(/поставщpик/g, 'поставщик')
-    .replace(/p/g, (m, offset, full) => {
+    .replace(/[pceoaxykmtHBC]/g, (m, offset, full) => {
       const before = full[offset - 1] || '';
       const after = full[offset + 1] || '';
-      return /[А-Яа-яЁё]/.test(before) && /[А-Яа-яЁё]/.test(after) ? 'р' : m;
+      const cyrillicAround = /[А-Яа-яЁё]/.test(before) && /[А-Яа-яЁё]/.test(after);
+      return cyrillicAround ? LATIN_TO_CYRILLIC_LOOKALIKE[m] ?? m : m;
     });
+}
+
+export function detectMixedCyrillicLatinInRussianText(text: string): boolean {
+  const value = String(text ?? '');
+  return /[А-Яа-яЁё][pceoaxykmtHBC][А-Яа-яЁё]/.test(value) || /[pceoaxykmtHBC][А-Яа-яЁё]{2,}|[А-Яа-яЁё]{2,}[pceoaxykmtHBC]/.test(value);
 }
 
 function normalizeDedupKey(value: string): string {
@@ -367,13 +457,19 @@ export function supplierTypeDisplay(value: unknown): string {
 function normalizeProductKind(value: unknown): ProductKind | null {
   const raw = String(value ?? '').trim().toLowerCase();
   if (!raw) return null;
-  const direct = raw.match(/footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product/)?.[0];
+  const direct = raw.match(/footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|food_warmer|heating_appliance|kitchen_tool|bag_accessory|home_textile|beauty_accessory|pet_product|toy|generic_product/)?.[0];
   if (direct && direct in KIND_RULES) return direct as ProductKind;
   if (/зонт|umbrella|雨伞|雨傘|伞|傘/.test(raw)) return 'umbrella';
   if (/маск[аи]\s+для\s+сна|sleep\s*mask|眼罩|睡眠/.test(raw)) return 'sleep_mask';
   if (/мини[ -]?стирал|стиральн[а-яё ]*машин|washing\s*machine|洗衣机/.test(raw)) return 'mini_washer';
+  if (/подогреватель\s+еды|грелка\s+для\s+еды|food\s*warmer|lunch\s*box.*(?:нагрев|heat)|暖菜|热饭|加热饭盒/.test(raw)) return 'food_warmer';
+  if (/обогреватель|грелка|нагреватель|heating\s*pad|heater|电热|加热器|暖手/.test(raw)) return 'heating_appliance';
   if (/сабо|shoe|footwear|обув|тапоч|шл[её]пан|сандал|鞋|拖鞋|凉鞋/.test(raw)) return 'footwear';
   if (/полотенц[еа][ -]?килт|towel[_ -]?kilt/.test(raw)) return 'towel_kilt';
+  if (/плед|одеял|подушк|постельн|шторы|home\s*textile|blanket|pillow|bedding/.test(raw)) return 'home_textile';
+  if (/косметичк|для\s+макияжа|beauty|маникюр|расчёск|расческ/.test(raw)) return 'beauty_accessory';
+  if (/для\s+животн|для\s+собак|для\s+кошек|pet\s*product|dog|cat\b/.test(raw)) return 'pet_product';
+  if (/игрушк|toy\b|детск.*игр/.test(raw)) return 'toy';
   if (/балаклав|подшлемник|face\s*mask|одежд|clothing|clothes|плать|брюк|футбол|衣|裤|面罩|头套|防晒面罩/.test(raw)) return 'clothing';
   if (/usb|type-c|type c/.test(raw)) return 'usb_device';
   if (/насеком|insect|ловуш|粘虫|捕虫/.test(raw)) return 'passive_insect_trap';
@@ -449,11 +545,34 @@ function skuName(s: any): string {
   return safeRu(s?.name ?? s?.label ?? s?.skuName ?? s?.propertiesName ?? s?.raw ?? '').replace(/;\s*/g, ' · ');
 }
 
+function skuRawText(s: any): string {
+  return String(s?.name ?? s?.label ?? s?.skuName ?? s?.propertiesName ?? s?.raw ?? '');
+}
+
 function skuPrice(s: any): number | null { return pos(s?.priceYuan ?? s?.price ?? s?.discountPrice ?? s?.salePrice); }
 
 function extractColors(labels: string[]): string[] {
   const colors = ['чёрный','черный','белый','синий','голубой','зелёный','зеленый','жёлтый','желтый','розовый','красный','серый','фиолетовый','хаки','бежевый','коричневый','оранжевый'];
   return uniq(labels.flatMap(l => colors.filter(c => new RegExp(`(^|[^а-яё])${c}([^а-яё]|$)`, 'i').test(l))).map(c => c === 'черный' ? 'чёрный' : c === 'зеленый' ? 'зелёный' : c === 'желтый' ? 'жёлтый' : c), 12);
+}
+
+const PLUG_STANDARD_PATTERNS: Array<[RegExp, string]> = [
+  [/韩规|韩国|корейский\s+стандарт|для\s+кореи/i, 'стандарт питания/вилка: Корея'],
+  [/欧规|европейский\s+стандарт|eu\s*plug/i, 'стандарт питания/вилка: EU'],
+  [/美规|американский\s+стандарт|us\s*plug/i, 'стандарт питания/вилка: US'],
+  [/英规|британский\s+стандарт|uk\s*plug/i, 'стандарт питания/вилка: UK'],
+  [/澳规|австралийский\s+стандарт|au\s*plug/i, 'стандарт питания/вилка: AU'],
+  [/国标|китайский\s+стандарт|cn\s*plug/i, 'стандарт питания/вилка: CN'],
+];
+
+function extractPlugStandards(labels: string[]): string[] {
+  const found = new Set<string>();
+  for (const label of labels) {
+    for (const [rx, value] of PLUG_STANDARD_PATTERNS) {
+      if (rx.test(label)) found.add(value);
+    }
+  }
+  return Array.from(found);
 }
 
 function extractAmbiguousParams(labels: string[], kind: ProductKind): string[] {
@@ -465,7 +584,9 @@ function extractAmbiguousParams(labels: string[], kind: ProductKind): string[] {
 function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): ProductProcurementProfile['sku'] {
   const variants = collectSkuVariants(product);
   const labels = variants.map(skuName).filter(Boolean);
+  const rawLabels = variants.map(skuRawText).filter(Boolean);
   const colors = extractColors(labels);
+  const plugStandards = extractPlugStandards(rawLabels);
   const ambiguousParams = extractAmbiguousParams(labels, kind);
   const sizeMatches = kind === 'footwear'
     ? uniq(labels.flatMap(l => Array.from(l.matchAll(/\b(?:3[5-9]|4[0-9])(?:[–-](?:3[5-9]|4[0-9]))?\b/g)).map(m => m[0])), 12)
@@ -475,6 +596,7 @@ function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): P
   const dims: string[] = [];
   if (colors.length) dims.push('цвет');
   if (sizeMatches.length) dims.push('размер');
+  if (plugStandards.length) dims.push('стандарт питания/вилка');
   if (ambiguousParams.length) dims.push('параметр SKU');
   if (!dims.length && variants.length > 1) dims.push('вариант');
   const count = variants.length || labels.length;
@@ -492,6 +614,7 @@ function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): P
     colors,
     sizes: sizeMatches,
     models: [],
+    plugStandards,
     packageTypes,
     packCounts,
     skuRisk: selected.reliable ? 'ok' : count > 1 ? 'needs_selection' : 'unknown',
@@ -574,6 +697,21 @@ function buildKindVerdict(kind: ProductKind, product: any, needsSupplierData: bo
   }
   if (kind === 'mini_washer') {
     return 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите мощность, напряжение, тип вилки, слив, режимы работы, инструкцию и видео работы.';
+  }
+  if (kind === 'small_appliance' || kind === 'food_warmer' || kind === 'heating_appliance') {
+    return 'Товар можно рассматривать только после проверки технических характеристик. Перед образцом нужно подтвердить напряжение, мощность, тип вилки, сертификаты и видео работы. Партию закупать рано.';
+  }
+  if (kind === 'home_textile') {
+    return 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите состав ткани/наполнителя, размеры, вес и упаковку. На образце проверить швы, усадку после стирки и запах.';
+  }
+  if (kind === 'beauty_accessory') {
+    return 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите материал/покрытие, контакт с кожей/волосами, вес и упаковку. На образце проверить края, покрытие и запах.';
+  }
+  if (kind === 'pet_product') {
+    return 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите материал, размер/вес животного и безопасность мелких деталей. На образце проверить прочность и риск проглатывания деталей.';
+  }
+  if (kind === 'toy') {
+    return 'Товар нельзя закупать партией без проверки безопасности. Перед образцом нужно подтвердить возрастную маркировку, сертификаты безопасности и мелкие детали. На образце проверить прочность, острые края и запах.';
   }
   return needsSupplierData
     ? 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите выбранный SKU, цену, вес, упаковку, материал и реальные фото.'
@@ -734,7 +872,8 @@ export function buildMainReportFromProfile(product: any, statusInfo?: { creditsR
     `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
     p.sku.colors.length ? `• Цвета: ${escapeHtml(p.sku.colors.join(', '))}` : '',
     p.sku.sizes.length ? `• Размеры: ${escapeHtml(p.sku.sizes.join(', '))}` : (p.sku.ambiguousParams.length ? `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — значение нужно уточнить` : ''),
-    `• Материал: ${escapeHtml(p.identity.materials.join(', '))}${/подтверд/i.test(p.identity.materials.join(' ')) ? '' : ' — подтвердить'}`, 
+    p.sku.plugStandards.length ? `• Стандарт питания/вилка: ${escapeHtml(p.sku.plugStandards.join(', '))}` : '',
+    `• Материал: ${escapeHtml(p.identity.materials.slice(0, 3).join(', '))}${/подтверд/i.test(p.identity.materials.slice(0, 3).join(' ')) ? '' : ' — подтвердить'}`,
     `• Вес: ${weight ? `${weight} кг` : 'не указан'}`,
     '',
     '<b>🟡 Статус: нужны данные поставщика</b>',
@@ -812,14 +951,28 @@ function translateQuestionToCn(q: string): string {
   const price = q.match(/(\d+(?:[,.]\d+)?)\s*¥/)?.[1]?.replace(',', '.');
   const params = q.match(/SKU\s+([\d\s/]+)/i)?.[1]?.replace(/\s+/g, ' ').trim();
   if (/цен/.test(lower)) return `请确认所选SKU的价格${price ? `：${price} 元` : ''}。`;
+  if (/напряжени/.test(lower)) return '请提供所选SKU的电压（V）。';
+  if (/мощност/.test(lower)) return '请提供所选SKU的功率（W）。';
+  if (/тип вилки|вилк/.test(lower)) return '请说明所选SKU的插头类型。';
+  if (/электросет|еаэс|рф/.test(lower)) return '请确认产品是否兼容俄罗斯/欧亚经济联盟电网标准。';
+  if (/сертификат|декларац/.test(lower)) return '是否有产品合格证书或声明？请提供。';
+  if (/видео/.test(lower)) return '请发送所选SKU的实际使用视频。';
+  if (/маркировк|шильдик|инструкц/.test(lower)) return '请发送产品说明书和铭牌标签的实拍图。';
   if (/вес/.test(lower)) return '请提供所选SKU含包装的重量。';
   if (/габарит|размер.*упаков/.test(lower)) return '请提供单件包装尺寸。';
+  if (/состав ткан/.test(lower)) return '请确认面料成分百分比。';
+  if (/усадк/.test(lower)) return '请确认洗涤后是否会缩水。';
+  if (/размерн(?:ая|ую) сетк/.test(lower)) return '请提供尺码表。';
+  if (/возраст/.test(lower)) return '请确认产品适用的儿童年龄段。';
+  if (/съёмные детали|проглат/.test(lower)) return '产品是否有可拆卸小零件（存在误吞风险）？';
+  if (/животн/.test(lower)) return '请确认产品适合的宠物体型/体重。';
   if (/параметр/.test(lower)) return `请说明SKU参数${params ? ` ${params}` : ''}分别代表什么：伞面直径、折叠长度、数量规格还是其他参数？`;
   if (/длин/.test(lower)) return '请提供产品折叠后的长度。';
   if (/диаметр/.test(lower)) return '请提供展开后的尺寸或直径。';
   if (/материал/.test(lower)) return '请确认产品材料和关键部件材料。';
   if (/спиц/.test(lower)) return '请确认所选SKU的伞骨数量。';
-  if (/чехол|фото/.test(lower)) return '是否包含收纳套？请发送产品打开、折叠状态和包装的实拍图。';
+  if (/чехол/.test(lower)) return '是否包含收纳套？请发送产品打开、折叠状态和包装的实拍图。';
+  if (/фото/.test(lower)) return '请发送产品实拍图（含包装）。';
   if (/комплектац/.test(lower)) return '请确认所选SKU的完整配置。';
   if (/moq|минимальн/.test(lower)) return '请确认最小起订量和发货时间。';
   if (/образец/.test(lower)) return '是否可以先购买1-2件样品？';
@@ -1105,12 +1258,33 @@ export function validateDocuments(docs: Array<{ filename: string; text: string }
         if (rx.test(text)) { errors.push(`${doc.filename}: чужая категория ${word}`); text = text.split('\n').filter(l => !rx.test(l)).join('\n'); }
       }
     }
-    if (doc.filename === 'seo_draft.md') {
+    if (/seo/i.test(doc.filename)) {
       const bulletSection = text.match(/## Буллеты\n([\s\S]*?)(?:\n## |$)/)?.[1] ?? '';
       const bullets = bulletSection.match(/^\d+\.\s+/gm)?.length ?? 0;
-      if (bullets !== 5) errors.push('seo_draft.md: bullets not 5');
+      if (bullets !== 5) errors.push(`${doc.filename}: bullets not 5`);
     }
     return { ...doc, text: text.replace(/\n{3,}/g, '\n\n').trim() + '\n' };
   });
   return { ok: errors.length === 0, errors, fixedDocs };
+}
+
+const REQUIRED_ZIP_DOC_NAMES = [
+  '00_Инструкция.txt',
+  '01_Вопросы_поставщику.txt',
+  '02_ТЗ_байеру.md',
+  '03_ТЗ_карго.md',
+  '04_Чеклист_образца.md',
+  '05_SEO_черновик.md',
+];
+
+export function validateZip(docs: Array<{ filename: string; text: string }>, hasPhotosEntry: boolean): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+  const byName = new Map(docs.map(d => [d.filename, d]));
+  for (const name of REQUIRED_ZIP_DOC_NAMES) {
+    const doc = byName.get(name);
+    if (!doc) { errors.push(`missing ${name}`); continue; }
+    if (!doc.text || !doc.text.trim()) errors.push(`empty ${name}`);
+  }
+  if (!hasPhotosEntry) errors.push('missing 06_Фото_товара.zip entry (or README fallback)');
+  return { ok: errors.length === 0, errors };
 }

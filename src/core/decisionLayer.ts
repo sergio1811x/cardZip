@@ -1,5 +1,6 @@
 import type { RawProduct1688 } from '../types';
 import { cleanChineseTitle, normalizeSkuText, normalizeMixedProductText, detectPackCount, extractShoeSize, extractLetterSize, extractSkuComponents } from './cnNormalize';
+import { ensureProductProcurementProfile } from './procurementProfile';
 
 export type DecisionConfidence = 'high' | 'medium' | 'low';
 
@@ -590,69 +591,6 @@ export function buildDecisionContext(product: any) { const intelligence = getInt
 
 export function buildStatusLine(price: PriceDecision, weight: WeightDecision, _market: MarketDecision, economy: EconomyDecision): string { const readinessLike = (!price.canCalculateCost) ? '🔴 Не готово к закупке' : (!weight.canUseForCargo || price.needsSkuConfirmation) ? '🟡 Нужны данные' : economy.canShowRoi ? '🟡 Сценарий по вашей цене' : '🟡 Нужно проверить рынок'; return readinessLike; }
 
-function topQuestions(product: any, x = buildDecisionContext(product), n = 7): string[] { return buildSupplierQuestions(product, x).ru.slice(0, n); }
-
-export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: number }, _wbCategory?: any): string {
-  const x = buildDecisionContext(product);
-  const source = String(product?.platform ?? '1688').toUpperCase();
-  const supplierType = supplierTypeRu(product?.supplierType || product?.normalized1688?.supplierType || 'продавец');
-  const supplierRating = normalizeFact(product?.supplierRating ?? product?.normalized1688?.supplierRating);
-  const sold = positive(product?.normalized1688?.salesCount ?? product?.sold);
-  const moq = positive(product?.normalized1688?.moq ?? product?.moq);
-  const materials = materialsLine(x, product);
-  const colorLine = x.sku.colorOptions?.length ? `• Цвета: ${x.sku.colorOptions.slice(0, 8).join(', ')}` : null;
-  const modelLine = x.sku.sizeOptions?.length
-    ? `• Размеры/модели: ${x.sku.sizeOptions.slice(0, 10).join(', ')}`
-    : x.sku.ambiguousParams?.length
-      ? `• Параметры: ${x.sku.ambiguousParams.slice(0, 8).join(' / ')} — значение нужно уточнить`
-      : null;
-  const mainWeightText = x.weight.canUseForCargo ? x.weight.displayText.replace(/^Вес:\s*/i, '') : 'не указан';
-  const questions = topQuestions(product, x, 5).map(q => q.replace(/^\d+[.)]\s*/, ''));
-  const selectedSku = x.sku.ambiguousParams?.length ? 'выберите конкретный цвет и параметр SKU' : (x.sku.recommendedSampleSku || (x.sku.needsSelection ? 'выберите конкретный цвет/размер/модель' : 'уточнить у поставщика'));
-  const packageItems = ['вопросы поставщику', 'ТЗ байеру', 'ТЗ карго', 'чек-лист образца', 'SEO-черновик', 'фото товара'];
-  const verdict = x.price.canCalculateCost
-    ? 'Партию закупать рано. Можно запросить данные и заказать 1–2 образца.'
-    : 'Партию закупать рано. Сначала уточните цену выбранного SKU и базовые данные у поставщика.';
-  const lines = [
-    `📦 <b>${html(x.title)}</b>`,
-    '',
-    `Источник: ${html(source)}`,
-    `Поставщик: ${html([supplierType, supplierRating ? `рейтинг ${supplierRating}` : '', sold ? `заказов ${Math.round(sold).toLocaleString('ru-RU')}` : ''].filter(Boolean).join(' · '))}`,
-    '',
-    '📌 <b>Товар</b>',
-    `• Цена: ${html(displayPriceSummary(x.price.displayPriceText))}`,
-    `• Выбранный SKU: ${html(selectedSku)}`,
-    `• MOQ: ${moq ? `${Math.round(moq).toLocaleString('ru-RU')} шт.` : 'уточнить'}`,
-    `• SKU: ${html(displayMainSkuSummary(x))}`,
-    ...(colorLine ? [html(colorLine)] : []),
-    ...(modelLine ? [html(modelLine)] : []),
-    `• Материал: ${html(materials)}`,
-    `• Вес: ${html(mainWeightText)}`,
-    '',
-    `<b>${html(procurementStatusText(x))}</b>`,
-    '',
-    '⚠️ <b>Что уточнить</b>',
-    ...(questions.length ? questions.map(q => `• ${html(q)}`) : ['• цену, SKU, вес и упаковку выбранного товара']),
-    '',
-    '💸 <b>Предварительная себестоимость</b>',
-    ...buildCostSummaryLines(x).map(html),
-    '',
-    '📁 <b>Закупочный пакет готов</b>',
-    ...packageItems.map(v => `• ${html(v)}`),
-    '',
-    '🎯 <b>Вывод</b>',
-    html(verdict),
-    '',
-    'Что сделать:',
-    '1. Нажмите «💬 Вопросы поставщику».',
-    '2. Отправьте текст поставщику в чат 1688.',
-    '3. Скачайте закупочный пакет.',
-    '',
-    `📦 Осталось: ${typeof statusInfo?.creditsRemaining === 'number' ? Math.max(0, statusInfo.creditsRemaining) : 0} анализов`,
-  ];
-  return lines.join('\n');
-}
-
 function procurementStatusText(x: ReturnType<typeof buildDecisionContext>): string {
   if (!x.price.canCalculateCost) return '🔴 Статус: данных мало';
   if (!x.weight.canUseForCargo || x.price.needsSkuConfirmation) return '🟡 Статус: нужны данные поставщика';
@@ -790,9 +728,10 @@ function cnQuestionFromCheck(check: string): string {
 }
 
 export function build1688Detail(product: any): string {
+  const p = ensureProductProcurementProfile(product);
   const x = buildDecisionContext(product);
   const facts = mergeFacts(collectRawAttributes(product, 24), collectIntelFacts(product, x.intelligence, 10)).slice(0, 20);
-  const skuExamples = x.sku.skuVariantsNormalized.slice(0, 15).map(v => `• ${v.label}${v.priceYuan ? ` — ${cny(v.priceYuan)}` : ''}`);
+  const skuExamples = p.sku.normalizedExamples.slice(0, 15).map(l => `• ${l}`);
   return [
     '📦 <b>Данные товара с 1688</b>',
     '',
@@ -800,24 +739,30 @@ export function build1688Detail(product: any): string {
     html(cleanChineseTitle(product?.titleCn ?? product?.normalized1688?.titleCn ?? '') || '—'),
     '',
     '<b>Название RU:</b>',
-    html(x.title),
+    html(p.identity.titleForReport),
     '',
     '<b>Цена:</b>',
-    html(x.price.displayPriceText),
+    html(p.pricing.displayPriceText),
+    '',
+    '<b>Выбранный SKU:</b>',
+    html(p.sku.selectedSkuText || 'не определён'),
     '',
     '<b>SKU:</b>',
-    html(x.sku.skuSummary),
+    html(p.sku.skuSummary),
     ...(skuExamples.length ? skuExamples.map(html) : ['• SKU не указаны']),
+    ...(p.sku.plugStandards.length ? [`• стандарт питания/вилка: ${html(p.sku.plugStandards.join(', '))}`] : []),
     '',
     '<b>Поставщик:</b>',
-    `• название: ${html(product?.supplierName || 'не указано')}`,
-    `• тип: ${html(supplierTypeRu(product?.supplierType) || 'не указан')}`,
-    `• рейтинг: ${html(product?.supplierRating || '—')}`,
-    `• заказов: ${html(product?.sold || '—')}`,
+    `• название: ${html(p.supplier.name || 'не указано')}`,
+    `• тип: ${html(p.supplier.displayType)}`,
+    `• рейтинг: ${html(p.supplier.rating || '—')}`,
+    `• заказов: ${html(p.supplier.orders || '—')}`,
     `• MOQ: ${positive(product?.moq ?? product?.normalized1688?.moq) ? `${positive(product?.moq ?? product?.normalized1688?.moq)} шт.` : 'уточнить'}`,
     '',
     '<b>Ключевые характеристики:</b>',
-    ...(facts.length ? facts.map(f => `• ${html(f.name)}: ${html(f.value)} — ${html(f.status)}`) : ['• требуется уточнить у поставщика']),
+    `• тип товара: ${html(p.identity.categoryType || p.identity.productKind)}`,
+    `• материалы: ${html(p.identity.materials.slice(0, 3).join(', ') || 'уточнить у поставщика')}`,
+    ...(facts.length ? facts.map(f => `• ${html(f.name)}: ${html(f.value)} — ${html(f.status)}`) : []),
     '',
     '<b>Логистика:</b>',
     `• вес: ${html(x.weight.displayText.replace(/^Вес:\s*/i, ''))}`,

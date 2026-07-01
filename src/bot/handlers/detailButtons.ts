@@ -4,7 +4,7 @@ import AdmZip from 'adm-zip';
 import { supabase } from '../../db/supabase';
 import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail, buildMainMessage } from '../../core/messageBuilder';
 import { buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
-import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, ensureProductProcurementProfile } from '../../core/procurementProfile';
+import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateZip, ensureProductProcurementProfile } from '../../core/procurementProfile';
 import { zipBuilder } from '../../core/zipBuilder';
 import type { ProductWithContent } from '../../types';
 
@@ -52,19 +52,27 @@ function safeSectionErrorKeyboard(jobId: string) {
 }
 
 async function replySectionError(ctx: Context, jobId: string, action: string, error?: unknown) {
-  console.error('[ui-handler-error]', {
-    action,
+  const notFound = /:not_found$/.test(action);
+  console.error(notFound ? '[callback-analysis-not-found]' : '[ui-handler-error]', {
     userId: (ctx as any).dbUserId,
-    productId: jobId,
-    state: (ctx as any).session?.procurementStatus,
+    analysisId: jobId,
+    callbackData: (ctx.callbackQuery as any)?.data,
+    availableSessionKeys: Object.keys((ctx as any).session ?? {}),
+    action,
     error,
   });
-  const text = [
-    '⚠️ <b>Не удалось открыть раздел.</b>',
-    '',
-    'Данные анализа сохранены.',
-    'Попробуйте вернуться к отчёту или открыть пакет ещё раз.',
-  ].join('\n');
+  const text = notFound
+    ? [
+      '⚠️ <b>Не удалось открыть раздел</b>',
+      '',
+      'Анализ не найден в хранилище.',
+      'Попробуйте открыть последний отчёт или начните новый товар.',
+    ].join('\n')
+    : [
+      '⚠️ <b>Не удалось открыть раздел.</b>',
+      '',
+      'Попробуйте вернуться к отчёту или открыть пакет ещё раз.',
+    ].join('\n');
   await ctx.reply(text, { parse_mode: 'HTML', ...safeSectionErrorKeyboard(jobId) }).catch(() => {});
 }
 
@@ -388,12 +396,17 @@ export async function handleMaterialsZip(ctx: Context): Promise<void> {
   const { docs, prefix, imageUrls } = buildMaterials(job);
   const zip = new AdmZip();
   for (const doc of docs) zip.addFile(doc.filename, Buffer.from(doc.text, 'utf-8'));
+  let hasPhotosEntry = false;
   if (imageUrls?.length) {
     const imgZip = await zipBuilder.buildFromUrls(imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null);
-    if (imgZip) zip.addFile('06_Фото_товара.zip', imgZip);
-  } else {
-    zip.addFile('06_Фото_товара.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки 1688 вручную.\n', 'utf-8'));
+    if (imgZip) { zip.addFile('06_Фото_товара.zip', imgZip); hasPhotosEntry = true; }
   }
+  if (!hasPhotosEntry) {
+    zip.addFile('06_Фото_товара.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки 1688 вручную.\n', 'utf-8'));
+    hasPhotosEntry = true;
+  }
+  const zipCheck = validateZip(docs, hasPhotosEntry);
+  if (!zipCheck.ok) console.warn('[zip-validator]', zipCheck.errors.join('; '));
   await ctx.telegram.sendDocument(ctx.chat!.id, Input.fromBuffer(zip.toBuffer(), `${prefix}.zip`)).catch(() => {});
   await ctx.reply('✅ ZIP отправлен. Начните с 01_Вопросы_поставщику.txt: отправьте вопросы поставщику, затем передайте ТЗ байеру и карго.', materialsKeyboard(jobId)).catch(() => {});
 }

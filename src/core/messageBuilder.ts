@@ -1,7 +1,6 @@
 import { Markup } from 'telegraf';
 import { buildMainReportFromProfile } from './procurementProfile';
 import {
-  buildMainReport,
   build1688Detail as render1688Detail,
   buildSafeSummary as renderSafeSummary,
   buildDecisionContext,

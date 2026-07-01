@@ -1,244 +1,364 @@
-# cardZip
+# CardZip
 
-Telegram-бот для анализа товаров с китайских площадок (1688, Taobao) и подготовки материалов для Wildberries.
+Telegram-бот закупочного ассистента для товаров с 1688 / Taobao / Tmall.
+
+Пользователь отправляет ссылку на товар, а бот готовит закупочный пакет: краткий отчёт, вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист образца, SEO-черновик и фото товара.
 
 **Бот:** [@cardzip_bot](https://t.me/cardzip_bot)
 
----
+## Что делает бот
+
+```text
+ссылка 1688 → закупочный пакет
+```
+
+На выходе пользователь получает:
+
+- краткий отчёт по товару;
+- цену, SKU, MOQ, поставщика;
+- список недостающих данных;
+- вопросы поставщику;
+- ТЗ байеру;
+- ТЗ карго;
+- чек-лист образца;
+- SEO-черновик WB/Ozon;
+- фото товара;
+- ZIP-пакет.
+
+## Что бот НЕ обещает в текущем MVP
+
+CardZip сейчас не является полноценной WB-аналитикой.
+
+Не обещаем:
+
+- найти аналоги WB;
+- посчитать ROI;
+- сказать, точно брать товар или нет;
+- проверить прибыльность рынка;
+- заменить MPStats / Moneyplace / аналитику маркетплейсов.
+
+Текущий фокус — подготовка товара с китайской площадки к закупке.
 
 ## Архитектура
 
+Целевая архитектура:
+
+```text
+Telegram
+→ Vercel webhook
+→ Elim API / provider raw data
+→ NormalizedChinaProduct
+→ SKU normalizer
+→ main image preprocessing
+→ Product Intelligence AI
+→ ProductProcurementProfile
+→ deterministic builders
+→ validators
+→ Telegram report + ZIP package
 ```
-Telegram → Vercel (webhook) → Pipeline:
-                                ├── Elim API (данные товара 1688/Taobao)
-                                ├── OpenRouter (AI SEO-генерация)
-                                ├── WB Parser VPS (аналитика Wildberries)
-                                └── Supabase (БД, кэш)
+
+Главный принцип: сначала один раз понять товар через Product Intelligence, затем строить все документы от `ProductProcurementProfile`.
+
+SEO, вопросы поставщику, ТЗ байеру, ТЗ карго и чек-лист не должны заново угадывать категорию товара.
+
+## Основные файлы результата
+
+ZIP-пакет должен содержать:
+
+```text
+00_Инструкция.txt
+01_Вопросы_поставщику.txt
+02_ТЗ_байеру.md
+03_ТЗ_карго.md
+04_Чеклист_образца.md
+05_SEO_черновик.md
+06_Фото_товара.zip
 ```
 
-## Сервисы и ссылки
+## Главное меню после отчёта
 
-| Сервис | Назначение | URL | Tier |
-|--------|-----------|-----|------|
-| **Vercel** | Хостинг бота (webhook) | [vercel.com](https://vercel.com) | Hobby (бесплатно) |
-| **Supabase** | PostgreSQL — юзеры, подписки, кэш, события | [supabase.com](https://supabase.com) | Free |
-| **Upstash Redis** | Rate limiting | [upstash.com](https://upstash.com) | Free |
-| **Elim API** | Парсинг товаров 1688 / Taobao / Tmall | [elim.asia](https://elim.asia) | Free (200 req) → $8/мес |
-| **OpenRouter** | AI-генерация SEO через DeepSeek / Qwen | [openrouter.ai](https://openrouter.ai) | Pay-per-use |
-| **WB Parser (VPS)** | Парсинг Wildberries через Playwright + Chromium | VPS Jino (110 ₽/мес) | Свой сервер |
-| **Telegram Bot API** | Интерфейс бота + платежи | [core.telegram.org](https://core.telegram.org/bots/api) | Бесплатно |
+После анализа показываются только основные действия:
 
-## Стоимость инфраструктуры
+```text
+💬 Вопросы поставщику
+📁 Закупочный пакет
+📦 Данные товара
+🔄 Новый товар
+```
 
-| Статья | Цена |
-|--------|------|
-| Vercel Hobby | 0 ₽ |
-| Supabase Free | 0 ₽ |
-| Upstash Free | 0 ₽ |
-| Elim API Free (200 req) | 0 ₽ |
-| VPS для WB парсера | 110 ₽/мес |
-| OpenRouter (DeepSeek) | ~50-200 ₽/мес |
-| **Итого** | **~160-310 ₽/мес** |
+Не нужно перегружать первый уровень кнопками “себестоимость”, “риски”, “образец”, “ответ поставщика”, “дальнейший план”.
 
-## Переменные окружения (.env)
+## ProductProcurementProfile
+
+Центральная сущность анализа.
+
+Содержит:
+
+- `identity` — productKind, категория, названия, use cases, материалы;
+- `sku` — summary, selected SKU, цвета, размеры, модели, риски SKU;
+- `pricing` — отображение цены, выбранная цена, range, надёжность цены;
+- `supplier` — тип поставщика, рейтинг, заказы;
+- `procurement` — вопросы, проверки, риски, вывод;
+- `cargo` — что запросить для доставки;
+- `content` — SEO allowed/forbidden claims, идеи инфографики;
+- `dataQuality` — недостающие поля, противоречия, confidence.
+
+## Поддерживаемые productKind
+
+Минимальный набор:
+
+```text
+footwear
+clothing
+towel_kilt
+umbrella
+sleep_mask
+mini_washer
+food_warmer
+small_appliance
+passive_insect_trap
+usb_device
+kitchen_tool
+bag_accessory
+generic_product
+```
+
+Для каждого productKind нужны свои вопросы, чек-листы, риски и SEO-ограничения.
+
+## Примеры productKind-логики
+
+### Обувь
+
+Проверять:
+
+- размерную сетку;
+- длину стельки;
+- вес пары;
+- запах EVA/PU;
+- качество литья/декора;
+- упаковку.
+
+### Зонт
+
+Проверять:
+
+- длину в сложенном виде;
+- диаметр купола;
+- количество спиц;
+- механизм;
+- чехол;
+- UPF только как неподтверждённый claim.
+
+### Маска для сна
+
+Проверять:
+
+- 3D-форму;
+- затемнение;
+- ремешок;
+- запах;
+- мягкость;
+- комфорт 10–15 минут.
+
+### Подогреватель блюд / электротовары
+
+Проверять:
+
+- напряжение;
+- мощность;
+- тип вилки;
+- совместимость с РФ/ЕАЭС;
+- температуру нагрева;
+- сертификаты;
+- видео работы;
+- кабель и маркировку.
+
+## Dangerous claims
+
+Запрещено писать как факт без подтверждения:
+
+```text
+медицинский
+ортопедический
+лечебный
+антибактериальный
+сертифицированный
+гипоаллергенный
+безопасный для детей
+профессиональный
+оригинальный бренд
+100% водонепроницаемый
+UPF50+
+дезинфекция
+стерилизация
+пищевой силикон
+графеновый
+защита от перегрева
+быстрый нагрев
+равномерный нагрев
+энергосберегающий
+влагозащищённый
+```
+
+## Callback policy
+
+Все кнопки, связанные с конкретным анализом, должны содержать `analysisId`:
+
+```text
+supplier_questions:{analysisId}
+procurement_package:{analysisId}
+product_details:{analysisId}
+download_zip:{analysisId}
+new_product
+```
+
+Нельзя полагаться только на текущий session state. После успешного анализа кнопки должны открываться по сохранённому `analysisId`.
+
+## Credits policy
+
+Кредит списывается один раз — после успешной отправки результата.
+
+Не списывать кредит при:
+
+- открытии вопросов;
+- открытии пакета;
+- открытии данных товара;
+- скачивании ZIP;
+- возврате к отчёту.
+
+В отчёте должна быть одна строка:
+
+```text
+📦 Осталось: {credits} анализов
+```
+
+## Валидаторы
+
+Нужны валидаторы:
+
+- `validateProfile`;
+- `validateMainReport`;
+- `validateSupplierQuestions`;
+- `validateDocuments`;
+- `validateZip`;
+- `detectMixedCyrillicLatinInRussianText`;
+- `dedupNormalizedList`.
+
+Если validator failed:
+
+1. repair;
+2. validate again;
+3. если не прошло — удалить проблемный блок;
+4. не отправлять битые файлы.
+
+## Стек
+
+- Node.js;
+- TypeScript;
+- Telegraf;
+- Vercel serverless;
+- Supabase PostgreSQL;
+- Upstash Redis;
+- OpenRouter;
+- Fireworks fallback;
+- Elim API.
+
+## Env-переменные
 
 ```bash
-# Telegram
-TELEGRAM_BOT_TOKEN=           # @BotFather → /newbot
-TELEGRAM_WEBHOOK_SECRET=      # любая строка для верификации webhook
-TELEGRAM_ADMIN_TG_ID=         # твой tg_id (@userinfobot)
-TELEGRAM_PAYMENT_PROVIDER_TOKEN=  # @BotFather → Payments (ЮKassa/Prodamus)
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+TELEGRAM_ADMIN_TG_ID=
 
-# Supabase
-SUPABASE_URL=                 # supabase.com → Settings → API → URL
-SUPABASE_SERVICE_ROLE_KEY=    # supabase.com → Settings → API → service_role key
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
 
-# Upstash Redis
-UPSTASH_REDIS_REST_URL=       # upstash.com → Redis → REST API
+UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 
-# OpenRouter (AI)
-OPENROUTER_API_KEY=           # openrouter.ai → Keys
-CONTENT_MODEL=deepseek/deepseek-v4-flash      # основная модель
-FALLBACK_MODEL=deepseek/deepseek-v3.2         # fallback
-SECONDARY_FALLBACK_MODEL=qwen/qwen3.5-flash   # вторичный fallback
+OPENROUTER_API_KEY=
+CONTENT_MODEL=
+FALLBACK_MODEL=
+SECONDARY_FALLBACK_MODEL=
+FIREWORKS_API_KEY=
 
-# Elim API (1688/Taobao)
-ELIM_API_KEY=                 # elim.asia → Dashboard → API Keys
-
-# WB Parser (свой VPS)
-WB_PARSER_URL=                # http://your-vps-host
-WB_PARSER_SECRET=             # секрет для авторизации запросов к парсеру
+ELIM_API_KEY=
 ```
 
-## Быстрый старт
+Не хранить реальные секреты в README, CONTEXT или CLAUDE.md.
 
-### 1. Клонировать и установить
+## Локальная разработка
 
 ```bash
-git clone https://github.com/sergio1811x/cardZip.git
-cd cardZip
 npm install
 cp .env.example .env
-# Заполни .env
-```
-
-### 2. Создать таблицы в Supabase
-
-Открой **Supabase → SQL Editor**, вставь содержимое `schema.sql`, выполни.
-
-### 3. Локальная разработка
-
-```bash
 npm run dev
 ```
 
-Бот запустится в polling-режиме (без webhook).
-
-### 4. Деплой на Vercel
+Проверка типов:
 
 ```bash
-# Через GitHub: подключи репо в Vercel Dashboard
-# Build Command: (пустой)
-# Output Directory: .
-# Добавь все env-переменные
+npx tsc --noEmit
 ```
 
-### 5. Настроить Telegram webhook
+Если есть тесты:
+
+```bash
+npm test
+```
+
+## Деплой
+
+Проект деплоится на Vercel через GitHub.
+
+Webhook Telegram:
 
 ```bash
 curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<VERCEL_URL>/api/webhook&secret_token=<WEBHOOK_SECRET>"
 ```
 
-### 6. Деплой WB Parser на VPS
+## Тарифы MVP
 
-```bash
-# На VPS (Ubuntu, 1+ GB RAM):
-apt-get update && apt-get install -y git xvfb
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-nvm install 20
+Рекомендуемая стартовая сетка:
 
-cd /opt
-git clone https://github.com/sergio1811x/wb-parser-service.git
-cd wb-parser-service
-npm install   # или yarn
-npx playwright install --with-deps chromium
+| Пакет | Цена |
+|---|---:|
+| 3 анализа | бесплатно |
+| 10 анализов | 199 ₽ |
+| 30 анализов | 499 ₽ |
+| 100 анализов | 990 ₽ |
 
-# Systemd сервис:
-cat > /etc/systemd/system/wb-parser.service << 'EOF'
-[Unit]
-Description=WB Parser
-After=network.target
-[Service]
-Type=simple
-WorkingDirectory=/opt/wb-parser-service
-ExecStart=/usr/bin/xvfb-run --auto-servernum /usr/bin/node server.js
-Restart=always
-Environment=PORT=3001
-Environment=SECRET=your-secret
-[Install]
-WantedBy=multi-user.target
-EOF
+Telegram Stars можно использовать как альтернативный способ оплаты:
 
-systemctl enable wb-parser && systemctl start wb-parser
+| Пакет | Stars |
+|---|---:|
+| 10 анализов | 150⭐ |
+| 30 анализов | 300⭐ |
+| 7 дней Pro | 500⭐ |
+
+## Bulk — будущий режим
+
+Bulk не является текущим ядром MVP.
+
+Будущий сценарий:
+
+```text
+30 ссылок → bulk_summary.xlsx + общий ZIP с пакетами по товарам
 ```
 
-## Структура проекта
+Bulk нужно делать только после того, как одиночный закупочный пакет стабильно проходит валидаторы.
 
-```
-cardZip/
-├── api/
-│   └── webhook.ts              # Vercel serverless entry point
-├── src/
-│   ├── bot/
-│   │   ├── index.ts            # Telegraf — команды, кнопки, роутинг
-│   │   ├── handlers/
-│   │   │   ├── link.ts         # Главный pipeline (1688 → AI → WB → ZIP)
-│   │   │   ├── start.ts        # /start
-│   │   │   ├── upgrade.ts      # /upgrade + платежи
-│   │   │   ├── last.ts         # /last — история анализов
-│   │   │   └── admin.ts        # /admin — метрики
-│   │   └── middleware/
-│   │       ├── user.ts         # Автосоздание юзера в БД
-│   │       └── rateLimit.ts    # Redis rate limiting
-│   ├── providers/
-│   │   ├── productImporter.ts  # Elim API (1688/Taobao/Tmall)
-│   │   ├── aiContentGenerator.ts  # OpenRouter → DeepSeek/Qwen
-│   │   └── marketProvider.ts   # WB Parser VPS (Playwright)
-│   ├── core/
-│   │   ├── economicsCalc.ts    # Юнит-экономика + курс ЦБ
-│   │   ├── verdict.ts          # 🟢🟡🔴 рекомендация
-│   │   ├── cnNormalize.ts      # Нормализация китайского маркетинга
-│   │   ├── messageBuilder.ts   # Формат 3 сообщений Telegram
-│   │   ├── seoFormatter.ts     # wb_seo.txt
-│   │   └── zipBuilder.ts       # ZIP из фото в памяти
-│   ├── services/
-│   │   ├── subscriptionService.ts
-│   │   ├── analyticsService.ts
-│   │   ├── userService.ts
-│   │   └── paymentService.ts
-│   ├── db/
-│   │   ├── supabase.ts
-│   │   └── queries/            # users, subscriptions, products, events
-│   ├── lib/
-│   │   ├── redis.ts
-│   │   ├── cache.ts
-│   │   └── errors.ts
-│   ├── types/index.ts
-│   └── dev.ts                  # Локальный запуск (polling)
-├── schema.sql                  # Supabase SQL schema
-├── vercel.json
-├── package.json
-└── tsconfig.json
+## Acceptance criteria
 
-wb-parser-service/              # Отдельный репо, деплоится на VPS
-├── server.js                   # Express + Playwright
-├── Dockerfile
-└── package.json
-```
+Версия считается готовой к платному тесту, если:
 
-## Pipeline (что происходит при отправке ссылки)
-
-```
-1. Юзер кидает ссылку 1688/Taobao
-2. Бот распознаёт URL (вкл. короткие qr.1688.com)
-3. Проверка лимитов (free: 3 генерации, rate limit)
-4. Прогресс: "Шаг 1/4 — Получаю данные..."
-5. Elim API → данные товара (цена, фото, характеристики, продавец)
-6. Нормализация китайского текста (踩屎感 → облачная амортизация)
-7. Прогресс: "Шаг 2/4 — Генерирую SEO..."
-8. OpenRouter (DeepSeek) → SEO-текст, 5 буллетов, характеристики
-9. Прогресс: "Шаг 3/4 — Анализирую WB..."
-10. WB Parser VPS → поиск по фото → цены, карточки, топ-3
-11. Юнит-экономика (курс ЦБ real-time)
-12. Вердикт: 🟢 Можно тестировать / 🟡 Требует анализа / 🔴 Не рекомендовано
-13. Прогресс: "Шаг 4/4 — Собираю материалы..."
-14. ZIP с фото + wb_seo.txt (в памяти, без диска)
-15. Отправка 3 сообщений в Telegram
-16. Логирование в events таблицу
-```
-
-## Сообщения бота
-
-**Сообщение 1:** Аналитика — вердикт, данные фабрики, закупка, рынок WB, юнит-экономика
-
-**Сообщение 2:** Файлы — wb_seo.txt (название, описание, 5 буллетов, ключи, характеристики) + images.zip
-
-**Сообщение 3:** Счётчик генераций + кнопки действий
-
-## Тарифы
-
-| Тариф | Цена | Что включено |
-|-------|------|-------------|
-| Free | 0 ₽ | 3 генерации навсегда |
-| Seller | 1 490 ₽/мес | Безлимит + история /last |
-| Business | 2 990 ₽/мес | Безлимит + будущие функции |
-
-## Stop-условие
-
-Прекращай добавлять фичи при любом из:
-- MRR ≥ 10 000 ₽
-- 10 платящих пользователей
-- 30 активных пользователей за 7 дней
-
-Только маркетинг и критические баги.
+1. Кнопки `Вопросы`, `Пакет`, `Данные товара` работают по `analysisId`.
+2. Главный отчёт не содержит противоречий selected SKU.
+3. Нет `seller/factory/merchant` в пользовательском UI.
+4. Вес без данных = `не указан`.
+5. Нет двойного списания кредитов.
+6. Вопросы поставщику не дублируются.
+7. Китайский блок либо валидный, либо скрыт.
+8. SEO не содержит dangerous claims.
+9. ZIP содержит понятные файлы.
+10. Один пакет можно отправить поставщику/байеру/карго без ручной чистки.

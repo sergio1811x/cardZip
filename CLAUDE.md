@@ -1,178 +1,645 @@
-# CardZip — Telegram-бот закупочного ассистента
+# CardZip — рабочие инструкции для Claude Code
 
-## Что это
-Telegram-бот для селлеров WB. Принимает ссылку на товар с 1688/Taobao/Tmall → выдаёт закупочную карточку: экономику, риски, SEO-материалы, фото, вопросы поставщику.
+## Context management
 
-**Бот:** @cardzip_bot | **Repo:** github.com/sergio1811x/cardZip
+When starting a new task, do not scan the whole repository by default.
+First read:
+- CLAUDE.md
+- docs/AI_HANDOFF.md if it exists
+- files explicitly mentioned in the current task
 
-## Стек
-Node.js · TypeScript · Telegraf · Vercel serverless · Supabase PostgreSQL · Upstash Redis · OpenRouter (Gemini/DeepSeek/Llama) · Fireworks (fallback) · VPS text search proxy
+Before running broad searches, reading large directories, or inspecting unrelated modules, explain why it is necessary and ask for confirmation.
 
-## Архитектура: 4-step chained pipeline
+## 1. Что такое CardZip сейчас
 
-```
-Telegram → webhook (10с) → step1-elim (60с) → step2-ai (60с) → step3-market (60с) → step4-send (60с)
-```
+CardZip — Telegram-бот закупочного ассистента для товаров с 1688 / Taobao / Tmall.
 
-Каждый step — отдельная Vercel function. Chain: fetch с 4с abort + 2 retry. Ранний 200 только для URL pipeline. Callbacks/текст — `await bot.handleUpdate()` перед 200.
+Текущий продаваемый MVP:
 
-## Файловая карта
-
-### api/ — Vercel serverless functions
-| Файл | Роль |
-|------|------|
-| `webhook.ts` | Точка входа Telegram. Redis dedup. URL → step1, остальное → bot.handleUpdate |
-| `step1-elim.ts` | Парсит товар через Elim API → rawProduct → chains step2-ai |
-| `step2-ai.ts` | AI: SEO генерация + Product Understanding + Query Ladder (1 LLM вызов каждый) → chains step3 |
-| `step3-market.ts` | 4-pass WB поиск (query ladder → mining → repair → fallback) + code reranker + LLM judge batch → экономика → chains step4 |
-| `step4-send.ts` | Собирает ZIP/MD, отправляет 3 сообщения в Telegram |
-| `send-results.ts` | Legacy fallback поллер (не используется активно) |
-
-### src/bot/ — Telegraf handlers
-| Файл | Роль |
-|------|------|
-| `index.ts` | Регистрация всех команд и callback handlers |
-| `handlers/start.ts` | /start приветствие |
-| `handlers/link.ts` | Прямой обработчик ссылок (альтернатива pipeline, с прогрессом) |
-| `handlers/upgrade.ts` | /upgrade, оплата через Telegram Invoice API |
-| `handlers/last.ts` | /last — последний разбор |
-| `handlers/admin.ts` | /admin — метрики |
-| `handlers/tariffs.ts` | ⚙️ Расчёт экономики — inline редактирование через Redis state (карго, фулфилмент, налог, маржа, ДРР) |
-| `handlers/supplierQuestions.ts` | 📩 Вопросы поставщику — RU/CN из jobs |
-| `handlers/quickTariff.ts` | Inline кнопки $3/$4/$5 карго — пересчёт экономики в сообщении |
-| `handlers/rewrite.ts` | A/B рерайт SEO (короче/агрессивно/премиум) |
-| `handlers/search1688.ts` | 🔎 Найти аналог на 1688 — поисковая ссылка с CN-названием |
-| `middleware/user.ts` | Middleware: getOrCreateUser по tg_id |
-| `handlers/skuSelect.ts` | Выбор SKU перед расчётом (если 2+ вариантов с разной ценой) |
-| `handlers/supplierConfirm.ts` | 📩 Ответ поставщика — LLM извлекает вес/цену/MOQ из текста |
-| `handlers/wbLeaders.ts` | 🏆 Лидеры WB — ТОП-10 карточек по отзывам |
-| `middleware/rateLimit.ts` | Rate limiting через Redis (ссылки 1/30с, callbacks 5/10с, глобальный 10/мин) |
-
-### src/core/ — Бизнес-логика
-| Файл | Роль |
-|------|------|
-| `economicsCalc.ts` | Юнит-экономика: платформо-зависимая (1688=full, Taobao=sample, Tmall=reference). Курс ЦБ, smart defaults по категории, ДРР 15%, макс. закупочная цена, 3 бюджета |
-| `verdict.ts` | `buildConclusion()` — PlatformConclusion вместо Score. Текстовый вывод по платформе+марже+данным |
-| `messageBuilder.ts` | 3 сообщения Telegram: msg1 (анализ+экономика), msg2 (риски+бюджеты+кнопки), msg3 (лимиты) |
-| `wbFilter.ts` | IQR фильтрация, keyword matching, quality assessment, медиана/P25/P75 |
-| `wbSimilarity.ts` | Code Reranker: 4-level matching (direct_analog/similar/category_only/wrong), local vs crossborder, seller dedup |
-| `riskFlags.ts` | 11 флагов рисков: бренд, электро, дети, вес, поставщик и т.д. |
-| `seoFormatter.ts` | seo_content.md — Safe Listing режим, platform banner |
-| `orderBrief.ts` | order_brief.md — ТЗ для байера: ссылка, SKU, характеристики, бюджеты, чеклист, CN-сообщение |
-| `categoryChecklist.ts` | Категорийные чек-листы: одежда, электроника, текстиль, хрупкое |
-| `evidence.ts` | FieldEvidence — маркеры достоверности: confirmed/inferred/unknown |
-| `supplierQuestions.ts` | Fallback вопросы поставщику (если LLM не сгенерировал) |
-| `zipBuilder.ts` | ZIP в Buffer: 1_main_photo.jpg, 2_detail_1.jpg... |
-| `cnNormalize.ts` | Нормализация китайского маркетинга (踩屎感 → облачная амортизация) |
-| `progress.ts` | Прогресс-бар 🟩⬜ с процентами, 14 шагов, typing action |
-
-### src/providers/ — Внешние API
-| Файл | Роль |
-|------|------|
-| `productImporter.ts` | Elim API: парсинг 1688/Taobao/Tmall. Определение платформы, SKU median price, вес из атрибутов |
-| `aiContentGenerator.ts` | Тексты: DeepSeek→Gemini→Llama→Fireworks. Safe Listing промпт, banned claims, warnings, supplierQuestions |
-| `productUnderstanding.ts` | Поиск: Gemini→DeepSeek→Llama→Fireworks. Product Understanding + Dynamic Lexicon + Query Ladder + Search Repair Agent + LLM Judge batch |
-| `marketProvider.ts` | Legacy (не используется, поиск через VPS /search-by-text) |
-
-### src/db/ — Supabase
-| Файл | Роль |
-|------|------|
-| `supabase.ts` | Клиент Supabase |
-| `queries/users.ts` | getOrCreateUser + создаёт subscription с 3 trial кредитами |
-| `queries/subscriptions.ts` | Legacy (перенесено в subscriptionService) |
-| `queries/products.ts` | Кэш товаров |
-| `queries/jobs.ts` | Job queue: pending→elim→elim_done→ai_processing→ai_done→market_processing→done→sent |
-| `queries/events.ts` | Analytics events |
-| `queries/userSettings.ts` | Custom tariffs: Redis cache (2d TTL) → Supabase |
-
-### src/services/
-| Файл | Роль |
-|------|------|
-| `subscriptionService.ts` | credits_remaining + unlimited_until/used/limit. Кредиты складываются, is_trial авто-снимается |
-| `analyticsService.ts` | track() → events table |
-| `paymentService.ts` | Telegram Stars: 150⭐/300⭐/500⭐. Пакеты 10/30/Pro 7дн |
-| `userService.ts` | User utilities |
-
-### src/types/index.ts — Ключевые типы
-- `Platform`: '1688' | 'taobao' | 'tmall'
-- `RawProduct1688`: всё с парсера (platform, priceYuan, weightKg, skus, priceIsRange)
-- `ProductWithContent`: enriched product (seoContent, wbFiltered, economics, budgets, maxPurchasePrice, conclusion, evidence)
-- `PlatformConclusion`: {platform, icon, headline, disclaimers[]} — заменяет Score/Verdict
-- `EconomicsResult`: {platformMode, breakdown, costRub, grossProfitRub, roiPercent, isSyntheticPrice...}
-- `BudgetScenarios`: {sample, test, firstBatch} — 3 бюджета
-- `MaxPurchasePrice`: {maxYuan, currentYuan, allowed} — обратный расчёт
-- `WbFilteredResult`: {quality, medianPrice, p25/p75, relevantCount, totalFeedbacks}
-- `RiskFlags`: 11 булевых флагов
-- `UserTariffs`: {cargoPerKgUsd, fulfillmentRub, taxPercent, targetMarginPercent, drrPercent}
-- `FieldEvidence`: {field, value, confidence, source}
-
-### src/lib/ — Утилиты
-| Файл | Роль |
-|------|------|
-| `redis.ts` | Upstash Redis клиент |
-| `cache.ts` | buildCacheKey для кэша товаров |
-| `errors.ts` | AppError с userMessage |
-| `stepLock.ts` | Redis NX lock для каждого step + extendProcessingLock |
-| `stepError.ts` | Единый error handler: editMessage→ошибка, job→failed, lock→снят |
-| `jobCleanup.ts` | Автоочистка зависших jobs (120с timeout) при следующем действии юзера |
-
-## VPS (Jino) — WB Text Search Proxy
-**SSH:** `ssh -p 49349 root@50fc4ca33bd1.vps.myjino.ru`
-**Путь:** `/opt/wb-parser-service/server.js`
-**Сервис:** `systemctl restart wb-parser`
-
-Лёгкий Express (~50MB RAM). Endpoints:
-- `GET /search-by-text` — proxy к search.wb.ru с throttling 350ms и retry 3x при 429
-- `POST /search-batch` — массив запросов последовательно с throttling
-- `GET /health`
-Playwright убран. Возвращает: id, name, brand, price, rating, feedbacks, wh, time1, time2, dist, seller.
-
-## Env-переменные
-```
-TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, TELEGRAM_ADMIN_TG_ID
-SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
-OPENROUTER_API_KEY
-ELIM_API_KEY
-WB_PARSER_URL, WB_PARSER_SECRET
-CONTENT_MODEL, FALLBACK_MODEL, SECONDARY_FALLBACK_MODEL
-FIREWORKS_API_KEY
+```text
+ссылка 1688 → закупочный пакет
 ```
 
-## Монетизация
-- 3 бесплатных анализа (is_trial=true, credits_remaining=3)
-- Telegram Stars: 10 анализов 150⭐, 30 анализов 300⭐, 7 дней Pro 500⭐ (100 лимит)
-- Кредиты складываются при покупке, не сгорают
-- Безлимит: unlimited_until + unlimited_used + unlimited_limit
-- Кредит списывается в step4 после успешной отправки
+Пользователь отправляет ссылку на товар, бот должен вернуть:
 
-## Защита
-- Redis dedup: update_id (60с) + message_id (120с) + URL (120с)
-- Redis step lock: каждый step (120с) через acquireStepLock
-- Redis processing lock: 75с TTL, продлевается каждым step через extendProcessingLock
-- Rate limit: ссылки 1/30с, callbacks 5/10с, глобальный 10/мин
-- WB throttle: 350ms между запросами, retry 3x при 429
-- Автоочистка зависших jobs при следующем действии юзера (120с timeout)
-- handleStepError: при ошибке любого step → editMessage→ошибка + job→failed + lock→снят
+1. короткий закупочный отчёт;
+2. цену / SKU / MOQ / поставщика;
+3. список рисков и недостающих данных;
+4. вопросы поставщику;
+5. ТЗ байеру;
+6. ТЗ карго;
+7. чек-лист образца;
+8. SEO-черновик WB/Ozon;
+9. фото товара;
+10. ZIP с понятными файлами.
 
-## Модели LLM (роутинг)
-- Поиск/структура: Gemini Flash Lite → DeepSeek v4 Flash → Llama 4 Scout → Fireworks
-- Тексты/SEO: DeepSeek v4 Flash → Gemini → Llama → Fireworks
+## 2. Что больше НЕ является ядром продукта
 
-## Жёсткие ограничения
-- Только Telegram-бот. Никаких React, Mini Apps, CRM.
-- Все файлы в Buffer → Telegram. Никаких файлов на диске Vercel.
-- LLM запрещено придумывать характеристики, сертификаты, продажи, цены.
-- Score/GO/NO GO убраны. Вместо них — PlatformConclusion.
-- Экономика зависит от платформы: 1688=полная, Taobao=образец, Tmall=референс.
-- Экономика только по directLocalAnalogs. Cross-border и category_only не используются для ROI.
-- WB поиск: 4-pass адаптивный (query ladder L1-L5 → mining → repair agent → fallback).
+Не строить продукт вокруг WB-аналитики.
 
-## Команды разработки
+Запрещено позиционировать основной MVP как:
+
+- поиск аналогов WB;
+- расчёт ROI;
+- GO / NO GO по рынку;
+- проверка прибыльности товара;
+- замена MPStats / Moneyplace / аналитики маркетплейсов.
+
+WB/Ozon могут быть отдельным будущим модулем, но текущий MVP — это закупочный пакет по китайской ссылке.
+
+## 3. Главная проблема текущего кода
+
+Исторически каждый генератор сам заново понимал товар:
+
+```text
+raw 1688 data
+→ SKU перевод
+→ главный отчёт
+→ вопросы поставщику
+→ buyer brief
+→ cargo brief
+→ sample checklist
+→ SEO
+```
+
+Из-за этого появляются ошибки:
+
+- разные выбранные SKU в одном отчёте;
+- seller/factory остаётся на английском;
+- “медицинские сабо” в SEO;
+- “срок годности” у маски для сна;
+- “подошва” у техники;
+- дубли вопросов;
+- китайская версия ломается;
+- документы выглядят как шаблон, а не закупочный пакет.
+
+Нужно идти к архитектуре:
+
+```text
+Provider raw data
+→ NormalizedChinaProduct
+→ SKU Normalizer / SKU Translator
+→ Main image preprocessing
+→ Product Intelligence AI
+→ ProductProcurementProfile
+→ deterministic builders
+→ validators
+→ user report + ZIP package
+```
+
+Главное правило: после Product Intelligence остальные генераторы не имеют права заново угадывать товар.
+
+## 4. ProductProcurementProfile — единый источник правды
+
+Добавить/поддерживать единый объект:
+
+```ts
+export type ProductProcurementProfile = {
+  identity: {
+    productKind: string;
+    categoryType: string;
+    subCategoryType?: string;
+    titleForReport: string;
+    titleForSeo: string;
+    shortTitle: string;
+    coreObject: string;
+    formFactor?: string;
+    audience?: string;
+    gender?: string;
+    season?: string;
+    useCases: string[];
+    materials: string[];
+    visibleFeatures: string[];
+    claimedFeatures: string[];
+    unconfirmedFeatures: string[];
+  };
+
+  sku: {
+    skuSummary: string;
+    selectedSkuText: string | null;
+    selectedSkuReliable: boolean;
+    dimensions: string[];
+    colors: string[];
+    sizes: string[];
+    models: string[];
+    packageTypes: string[];
+    packCounts: number[];
+    skuRisk: 'none' | 'low' | 'medium' | 'high';
+    skuWarnings: string[];
+    normalizedExamples: Array<{
+      raw: string;
+      normalized: string;
+      priceYuan?: number | null;
+    }>;
+  };
+
+  pricing: {
+    displayPriceText: string;
+    selectedPriceYuan: number | null;
+    minPriceYuan: number | null;
+    maxPriceYuan: number | null;
+    priceSource: 'selected_sku' | 'sku_range' | 'price_range' | 'direct' | 'missing';
+    priceReliable: boolean;
+    priceWarnings: string[];
+  };
+
+  supplier: {
+    displayType: 'продавец' | 'проверенный продавец' | 'фабрика' | 'не указан';
+    rating?: number | null;
+    orders?: number | null;
+    name?: string | null;
+  };
+
+  procurement: {
+    status: 'needs_supplier_data' | 'ready_for_supplier_questions' | 'ready_for_sample' | 'data_poor';
+    verdict: string;
+    nextAction: string;
+    mustAskSupplier: string[];
+    mustCheckBeforeSample: string[];
+    mustCheckOnSample: string[];
+    redFlags: string[];
+  };
+
+  cargo: {
+    mustAsk: string[];
+    likelySensitiveCargoIssues: string[];
+  };
+
+  content: {
+    seoAllowedClaims: string[];
+    seoForbiddenClaims: string[];
+    titleWarnings: string[];
+    infographicIdeas: Array<{
+      slideTitle: string;
+      text: string;
+      visual: string;
+      warning?: string;
+    }>;
+  };
+
+  dataQuality: {
+    missingCriticalFields: string[];
+    contradictions: string[];
+    confidence: 'high' | 'medium' | 'low';
+    reason: string;
+  };
+};
+```
+
+## 5. ProductKind, которые нужно поддерживать
+
+Минимальный список:
+
+```text
+footwear
+clothing
+towel_kilt
+umbrella
+sleep_mask
+mini_washer
+food_warmer
+small_appliance
+passive_insect_trap
+usb_device
+kitchen_tool
+bag_accessory
+generic_product
+```
+
+Если productKind известен, вопросы, чек-листы, SEO, buyer brief и cargo brief должны соответствовать именно этому товару.
+
+## 6. Текущие критичные баги
+
+Исправлять в первую очередь:
+
+1. Кнопка `💬 Вопросы поставщику` иногда открывает fallback “Не удалось открыть раздел”.
+2. Callback-кнопки должны содержать `analysisId`.
+3. Handler должен искать анализ по `analysisId` в storage/database/cache, а не только в session.
+4. Кредит списывается только один раз за успешный анализ.
+5. В отчёте не должно быть двух разных строк “Осталось”.
+6. В отчёте не должно быть `Цена: Выбранный SKU: ...`.
+7. В отчёте не должно быть `seller`, `merchant`, `factory`.
+8. В отчёте не должно быть category default weight.
+9. В русских текстах не должно быть смешанных слов типа `поставщpику`.
+10. Документы не должны содержать дубли вопросов и характеристик.
+
+## 7. Callback policy
+
+Все inline-кнопки, относящиеся к конкретному анализу, должны иметь `analysisId`:
+
+```text
+supplier_questions:{analysisId}
+procurement_package:{analysisId}
+product_details:{analysisId}
+download_zip:{analysisId}
+last_report:{analysisId}
+new_product
+```
+
+Запрещено строить callback только на текущем session state.
+
+Если analysisId не найден:
+
+```text
+⚠️ Не удалось открыть раздел
+
+Анализ не найден в хранилище.
+Попробуйте открыть последний отчёт или начните новый товар.
+```
+
+Логировать:
+
+```ts
+console.error('[callback-analysis-not-found]', {
+  userId,
+  analysisId,
+  callbackData,
+  availableSessionKeys,
+});
+```
+
+## 8. Main report builder
+
+Главный отчёт строится детерминированно, не LLM.
+
+Формат:
+
+```text
+📦 {profile.identity.titleForReport}
+
+Источник: 1688
+Поставщик: {profile.supplier.displayType} · рейтинг {rating} · заказов {orders}
+
+📌 Товар
+• Цена: {profile.pricing.displayPriceText}
+• Выбранный SKU: {profile.sku.selectedSkuText || "не определён"}
+• MOQ: {moq}
+• SKU: {profile.sku.skuSummary}
+• Цвета: {profile.sku.colors}
+• Размеры/модели: {sizes/models/packageTypes}
+• Материал: {materials} — подтвердить
+• Вес: {weight || "не указан"}
+
+🟡 Статус: нужны данные поставщика
+
+⚠️ Что уточнить
+{first 5 profile.procurement.mustAskSupplier}
+
+💸 Предварительная себестоимость
+• Закупка: {priceYuan} ¥ ≈ {priceRub} ₽
+• Без карго: ~{costWithoutCargo} ₽
+• Карго: нужен вес с упаковкой
+
+📁 Закупочный пакет готов
+• вопросы поставщику
+• ТЗ байеру
+• ТЗ карго
+• чек-лист образца
+• SEO-черновик
+• фото товара
+
+🎯 Вывод
+{profile.procurement.verdict}
+
+Что сделать:
+1. Нажмите «💬 Вопросы поставщику».
+2. Отправьте текст поставщику в чат 1688.
+3. Скачайте закупочный пакет.
+
+📦 Осталось: {credits} анализов
+```
+
+## 9. Главное меню после отчёта
+
+Оставить только:
+
+```text
+💬 Вопросы поставщику
+📁 Закупочный пакет
+📦 Данные товара
+🔄 Новый товар
+```
+
+Не возвращать на первый уровень:
+
+- `🚀 Дальнейший план`;
+- `📥 Ответ поставщика`;
+- `⚖️ Указать вес`;
+- `💸 Себестоимость`;
+- `⚠️ Риски`;
+- `🧪 Образец`.
+
+## 10. Supplier questions
+
+RU-вопросы брать из `profile.procurement.mustAskSupplier`.
+
+Порядок:
+
+1. dedup;
+2. limit 8–10;
+3. форматирование RU;
+4. отдельный RU → CN translator;
+5. CN validator;
+6. если CN failed — RU-only.
+
+CN validator:
+
+- нет кириллицы;
+- нет `file://`;
+- нет вложенной нумерации;
+- количество CN вопросов = количество RU вопросов;
+- не больше 10 вопросов;
+- нет смешения языков;
+- десятичный разделитель — точка: `12.5 元`.
+
+## 11. ZIP package
+
+ZIP должен содержать:
+
+```text
+00_Инструкция.txt
+01_Вопросы_поставщику.txt
+02_ТЗ_байеру.md
+03_ТЗ_карго.md
+04_Чеклист_образца.md
+05_SEO_черновик.md
+06_Фото_товара.zip
+```
+
+ZIP должен использовать UTF-8 для имён файлов.
+
+Если UTF-8 ломается, fallback:
+
+```text
+00_Instruction.txt
+01_Voprosy_postavschiku.txt
+02_TZ_bayeru.md
+03_TZ_kargo.md
+04_Checklist_obrazca.md
+05_SEO_chernovik.md
+06_Foto_tovara.zip
+```
+
+## 12. Документы
+
+Все документы строятся шаблонами от ProductProcurementProfile.
+
+### 02_ТЗ_байеру.md
+
+Разделы:
+
+- Товар;
+- Поставщик;
+- Что подтвердить у поставщика;
+- Что проверить на образце;
+- Фото, которые нужно запросить;
+- Риски;
+- Решение.
+
+### 03_ТЗ_карго.md
+
+Разделы:
+
+- Товар;
+- Что запросить для доставки;
+- Дополнительно по этому товару;
+- Текущий статус;
+- Важно.
+
+### 04_Чеклист_образца.md
+
+Объединяет старые risk checklist + sample plan.
+
+Разделы:
+
+- До заказа образца;
+- Какой SKU взять;
+- Что проверить на образце;
+- Что измерить;
+- Какие фото сделать;
+- Красные флаги;
+- Решение после образца.
+
+### 05_SEO_черновик.md
+
+Разделы:
+
+- Название;
+- Описание;
+- Буллеты — ровно 5;
+- Характеристики;
+- Ключевые слова;
+- Что уточнить перед публикацией;
+- Нельзя писать как факт;
+- Идеи для инфографики.
+
+## 13. Dangerous claims
+
+Запрещено писать как факт без документов/подтверждения:
+
+```text
+медицинский
+ортопедический
+лечебный
+антибактериальный
+сертифицированный
+гипоаллергенный
+безопасный для детей
+профессиональный
+оригинальный бренд
+100% водонепроницаемый
+UPF50+
+дезинфекция
+стерилизация
+пищевой силикон
+графеновый
+защита от перегрева
+быстрый нагрев
+равномерный нагрев
+энергосберегающий
+влагозащищённый
+```
+
+## 14. ProductKind rules — обязательные акценты
+
+### footwear
+
+Спросить/проверить:
+
+- размерная сетка;
+- длина стельки;
+- материал верха и подошвы;
+- вес пары с упаковкой;
+- запах EVA/PU;
+- качество литья/декора;
+- реальные фото пары и упаковки.
+
+Запрещено добавлять мощность, напряжение, вилку, аккумулятор.
+
+### umbrella
+
+Спросить/проверить:
+
+- вес с упаковкой;
+- длина в сложенном виде;
+- диаметр купола;
+- количество спиц;
+- материал купола и спиц;
+- механизм: открытие или открытие+закрытие;
+- чехол;
+- UPF50+ только как заявленное/неподтверждённое.
+
+### sleep_mask
+
+Спросить/проверить:
+
+- материал лицевой и внутренней части;
+- 3D-форма;
+- затемнение;
+- ремешок;
+- запах;
+- швы;
+- комфорт 10–15 минут;
+- упаковка.
+
+Запрещено: срок годности, консистенция, подошва, мощность.
+
+### food_warmer / small_appliance
+
+Спросить/проверить:
+
+- напряжение;
+- мощность;
+- тип вилки;
+- совместимость с РФ/ЕАЭС;
+- максимальная температура нагрева;
+- режимы нагрева;
+- защита от перегрева — только если подтверждена;
+- инструкция;
+- сертификаты/декларации;
+- видео работы;
+- кабель и маркировка;
+- вес и габариты упаковки.
+
+Если SKU содержит `韩规`, `韩国`, `корейский стандарт`, `для Кореи`, это стандарт питания/тип вилки, а не цвет.
+
+## 15. Normalizers
+
+### Supplier type mapping
+
+Показывать пользователю только:
+
+```text
+seller → продавец
+merchant → проверенный продавец
+factory → фабрика
+unknown → не указан
+```
+
+### Weight
+
+Если веса нет:
+
+```text
+Вес: не указан
+Карго: нужен вес с упаковкой
+```
+
+Не писать category default weight в UI.
+
+### Price
+
+Не писать:
+
+```text
+Цена: Выбранный SKU: 98 ¥
+```
+
+Писать:
+
+```text
+Цена: 98 ¥ ≈ 1 156 ₽
+Выбранный SKU: корейский стандарт питания / вилка — 98 ¥
+```
+
+### Material
+
+Удалять дубли и опасные claims.
+
+Пример для food_warmer:
+
+```text
+Материал: силиконовая панель, нагревательный элемент/покрытие — подтвердить
+```
+
+Не писать как факт:
+
+- пищевой силикон;
+- графеновый корпус;
+- безопасный нагрев.
+
+## 16. Validators
+
+Добавить/поддерживать:
+
+- `validateProfile`;
+- `validateMainReport`;
+- `validateSupplierQuestions`;
+- `validateDocuments`;
+- `validateZip`;
+- `detectMixedCyrillicLatinInRussianText`;
+- `dedupNormalizedList`.
+
+Если validator failed:
+
+1. repair;
+2. validate again;
+3. если не прошло — удалить проблемный блок;
+4. не отправлять битые файлы.
+
+## 17. Bulk — не текущий приоритет
+
+Bulk нужен позже как режим:
+
+```text
+30 ссылок → bulk_summary.xlsx + общий ZIP с пакетами по товарам
+```
+
+Но сейчас нельзя делать bulk, пока single package не чистый.
+
+Текущий приоритет:
+
+1. callback stability;
+2. ProductProcurementProfile;
+3. deterministic builders;
+4. validators;
+5. clean ZIP.
+
+## 18. Команды разработки
+
 ```bash
-npx tsc --noEmit          # проверка типов
-git push origin main      # деплой на Vercel (авто)
-# VPS:
-systemctl restart wb-parser
-journalctl -u wb-parser -f
+npx tsc --noEmit
+npm test
+npm run lint
 ```
+
+Если команды отсутствуют, не придумывать успех. Явно писать, какая команда недоступна.
+
+## 19. Acceptance criteria
+
+Готово, если:
+
+1. Главный отчёт не содержит противоречивый selected SKU.
+2. ProductKind определяется через Product Intelligence с фото/данными.
+3. Все документы строятся от ProductProcurementProfile.
+4. Вопросы поставщику не дублируются.
+5. Китайский блок либо валидный, либо скрыт.
+6. Интерфейс не обещает RU/CN, если CN нет.
+7. SEO не содержит dangerous claims.
+8. В файлах нет чужих категорий.
+9. seller/factory переведены.
+10. Вес без данных = “не указан”.
+11. ZIP содержит 6 понятных русских файлов + фото.
+12. Один товар можно реально отправить поставщику/байеру/карго без ручной чистки.
+13. Кнопки `Вопросы`, `Пакет`, `Данные товара` открываются по `analysisId`.
+14. Кредит списывается один раз за успешный анализ.

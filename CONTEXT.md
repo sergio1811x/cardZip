@@ -1,219 +1,386 @@
-# CardZip — Контекст для продолжения разработки
+# CardZip — актуальный контекст разработки
 
-## Что это
-Telegram-бот закупочного ассистента для селлеров WB. Пользователь кидает ссылку на товар с 1688/Taobao/Tmall — бот анализирует товар, ищет аналоги на WB через адаптивный 4-pass поиск, считает платформо-зависимую экономику, генерирует SEO-карточку и ТЗ байеру.
+## 1. Текущее позиционирование
 
-**Бот:** @cardzip_bot
-**Репо бота:** https://github.com/sergio1811x/cardZip
-**Репо парсера:** https://github.com/sergio1811x/wb-parser-service
+CardZip — Telegram-бот закупочного ассистента для селлеров, байеров и помощников, которые работают с 1688 / Taobao / Tmall.
 
----
+Новый фокус:
 
-## Текущая архитектура (job queue + chained functions)
-
-```
-Пользователь → Telegram
-  ↓
-webhook (10с) → Redis dedup + rate limit + processing lock
-  → step1-elim (60с) → Elim API + кэш-проверка + SKU выбор
-  → step2-ai (60с) → SEO генерация + Product Understanding + Query Ladder
-  → step3-market (60с) → 4-pass WB поиск + code reranker + LLM judge + экономика
-  → step4-send (60с) → 3 сообщения + wb_card.md + buyer_brief.md + photos.zip
+```text
+ссылка на товар → закупочный пакет
 ```
 
-Каждый step: Redis lock (acquireStepLock) + extendProcessingLock + handleStepError при ошибке.
+Бот не должен сейчас продаваться как WB-аналитика или ROI-калькулятор. Основная ценность — быстро подготовить товар с китайской площадки к закупке.
 
-**VPS (Jino, 250₽/мес):**
-- Лёгкий Express (~50MB RAM), без Playwright
-- `GET /search-by-text` — proxy к search.wb.ru с throttle 350ms + retry 3x при 429
-- `POST /search-batch` — массив запросов последовательно
-- Российский IP для доступа к WB API
+## 2. Что получает пользователь
 
----
+По одной ссылке бот должен выдать:
 
-## Решённые проблемы
+- краткий закупочный отчёт;
+- цену, SKU, MOQ, данные поставщика;
+- риски и недостающие данные;
+- вопросы поставщику;
+- ТЗ байеру;
+- ТЗ карго;
+- чек-лист образца;
+- SEO-черновик WB/Ozon;
+- фото товара;
+- ZIP-пакет.
 
-- WB поиск: переведён с Playwright (нестабильный фото-поиск) на text search через search.wb.ru API (VPS proxy)
-- Chaining: fetch до res.json(), retry 2x с 4с timeout, Redis step locks
-- Прогресс: эмодзи-бар 🟩⬜ с процентами, 14 шагов, typing action
-- Дубли: Redis dedup по update_id + message_id + URL + step locks
-- Таймауты: handleStepError на каждом step, auto-cleanup зависших jobs (120с)
-- Cross-border: фильтрация по time1 из WB API, отдельная корзина
+## 3. Что убрано из ядра MVP
 
----
+Не строим основной продукт вокруг:
 
-## Сервисы и доступы
+- поиска аналогов WB;
+- расчёта ROI;
+- GO / NO GO по рынку;
+- прямой оценки прибыльности;
+- “экономики WB”.
 
-| Сервис | Назначение | URL/Хост |
-|--------|-----------|----------|
-| Vercel | Хостинг бота (Hobby, бесплатно) | card-zip.vercel.app |
-| Supabase | PostgreSQL — users, subscriptions, products, events, jobs | imglpbeldqajqxxcffye.supabase.co |
-| Upstash Redis | Rate limiting | holy-camel-98107.upstash.io |
-| Elim API | Парсинг 1688/Taobao (200 free req) | openapi.elim.asia |
-| OpenRouter | AI: Gemini/DeepSeek/Llama | openrouter.ai |
-| Fireworks | AI fallback: DeepSeek v4 Flash | api.fireworks.ai |
-| VPS Jino | WB text search proxy | 50fc4ca33bd1.vps.myjino.ru:3001 |
-| Telegram | Bot API | @cardzip_bot |
+Причина: WB-модуль давал нестабильность, 429, сложный matching и завышенное обещание. Сейчас лучше продать более узкую, но чистую пользу: закупочный пакет.
 
----
+## 4. Историческая архитектура
 
-## VPS (Jino)
+В старой версии pipeline был:
 
-**SSH:** `ssh -p 49349 root@50fc4ca33bd1.vps.myjino.ru`
-**OS:** Ubuntu 22.04, Node.js 22.17.0
-**RAM:** 1.5 GB, **Disk:** 10 GB NVMe
-
-**Сервисы systemd:**
-- `wb-parser` — HTTP сервер (server.js) на порту 3001
-- `wb-worker` — НЕ ИСПОЛЬЗУЕТСЯ (выключен), был job worker
-
-**Структура:**
-```
-/opt/wb-parser-service/
-├── server.js      # Express text-only. /search-by-text, /search-batch, /health
-├── package.json
-└── node_modules/
+```text
+Telegram
+→ webhook
+→ step1-elim
+→ step2-ai
+→ step3-market
+→ step4-send
 ```
 
-**Playwright убран.** Только HTTP proxy к search.wb.ru с throttle и retry.
+Где:
 
----
+- `step1-elim` — Elim API, raw data;
+- `step2-ai` — SEO + Product Understanding + Query Ladder;
+- `step3-market` — WB поиск + reranker + экономика;
+- `step4-send` — Telegram-отчёты + файлы.
 
-## Модели AI
+Эта архитектура была сделана под WB-аналитику. Для нового MVP её нужно упростить и перестроить вокруг ProductProcurementProfile.
 
-**Поиск/структура:** Gemini Flash Lite → DeepSeek v4 Flash → Llama 4 Scout → Fireworks
-**Тексты/SEO:** DeepSeek v4 Flash → Gemini → Llama → Fireworks
+## 5. Целевая архитектура
 
-Вызовы за 1 анализ: 2-5 (SEO + ProductUnderstanding + expand + repair + judge batch).
+Правильный pipeline:
 
----
-
-## База данных (Supabase)
-
-**Таблицы:**
-- `users` — tg_id, created_at, custom_tariffs (jsonb)
-- `subscriptions` — user_id, credits_remaining, is_trial, unlimited_until/used/limit
-- `products` — кэш товаров (1688_id, cache_key, data_json)
-- `events` — аналитика (event_name, payload)
-- `jobs` — очередь: pending→elim→elim_done→sku_pending→ai_processing→ai_done→market_processing→done→sent/failed, updated_at
-
-**Кредиты:** credits_remaining в subscriptions. При регистрации = 3 (is_trial=true). Покупка складывает кредиты. Кредит списывается в step4 после успешной отправки.
-
----
-
-## Структура проекта (бот)
-
-```
-cardZip/
-├── api/
-│   ├── webhook.ts        # Telegram webhook → создаёт job → step1
-│   ├── step1-elim.ts     # Elim API + кэш + SKU выбор → step2-ai
-│   ├── step2-ai.ts       # SEO + Product Understanding + Query Ladder → step3-market
-│   ├── step3-market.ts   # 4-pass WB поиск + reranker + LLM judge → step4-send
-│   ├── step4-send.ts     # 3 сообщения + файлы → Telegram
-│   └── send-results.ts   # Legacy (не используется)
-├── src/
-│   ├── bot/              # Telegraf — /start, /upgrade, /last, /admin, /tariffs + callbacks
-│   ├── providers/
-│   │   ├── productImporter.ts      # Elim API + URL parsing + SKU median price
-│   │   ├── aiContentGenerator.ts   # SEO: DeepSeek→Gemini→Llama→Fireworks
-│   │   ├── productUnderstanding.ts # Поиск: analyzeProduct + queryLadder + repairSearch + judgeBatch
-│   │   └── marketProvider.ts       # Legacy (не используется)
-│   ├── core/
-│   │   ├── economicsCalc.ts    # Платформо-зависимая экономика + макс. цена + 3 бюджета
-│   │   ├── verdict.ts          # PlatformConclusion (не Score)
-│   │   ├── wbSimilarity.ts     # Code Reranker: direct/similar/category/wrong + local/crossborder
-│   │   ├── wbFilter.ts         # IQR фильтрация, медиана/P25/P75
-│   │   ├── messageBuilder.ts   # 3 сообщения: msg1(анализ) + msg2(риски+бюджеты) + msg3(лимиты)
-│   │   ├── riskFlags.ts        # 11 флагов рисков
-│   │   ├── seoFormatter.ts     # wb_card.md — Safe Listing
-│   │   ├── orderBrief.ts       # buyer_brief.md — ТЗ байеру
-│   │   ├── progress.ts         # 🟩⬜ прогресс-бар с %
-│   │   ├── categoryChecklist.ts # Чек-листы по категориям
-│   │   ├── evidence.ts         # Маркеры достоверности
-│   │   ├── supplierQuestions.ts # Fallback вопросы поставщику
-│   │   ├── zipBuilder.ts       # ZIP: 1_main_photo.jpg, 2_detail_1.jpg
-│   │   └── cnNormalize.ts      # Нормализация китайского маркетинга
-│   ├── services/               # subscription, analytics, payment
-│   ├── db/queries/             # users, subscriptions, products, events, jobs, userSettings
-│   ├── lib/                    # redis, cache, errors, stepLock, stepError, jobCleanup
-│   └── types/index.ts
-├── vercel.json
-└── package.json
+```text
+Provider raw data
+→ NormalizedChinaProduct
+→ SKU Normalizer / SKU Translator
+→ Main image preprocessing
+→ Product Intelligence AI
+→ ProductProcurementProfile
+→ deterministic builders
+→ validators
+→ user report + ZIP package
 ```
 
----
+Product Intelligence — единственный слой, который “понимает” товар.
 
-## Env-переменные (Vercel)
+Все остальные блоки получают готовый профиль и не угадывают категорию заново.
 
+## 6. Главный объект
+
+`ProductProcurementProfile` должен стать центральной сущностью анализа.
+
+Он хранит:
+
+- productKind;
+- categoryType;
+- titleForReport;
+- titleForSeo;
+- skuSummary;
+- selectedSku;
+- price display;
+- supplier display type;
+- mustAskSupplier;
+- mustCheckBeforeSample;
+- mustCheckOnSample;
+- cargo questions;
+- SEO allowed/forbidden claims;
+- red flags;
+- data quality.
+
+## 7. Текущий UI после отчёта
+
+Оставить только 4 кнопки:
+
+```text
+💬 Вопросы поставщику
+📁 Закупочный пакет
+📦 Данные товара
+🔄 Новый товар
 ```
-TELEGRAM_BOT_TOKEN
-TELEGRAM_WEBHOOK_SECRET=cardzip_0f7f1568-d522-4596-9916-3d62d891f646
-TELEGRAM_ADMIN_TG_ID=8111756059
-SUPABASE_URL=https://imglpbeldqajqxxcffye.supabase.co
-SUPABASE_SERVICE_ROLE_KEY
-UPSTASH_REDIS_REST_URL
-UPSTASH_REDIS_REST_TOKEN
-OPENROUTER_API_KEY
-ELIM_API_KEY
-WB_PARSER_URL=http://50fc4ca33bd1.vps.myjino.ru
-WB_PARSER_SECRET=cardzip-wb-2024
-CONTENT_MODEL=deepseek/deepseek-v4-flash
-FALLBACK_MODEL=google/gemini-2.5-flash-lite-preview-09-2025
-SECONDARY_FALLBACK_MODEL=meta-llama/llama-4-scout
-FIREWORKS_API_KEY
+
+Не возвращать на первый уровень:
+
+- дальнейший план;
+- ответ поставщика;
+- указать вес;
+- себестоимость;
+- риски;
+- образец.
+
+## 8. Текущие критичные проблемы
+
+### 8.1. Callback bug
+
+Главная кнопка `💬 Вопросы поставщику` иногда показывает:
+
+```text
+⚠️ Не удалось открыть раздел.
 ```
 
----
+Вероятная причина: callback не содержит `analysisId`, либо handler ищет товар только в session.
 
-## Что сделано
+Нужно:
 
-- [x] 4-step chained pipeline с Redis locks и error handling
-- [x] Парсинг 1688/Taobao/Tmall через Elim API + SKU выбор
-- [x] LLM Product Understanding + Dynamic Lexicon + Query Ladder
-- [x] 4-pass адаптивный WB поиск (ladder → mining → repair → fallback)
-- [x] Code Reranker: direct_analog / similar / category_only / wrong
-- [x] Cross-border фильтрация по time1 из WB API
-- [x] LLM Judge batch для borderline кандидатов
-- [x] Платформо-зависимая экономика (1688=full, Taobao=sample, Tmall=reference)
-- [x] 3 сценария P25/медиана/P75 + макс. закупочная цена + 3 бюджета
-- [x] Safe Listing SEO промпт + Safe riskFlags
-- [x] Telegram Stars оплата: 150⭐/300⭐/500⭐
-- [x] credits_remaining + is_trial + unlimited_until
-- [x] Прогресс-бар 🟩⬜ + typing action
-- [x] Redis dedup + rate limits + processing lock + step locks
-- [x] handleStepError + jobCleanup (120с timeout)
-- [x] Подтверждение от поставщика (extractSupplierData)
-- [x] ТЗ байеру (buyer_brief.md) + SEO карточка (wb_card.md)
-- [x] Кэширование товаров в Supabase
+```text
+supplier_questions:{analysisId}
+procurement_package:{analysisId}
+product_details:{analysisId}
+```
 
-## Не сделано
+и поиск анализа через storage/database/cache.
 
-- [ ] Поиск по фото (убран, только text search)
-- [ ] Batch import нескольких ссылок
-- [ ] Сравнение поставщиков
-- [ ] История поисковых паттернов (самообучение)
-- [ ] Embeddings для товаров
+### 8.2. Двойной счётчик кредитов
 
----
+Иногда в отчёте появляются две строки остатка. Кредит должен списываться один раз — после успешного анализа.
 
-## Стоимость инфраструктуры
+### 8.3. Generic questions
 
-| Статья | Цена |
-|--------|------|
-| Vercel Hobby | 0 ₽ |
-| Supabase Free | 0 ₽ |
-| Upstash Free | 0 ₽ |
-| Elim API Free (200 req) | 0 ₽ |
-| VPS Jino | 250 ₽/мес |
-| OpenRouter (Gemini+DeepSeek) | ~100-300 ₽/мес |
-| Fireworks (fallback) | ~50 ₽/мес |
-| **Итого** | **~400-600 ₽/мес** |
+Вопросы часто слишком одинаковые для разных товаров. Нужно productKind-specific поведение.
 
-## Приоритеты
+### 8.4. Дубли
 
-1. **Стабильность** — прогнать 20 товаров, починить все падения
-2. **Качество WB поиска** — улучшать адаптивный поиск и reranker
-3. **Первые платящие** — маркетинг, первые посты
-4. **Обратная связь** — кнопка "аналоги релевантны / нерелевантны"
-5. **История паттернов** — самообучение из успешных поисков
+Дубли остаются в вопросах, buyer brief, cargo brief, sample checklist и SEO-характеристиках.
+
+### 8.5. Dangerous claims
+
+SEO иногда пишет опасные слова без подтверждения: медицинский, пищевой силикон, графеновый, UPF50+, защита от перегрева и т.д.
+
+### 8.6. SKU mistakes
+
+Пример: для электротовара `Корейский стандарт для Кореи` должен быть стандартом питания/вилки, а не цветом.
+
+## 9. ProductKind rules — приоритетные категории
+
+### footwear
+
+Обувь, сабо, тапочки, шлёпанцы.
+
+Обязательно:
+
+- размерная сетка;
+- длина стельки;
+- материал верха и подошвы;
+- вес пары с упаковкой;
+- запах EVA/PU;
+- качество литья/декора;
+- упаковка.
+
+### umbrella
+
+Зонт.
+
+Обязательно:
+
+- длина в сложенном виде;
+- диаметр купола;
+- количество спиц;
+- материал купола и спиц;
+- механизм;
+- чехол;
+- UPF только как неподтверждённый claim.
+
+### sleep_mask
+
+Маска для сна.
+
+Обязательно:
+
+- материал;
+- 3D-форма;
+- затемнение;
+- ремешок;
+- запах;
+- швы;
+- комфорт.
+
+### food_warmer / small_appliance
+
+Подогреватель блюд, бытовая техника, электротовары.
+
+Обязательно:
+
+- напряжение;
+- мощность;
+- тип вилки;
+- совместимость с РФ/ЕАЭС;
+- температура нагрева;
+- режимы;
+- инструкция;
+- сертификаты;
+- видео работы;
+- кабель и маркировка;
+- вес и упаковка.
+
+## 10. ZIP-пакет
+
+Файлы должны быть понятными русскому пользователю:
+
+```text
+00_Инструкция.txt
+01_Вопросы_поставщику.txt
+02_ТЗ_байеру.md
+03_ТЗ_карго.md
+04_Чеклист_образца.md
+05_SEO_черновик.md
+06_Фото_товара.zip
+```
+
+Если русские имена ломаются в ZIP, использовать транслит fallback.
+
+## 11. Экран “Закупочный пакет”
+
+Текст:
+
+```text
+📁 Закупочный пакет готов
+
+Я собрал документы, которые можно передать поставщику, байеру и карго.
+
+Что внутри:
+
+💬 01_Вопросы_поставщику.txt
+Текст для чата 1688: цена, SKU, вес, упаковка, фото и важные вопросы по товару.
+
+📄 02_ТЗ_байеру.md
+Что закупаем, какой SKU выбран, что проверить перед заказом.
+
+🚚 03_ТЗ_карго.md
+Что запросить для расчёта доставки: вес, габариты, короб, ограничения.
+
+🧪 04_Чеклист_образца.md
+Что проверить на образце перед партией.
+
+📝 05_SEO_черновик.md
+Название, описание, характеристики и идеи инфографики.
+
+📷 06_Фото_товара.zip
+Фото из карточки 1688.
+
+Что сделать сейчас:
+1. Откройте «Вопросы поставщику».
+2. Отправьте текст в чат 1688.
+3. После ответа используйте ТЗ байеру и карго.
+```
+
+Кнопки:
+
+```text
+💬 Вопросы поставщику
+⬇️ Скачать ZIP
+📦 Данные товара
+🏠 К отчёту
+```
+
+## 12. Тарифы на текущий MVP
+
+Рекомендуемая стартовая сетка:
+
+```text
+3 анализа бесплатно
+10 анализов — 199 ₽
+30 анализов — 499 ₽
+100 анализов — 990 ₽
+```
+
+Telegram Stars можно оставить:
+
+```text
+10 анализов — 150⭐
+30 анализов — 300⭐
+7 дней Pro — 500⭐
+```
+
+Bulk пока не основной тариф.
+
+## 13. Bulk — будущий сценарий
+
+Bulk нужен для байеров позже:
+
+```text
+30 ссылок → bulk_summary.xlsx + ZIP-пакеты по товарам
+```
+
+Но bulk нельзя запускать широко, пока один товар не проходит acceptance criteria без ручной чистки.
+
+Технически bulk должен быть:
+
+- async;
+- worker pool;
+- concurrency limit;
+- partial success;
+- retry;
+- final artifacts.
+
+## 14. Приоритеты разработки
+
+Текущий порядок:
+
+1. Починить callback `analysisId`.
+2. Починить списание кредитов.
+3. Добавить/закрепить ProductProcurementProfile.
+4. Перестроить builders на profile.
+5. Добавить productKind rules.
+6. Добавить общий dedup.
+7. Усилить validators.
+8. Почистить ZIP и русские имена файлов.
+9. Прогнать 20 товаров.
+10. Только потом думать про bulk.
+
+## 15. Acceptance criteria текущей версии
+
+Готово, если:
+
+1. `💬 Вопросы поставщику` открывается после каждого отчёта.
+2. `📁 Закупочный пакет` открывается после каждого отчёта.
+3. `📦 Данные товара` открывается после каждого отчёта.
+4. Главный отчёт не содержит `Цена: Выбранный SKU`.
+5. Нет `seller/factory/merchant` в UI.
+6. Вес без данных = `не указан`.
+7. Нет дублирующегося остатка анализов.
+8. Вопросы поставщику специфичны под productKind.
+9. В документах нет дублей.
+10. SEO не содержит dangerous claims.
+11. ZIP имеет понятные имена файлов.
+12. Пакет можно отправить поставщику/байеру/карго без ручной чистки.
+
+## 16. Инфраструктура
+
+Стек:
+
+- Node.js;
+- TypeScript;
+- Telegraf;
+- Vercel serverless;
+- Supabase PostgreSQL;
+- Upstash Redis;
+- OpenRouter;
+- Fireworks fallback;
+- Elim API.
+
+WB parser / VPS может оставаться в проекте, но для текущего MVP не должен быть обязательным ядром.
+
+## 17. Команды
+
+```bash
+npx tsc --noEmit
+npm test
+npm run lint
+```
+
+Если команды отсутствуют — добавить или явно не использовать в отчёте о выполнении.

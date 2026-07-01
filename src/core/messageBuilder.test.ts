@@ -75,16 +75,16 @@ describe('buildMainMessage snapshot test', () => {
     expect(text).not.toMatch(/undefined/);
   });
 
-  it('shows tier range in header for discount tier product', () => {
+  it('shows selected price in header for a priced product', () => {
     const product = makeProduct({ priceYuan: 26 });
     const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
-    expect(text).toMatch(/26.*28/);
+    expect(text).toMatch(/26/);
   });
 
-  it('shows — for price when no prices at all', () => {
+  it('asks to clarify price when no prices at all', () => {
     const product = makeProduct({ priceYuan: 0, priceRange: undefined, skus: undefined });
     const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
-    expect(text).toContain('Цена: —');
+    expect(text).toContain('Цена: нужно уточнить');
   });
 });
 
