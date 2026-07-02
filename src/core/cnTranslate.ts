@@ -20,8 +20,8 @@ export function hasChinese(text: string): boolean {
 }
 
 const DEFAULT_SKU_TRANSLATOR_MODELS = [
+  'openai/gpt-5-mini',
   'google/gemini-2.5-flash-lite',
-  'deepseek/deepseek-v4-flash',
   'stepfun/step-3.7-flash',
 ];
 

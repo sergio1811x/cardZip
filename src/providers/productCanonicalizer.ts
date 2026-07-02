@@ -59,7 +59,7 @@ type CanonicalizerModelResult = Partial<ProductContext> & {
 };
 
 const DEFAULT_MULTIMODAL_MODELS = [
-  "minimax/minimax-m3",
+  "openai/gpt-5-mini",
   "google/gemini-2.5-flash-lite",
   "stepfun/step-3.7-flash",
 ];
