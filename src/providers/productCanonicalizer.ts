@@ -74,7 +74,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_TIMEOUT_MS = 25_000;
 const DEFAULT_IMAGE_TIMEOUT_MS = 7_000;
 const DEFAULT_MAX_IMAGE_BYTES = 1_200_000;
-const DEFAULT_MAX_TOKENS = 3500;
+const DEFAULT_MAX_TOKENS = 5500;
 const DEFAULT_TEMPERATURE = 0.15;
 
 const CATEGORY_TYPES = [
@@ -123,6 +123,13 @@ function getNumberEnv(name: string, fallback: number): number {
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+
+function record(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, any>)
+    : {};
 }
 
 function safeString(value: unknown, fallback = ""): string {
@@ -365,6 +372,7 @@ function buildFallbackContext(raw: RawProductForCanonicalizer): ProductContext {
       productType: raw.titleRu || raw.titleEn || raw.titleCn,
       coreObject: raw.titleRu || raw.titleEn || raw.titleCn,
       categoryType: "other",
+      domainKind: "unknown_product",
       useCases: [],
       notThis: [],
       audience: "",
@@ -538,18 +546,21 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
   return lines.join("\n");
 }
 
-const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
+const CANONICALIZER_PROMPT = `CardZip Product Canonicalizer.
 
-Роль: эксперт по товарам 1688/Taobao/Tmall. Цель — правильно опознать товар по фото + названию + характеристикам + SKU и собрать единый ProductContext/ProductProcurementProfile для закупочного пакета: отчёт, SKU, вопросы, SEO, байер/карго, риски. Остальные генераторы будут строиться только от этого профиля и не должны заново угадывать товар.
+Роль: старший закупщик + product intelligence для 1688/Taobao/Tmall. Цель — за один multimodal-запрос понять реальный тип товара по фото + названию + характеристикам + SKU и собрать НЕ пресный, а товарно-специфичный профиль для закупочного пакета: Telegram-отчёт, вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист образца и безопасный SEO-черновик.
+
+Главное: товар может быть любым. Не опирайся на фиксированный список категорий. Сначала пойми домен товара и профессиональные параметры именно этой ниши, затем сформируй правила закупки под этот домен.
 
 Верни СТРОГО JSON без markdown:
 {
   "identity": {
-    "productType": "productKind: footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product",
-    "coreObject": "базовый объект без маркетинга",
+    "productType": "точный тип товара по-русски, без маркетинга",
+    "coreObject": "базовый объект без рекламных слов",
     "categoryType": "shoes|clothes|electronics|home|beauty|accessory|kitchen|fishing|tools|other",
-    "useCases": ["сценарий"],
-    "notThis": ["чем товар НЕ является"],
+    "domainKind": "свободный snake_case домен товара, не enum; например смысловой домен, который ты вывел из данных",
+    "useCases": ["реальные сценарии применения"],
+    "notThis": ["чем товар НЕ является, если есть риск путаницы"],
     "audience": "мужской|женский|унисекс|детский|неизвестно",
     "season": "лето|зима|демисезон|всесезон|не применимо|неизвестно",
     "gender": "мужской|женский|унисекс|детский|неизвестно"
@@ -558,13 +569,13 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
     "titleCn": "CN название без мусора",
     "cleanRu": "чистое русское название",
     "shortRu": "2-5 слов",
-    "wbTitleDraft": "черновое название карточки маркетплейса без рискованных claims"
+    "wbTitleDraft": "черновое название маркетплейса без неподтверждённых claims"
   },
-  "facts": {"Материал":"переведённое значение"},
+  "facts": {"параметр":"переведённое значение + статус, если нужно подтвердить"},
   "sku": {
     "hasMultipleSku": true,
     "skuCount": 0,
-    "knownOptions": ["цвет: ...", "размер: ...", "комплектация: ..."],
+    "knownOptions": ["модель/версия/цвет/размер/комплектация в терминах домена"],
     "needsSelection": true
   },
   "price": {
@@ -575,7 +586,7 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
     "needsConfirmation": true
   },
   "conflicts": [{"field":"...","problem":"...","severity":"low|medium|high","action":"..."}],
-  "missingCritical": ["что уточнить"],
+  "missingCritical": ["что мешает закупке/карго/SEO"],
   "wbSearch": {
     "coreQuery": "1-4 слова",
     "queryLadder": ["точный", "синоним", "шире"],
@@ -585,19 +596,20 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
     "rejectRules": []
   },
   "seoPolicy": {
-    "allowedClaims": ["безопасные утверждения"],
-    "forbiddenClaims": ["что нельзя писать как факт"]
+    "allowedClaims": ["только безопасные утверждения из данных/фото"],
+    "forbiddenClaims": ["что нельзя писать как факт без документов/образца"]
   },
   "supplierQuestions": {
-    "ru": ["1. конкретный вопрос"],
-    "cn": ["您好，我想采购这个产品，请问：", "1. 具体问题"]
+    "ru": ["конкретный вопрос поставщику по этому товару"],
+    "cn": []
   },
-  "riskTags": ["короткий риск"],
+  "riskTags": ["только реальные бизнес-риски; не теги категории"],
   "dataQuality": {"score": 1, "status": "reliable|working_hypothesis|draft", "explanation": "..."},
   "productKindClassifier": {
-    "visionKind": "productKind или null",
-    "textKind": "productKind или null",
-    "finalKind": "productKind",
+    "visionKind": "видимый тип товара или null",
+    "textKind": "тип по названию/SKU/атрибутам или null",
+    "finalKind": "лучший тип товара",
+    "domainKind": "свободный snake_case домен товара",
     "confidence": 0.0,
     "visualEvidence": ["что видно на фото"],
     "textEvidence": ["что подтверждено названием/SKU/атрибутами"],
@@ -605,28 +617,44 @@ const CANONICALIZER_PROMPT = `CardZip 2.0 Product Canonicalizer.
   },
   "procurementProfile": {
     "identity": {
-      "productKind": "footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product",
+      "productKind": "свободный домен товара, не enum",
+      "domainKind": "тот же домен snake_case",
       "categoryType": "...", "subCategoryType": "...", "titleForReport": "...", "titleForSeo": "...", "shortTitle": "...", "coreObject": "...", "formFactor": "...", "audience": "...", "gender": "...", "season": "...",
       "useCases": [], "materials": [], "visibleFeatures": [], "claimedFeatures": [], "unconfirmedFeatures": []
     },
-    "procurement": {"mustAskSupplier": ["7-10 конкретных вопросов RU без дублей"], "mustCheckBeforeSample": [], "mustCheckOnSample": [], "redFlags": []},
+    "domainRules": {
+      "buyerMustCheck": ["7-10 пунктов, которые байер/селлер должен спросить или подтвердить именно для этого типа товара"],
+      "sampleMustCheck": ["8-12 проверок образца именно для этого типа товара"],
+      "cargoMustAsk": ["6-10 вопросов карго/поставщику по упаковке, весу, ограничениям и специфике перевозки"],
+      "seoAllowedClaims": ["что можно писать только если это видно/дано/подтверждено"],
+      "seoForbiddenClaims": ["что нельзя писать без документов/теста/сертификата"],
+      "redFlags": ["реальные закупочные красные флаги, не теги категории"],
+      "verdictTemplate": "вывод закупщика: можно ли идти к образцу, что сначала подтвердить, почему партию рано/можно",
+      "forbiddenOtherCategoryTerms": ["слова/темы из чужих категорий, которые нельзя допускать в документах"],
+      "confidence": "high|medium|low",
+      "evidence": ["почему выбраны именно эти правила"]
+    },
+    "procurement": {"mustAskSupplier": [], "mustCheckBeforeSample": [], "mustCheckOnSample": [], "redFlags": []},
     "cargo": {"mustAsk": [], "likelySensitiveCargoIssues": []},
     "content": {"seoAllowedClaims": [], "seoForbiddenClaims": [], "infographicIdeas": []}
   }
 }
 
-Правила:
-- Переводи смысл, не транслитерируй. Русские поля — без китайских слов.
-- Сохраняй максимум полезных атрибутов в facts, но помечай сомнительное: “заявлено поставщиком / подтвердить”.
-- Если атрибут замаплен неверно (“цвет: противоскользящий”), занеси в conflicts и не выводи как факт.
-- SKU раскрывай как цвет × размер × модель/комплектация; распознавай pack-count, молнию, утяжку, манжету, размерные примечания.
+Правила вывода:
+- Не используй product-specific hardcode. Не подставляй шаблоны из известных товаров. Выводи domainRules из текущего фото, названия, SKU, характеристик и атрибутов.
+- Если домен понятен, domainRules должны быть специфичными. Не заполняй их универсальными фразами вроде “уточнить характеристики”, “проверить качество”, “электроника”, “USB устройство”. У каждого пункта должен быть параметр, проверка, документ, совместимость, комплектность или измерение, относящиеся к данному товару.
+- В buyerMustCheck обязательно включи: цену выбранного SKU, вес с упаковкой, габариты упаковки, комплектацию, реальные фото/видео, документы/сертификаты если для домена есть риск, и специфичные параметры товара. Но формулируй это не общо, а в терминах домена.
+- В sampleMustCheck включай действия, которые реально делают с образцом: измерить, включить, примерить, сканировать/резать/мыть/нагревать/открывать/закрывать/тянуть/собирать — в зависимости от товара.
+- В cargoMustAsk включай упаковку, вес/габариты, короб, ограничения перевозки, батареи/жидкости/магниты/стекло/электронику/острые части только если это релевантно конкретному товару.
+- SKU переводи смыслово в терминах домена. Не переводи буквально технические стандарты, коды, модели, размеры, интерфейсы и аббревиатуры; сохраняй их как в исходнике. Если значение SKU похоже на модель/версию/комплектацию — называй это моделью/версией/комплектацией, а не “параметром SKU”.
+- Не включай marketing/quality слова в selected SKU как будто это технический параметр. Если слово означает уровень/позиционирование продавца, вынеси его в unconfirmedFeatures или redFlags, но не в имя выбранного SKU.
+- Не добавляй возможности, которых нет в выбранном SKU. Если SKU проводной — не пиши про беспроводное соединение/аккумулятор/Bluetooth. Если SKU без батареи — не пиши про аккумулятор. Если SKU без размера — не придумывай размер.
 - Фото используй обязательно, если оно передано: сначала определи видимый тип товара, форму, материал/текстуру, комплектацию, упаковку, видимые маркировки и опасные claims. Если передано selected_sku_image — оно важнее main_product_image. Не извлекай с фото цену, вес, MOQ, остатки или SKU. Цена, MOQ, supplier и selected SKU берутся только из provider/API данных.
-- selectedSkuName/selectedSkuId/selectedSkuPriceYuan являются обязательным контекстом: не противоречь им. Если selected SKU ненадёжен или конфликтует, укажи это в dataQuality/contradictions, но не придумывай другой SKU.
-- productKindClassifier: сначала классифицируй товар по фото, потом сверяй с названием/SKU/атрибутами, затем выведи finalKind и confidence. Если фото и текст конфликтуют — не выбирай наугад: снизь confidence, опиши disagreement и сделай документы осторожными.
-- SupplierQuestions: 7-10 вопросов по выбранному SKU, весу, упаковке, комплектации, фото, материалам, документам и доказательствам claims. Вопросы должны быть источником для profile.procurement.mustAskSupplier; не дублируй вопросы.
-- “медицинские сабо/одежда для медработников” можно как тип товара; лечебный эффект — нельзя как факт.
-- Для обуви не спрашивай мощность/220V/аккумулятор/рукав. Для техники не спрашивай стельку/размерную сетку/рукав. Для одежды не спрашивай питание/вилку.
-- dataQuality.score 1-10: снижай за отсутствие веса, SKU selection, цены, фото, упаковки.
+- selectedSkuName/selectedSkuId/selectedSkuPriceYuan являются обязательным контекстом: не противоречь им. Если selected SKU ненадёжен или конфликтует, укажи это в dataQuality/conflicts, но не придумывай другой SKU.
+- productKindClassifier: сначала классифицируй товар по фото, потом сверяй с названием/SKU/атрибутами, затем выведи finalKind/domainKind и confidence. Если фото и текст конфликтуют — не выбирай наугад: снизь confidence, опиши disagreement и сделай документы осторожными.
+- SupplierQuestions.ru и procurementProfile.domainRules.buyerMustCheck должны быть согласованы по смыслу, но без дублей внутри каждого списка. Китайский перевод отдельно сделает другой слой, здесь cn можно оставить пустым.
+- seoAllowedClaims — только то, что можно написать как осторожный черновик. seoForbiddenClaims — всё, что нельзя писать без сертификата, теста образца или ответа поставщика.
+- dataQuality.score 1-10: снижай за отсутствие веса, SKU selection, цены, фото, упаковки, документов и противоречия.
 `;
 
 const SYSTEM_MSG =
@@ -837,6 +865,7 @@ function normalizeContext(
       productType,
       coreObject,
       categoryType: normalizeCategoryType(identity.categoryType),
+      domainKind: safeString(identity.domainKind || record(result.productKindClassifier).domainKind || record(result.productKindClassifier).finalKind || "").replace(/[^a-z0-9_]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || undefined,
       useCases: uniqueStrings(identity.useCases, 10)
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
@@ -918,11 +947,28 @@ function hasUsableContext(ctx: ProductContext): boolean {
 
 async function runMultimodalCanonicalizer(
   prompt: string,
-  imageDataUrls: string[],
+  imageUrls: string[],
   apiKey: string,
 ): Promise<CanonicalizerModelResult | null> {
+  const mode = (process.env.PRODUCT_CANONICALIZER_IMAGE_MODE ?? "remote").toLowerCase();
+
   for (const model of MULTIMODAL_MODELS) {
     console.log(`[canonicalizer] Trying multimodal ${model}...`);
+    let modelImageUrls = imageUrls.slice(0, 4);
+
+    // Some OpenRouter vision routes reject base64 data URLs. Default is remote URLs so
+    // qwen/stepfun are tried for real instead of silently falling through to Gemini.
+    if (mode === "data_url") {
+      const dataUrls: string[] = [];
+      for (const url of modelImageUrls) {
+        const imageDataUrl = await fetchImageAsDataUrl(url);
+        if (imageDataUrl) dataUrls.push(imageDataUrl);
+      }
+      modelImageUrls = dataUrls;
+    }
+
+    if (!modelImageUrls.length) continue;
+
     const result = await callOpenRouter(
       model,
       [
@@ -931,7 +977,7 @@ async function runMultimodalCanonicalizer(
           role: "user",
           content: [
             { type: "text", text: prompt },
-            ...imageDataUrls.slice(0, 3).map((url) => ({ type: "image_url" as const, image_url: { url } })),
+            ...modelImageUrls.map((url) => ({ type: "image_url" as const, image_url: { url } })),
           ],
         },
       ],
@@ -994,13 +1040,9 @@ export async function canonicalizeProduct(
     raw.selectedSkuImage,
     raw.mainImageUrl,
   ].filter(Boolean) as string[];
-  const imageDataUrls: string[] = [];
-  for (const url of Array.from(new Set(imageSources)).slice(0, 3)) {
-    const imageDataUrl = await fetchImageAsDataUrl(url);
-    if (imageDataUrl) imageDataUrls.push(imageDataUrl);
-  }
-  if (imageDataUrls.length) {
-    result = await runMultimodalCanonicalizer(prompt, imageDataUrls, apiKey);
+  const uniqueImageUrls = Array.from(new Set(imageSources)).slice(0, 4);
+  if (uniqueImageUrls.length) {
+    result = await runMultimodalCanonicalizer(prompt, uniqueImageUrls, apiKey);
   }
 
   if (!result?.identity) {

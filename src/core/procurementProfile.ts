@@ -33,6 +33,7 @@ export type SelectedSkuDecision = {
 export type ProductProcurementProfile = {
   identity: {
     productKind: ProductKind;
+    domainKind?: string;
     categoryType: string;
     subCategoryType: string;
     titleForReport: string;
@@ -693,14 +694,15 @@ function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): P
   if (colors.length) dims.push('цвет');
   if (sizeMatches.length) dims.push('размер');
   if (plugStandards.length) dims.push('стандарт питания/вилка');
-  if (ambiguousParams.length) dims.push(kind === 'tool_kit' ? 'комплектация/модель' : 'параметр SKU');
+  if (ambiguousParams.length) dims.push('модель/версия/комплектация');
   if (!dims.length && variants.length > 1) dims.push('вариант');
   const count = variants.length || labels.length;
   const skuSummary = count
     ? `${count} ${pluralRu(count, 'вариант', 'варианта', 'вариантов')} · ${dims.join(' × ') || 'вариант'}`
     : 'SKU нужно уточнить';
-  const normalizedExamples = labels.slice(0, 5).map(l => ambiguousParams.length ? l.replace(/\b(8|16|40|120)\b/g, kind === 'tool_kit' ? 'Комплектация $1' : 'Параметр $1') : l);
+  const normalizedExamples = labels.slice(0, 5);
   const selected = makeSelectedSkuDecision(product, variants, sourceUrl);
+  selected.selectedSkuText = sanitizeSelectedSkuForReport(selected.selectedSkuText);
   return {
     skuSummary,
     selectedSkuText: selected.selectedSkuText,
@@ -717,9 +719,7 @@ function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): P
     skuWarnings: uniq([
       !selected.reliable && count > 1 ? 'выбранный SKU не определён' : '',
       ambiguousParams.length
-        ? (kind === 'tool_kit'
-          ? `комплектации/параметры ${ambiguousParams.join(' / ')} — уточнить точный состав`
-          : `значение параметров SKU ${ambiguousParams.join(' / ')} нужно уточнить`)
+        ? `значения SKU ${ambiguousParams.join(' / ')} похожи на модель/версию/комплектацию — подтвердить смысл у поставщика`
         : '',
     ], 4),
     normalizedExamples,
@@ -825,6 +825,147 @@ function buildKindVerdict(kind: ProductKind, product: any, needsSupplierData: bo
     : 'Можно готовить заказ образца. Партию закупать только после проверки образца и упаковки.';
 }
 
+
+type DynamicDomainRules = {
+  buyerMustCheck: string[];
+  sampleMustCheck: string[];
+  cargoMustAsk: string[];
+  seoAllowedClaims: string[];
+  seoForbiddenClaims: string[];
+  redFlags: string[];
+  verdictTemplate: string;
+  forbiddenOtherCategoryTerms: string[];
+  infographicIdeas: string[];
+  confidence: 'high' | 'medium' | 'low';
+  evidence: string[];
+  usable: boolean;
+};
+
+const GENERIC_RULE_PHRASES = [
+  /^(?:электроника|usb\s*устройство|техника|товар|аксессуар|параметр sku)$/i,
+  /^(?:проверить качество|уточнить характеристики|проверить характеристики|проверить товар)$/i,
+  /^(?:материал|комплектация|упаковка|сертификаты|вес|габариты)$/i,
+];
+
+function cleanDomainRuleLine(value: unknown): string {
+  return fixMixedRuTypos(safeRu(value))
+    .replace(/^\d+[.)]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sanitizeDomainRulesList(value: unknown, limit: number): string[] {
+  return uniq(array<string>(value)
+    .map(cleanDomainRuleLine)
+    .filter(v => v.length >= 8)
+    .filter(v => !GENERIC_RULE_PHRASES.some(rx => rx.test(v))), limit);
+}
+
+function listFromFirst(...values: unknown[]): string[] {
+  for (const value of values) {
+    const arr = array<string>(value).map(cleanDomainRuleLine).filter(Boolean);
+    if (arr.length) return arr;
+  }
+  return [];
+}
+
+function extractDynamicDomainRules(aiDraft: Record<string, unknown>): DynamicDomainRules {
+  const domainRules = record(aiDraft.domainRules ?? record(aiDraft.procurement).domainRules);
+  const procurement = record(aiDraft.procurement);
+  const cargo = record(aiDraft.cargo);
+  const content = record(aiDraft.content);
+
+  const buyerMustCheck = sanitizeDomainRulesList(listFromFirst(
+    domainRules.buyerMustCheck,
+    procurement.buyerMustCheck,
+    procurement.mustAskSupplier,
+    aiDraft.supplierQuestions,
+  ), 10);
+  const sampleMustCheck = sanitizeDomainRulesList(listFromFirst(
+    domainRules.sampleMustCheck,
+    procurement.sampleMustCheck,
+    procurement.mustCheckOnSample,
+  ), 12);
+  const cargoMustAsk = sanitizeDomainRulesList(listFromFirst(
+    domainRules.cargoMustAsk,
+    cargo.cargoMustAsk,
+    cargo.mustAsk,
+  ), 12);
+  const seoAllowedClaims = sanitizeDomainRulesList(listFromFirst(
+    domainRules.seoAllowedClaims,
+    content.seoAllowedClaims,
+  ), 12);
+  const seoForbiddenClaims = sanitizeDomainRulesList(listFromFirst(
+    domainRules.seoForbiddenClaims,
+    content.seoForbiddenClaims,
+  ), 18);
+  const redFlags = removeBadRiskTags(sanitizeDomainRulesList(listFromFirst(
+    domainRules.redFlags,
+    procurement.redFlags,
+  ), 12));
+  const infographicIdeas = sanitizeDomainRulesList(listFromFirst(
+    domainRules.infographicIdeas,
+    content.infographicIdeas,
+  ), 8);
+  const forbiddenOtherCategoryTerms = sanitizeDomainRulesList(domainRules.forbiddenOtherCategoryTerms, 16);
+  const verdictTemplate = cleanDomainRuleLine(domainRules.verdictTemplate);
+  const confidenceRaw = String(domainRules.confidence ?? '').toLowerCase();
+  const confidence = (['high','medium','low'].includes(confidenceRaw) ? confidenceRaw : 'medium') as 'high'|'medium'|'low';
+  const evidence = sanitizeDomainRulesList(domainRules.evidence, 8);
+  const usable = buyerMustCheck.length >= 5 && sampleMustCheck.length >= 5 && cargoMustAsk.length >= 4 && confidence !== 'low';
+
+  return { buyerMustCheck, sampleMustCheck, cargoMustAsk, seoAllowedClaims, seoForbiddenClaims, redFlags, verdictTemplate, forbiddenOtherCategoryTerms, infographicIdeas, confidence, evidence, usable };
+}
+
+function applyForbiddenCategoryTerms(items: string[], forbiddenTerms: string[]): string[] {
+  const terms = forbiddenTerms
+    .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .filter(Boolean);
+  if (!terms.length) return items;
+  const rx = new RegExp(terms.join('|'), 'i');
+  return items.filter(item => !rx.test(item));
+}
+
+function sanitizeSelectedSkuForReport(value: string | null): string | null {
+  if (!value) return value;
+  return cleanSelectedSkuText(value
+    .replace(/[\[【(（]?\s*(?:профессиональн(?:ый|ая|ое|ые|ого|ому)?|проф(?:ессиональн(?:ый|ая|ое|ые)?)?|стандартн(?:ый|ая|ое|ые)|обычн(?:ый|ая|ое|ые)|премиальн(?:ый|ая|ое|ые)|улучшенн(?:ый|ая|ое|ые)|высококачественн(?:ый|ая|ое|ые)|quality|professional|standard|premium)\s*(?:уровень|класс|grade|level)?\s*[\]】)）]?/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim());
+}
+
+function chooseProcurementRules(baseRules: typeof KIND_RULES[ProductKind], dynamic: DynamicDomainRules, baseProfile: Pick<ProductProcurementProfile, 'identity'|'sku'|'pricing'>, draftProcurement: Record<string, unknown>, aiDraft: Record<string, unknown>) {
+  if (dynamic.usable) {
+    return {
+      source: 'dynamic_llm',
+      mustAskSupplier: dynamic.buyerMustCheck,
+      beforeSample: dynamic.buyerMustCheck.slice(0, 8),
+      onSample: dynamic.sampleMustCheck,
+      cargo: dynamic.cargoMustAsk,
+      redFlags: dynamic.redFlags,
+      seoAllowed: dynamic.seoAllowedClaims,
+      seoForbidden: dynamic.seoForbiddenClaims,
+      infographic: dynamic.infographicIdeas,
+      verdict: dynamic.verdictTemplate,
+      forbiddenOtherCategoryTerms: dynamic.forbiddenOtherCategoryTerms,
+    };
+  }
+
+  return {
+    source: 'static_fallback',
+    mustAskSupplier: uniq([...buildQuestions(baseProfile, baseRules), ...sanitizeDraftAskList(array<string>(draftProcurement.mustAskSupplier).map(safeRu))], 10).slice(0, 9),
+    beforeSample: uniq([...baseRules.beforeSample, ...sanitizeDraftAskList(array<string>(draftProcurement.mustCheckBeforeSample).map(safeRu))], 8),
+    onSample: uniq([...baseRules.onSample, ...array<string>(draftProcurement.mustCheckOnSample).map(safeRu)], 12),
+    cargo: uniq(['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'вес транспортной коробки', 'габариты транспортной коробки', 'фото индивидуальной упаковки', 'фото транспортной коробки', 'материал товара', 'ограничения по перевозке', ...baseRules.cargo], 14),
+    redFlags: removeBadRiskTags(uniq([...baseRules.redFlags, ...array<string>(draftProcurement.redFlags).map(safeRu)], 12)),
+    seoAllowed: uniq([...array<string>(record(aiDraft.content).seoAllowedClaims).map(safeRu), ...baseRules.seoAllowed], 12),
+    seoForbidden: uniq([...array<string>(record(aiDraft.content).seoForbiddenClaims).map(safeRu), ...baseRules.seoForbidden], 18),
+    infographic: uniq([...array<string>(record(aiDraft.content).infographicIdeas).map(safeRu), ...baseRules.infographic], 7),
+    verdict: '',
+    forbiddenOtherCategoryTerms: baseRules.forbiddenCategoryWords,
+  };
+}
+
 export function buildProductProcurementProfile(product: any, opts: { sourceUrl?: string; intelligence?: ProductIntelligence | any } = {}): ProductProcurementProfile {
   const intelligence = opts.intelligence ?? product?.procurementProfileSourceIntelligence ?? product?.productIntelligence ?? product?.intelligence ?? product?.productContext?.productIntelligence ?? {};
   const aiDraft = record(product?.productProcurementProfileDraft ?? product?.procurementProfileDraft ?? product?.productContext?.procurementProfileDraft ?? product?.productContext?.profileDraft);
@@ -845,6 +986,7 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
   const baseProfile = {
     identity: {
       productKind: kind,
+      domainKind: safeRu(record(aiDraft.identity).domainKind || aiDraft.domainKind || record(product?.productContext?.identity).domainKind || record(product?.productContext?.productKindClassifier).domainKind || ''),
       categoryType: safeRu(identity.categoryType || product?.categoryType || kind),
       subCategoryType: safeRu(identity.subCategoryType || ''),
       titleForReport,
@@ -865,7 +1007,18 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
     pricing,
   } as Pick<ProductProcurementProfile, 'identity'|'sku'|'pricing'>;
   const draftProcurement = record(aiDraft.procurement);
-  const mustAskSupplier = uniq([...buildQuestions(baseProfile, rules), ...sanitizeDraftAskList(array<string>(draftProcurement.mustAskSupplier).map(safeRu))], 10).slice(0, 9);
+  const dynamicRules = extractDynamicDomainRules(aiDraft);
+  const chosen = chooseProcurementRules(rules, dynamicRules, baseProfile, draftProcurement, aiDraft);
+  const filteredChosen = {
+    ...chosen,
+    mustAskSupplier: applyForbiddenCategoryTerms(chosen.mustAskSupplier, chosen.forbiddenOtherCategoryTerms),
+    beforeSample: applyForbiddenCategoryTerms(chosen.beforeSample, chosen.forbiddenOtherCategoryTerms),
+    onSample: applyForbiddenCategoryTerms(chosen.onSample, chosen.forbiddenOtherCategoryTerms),
+    cargo: applyForbiddenCategoryTerms(chosen.cargo, chosen.forbiddenOtherCategoryTerms),
+    redFlags: applyForbiddenCategoryTerms(chosen.redFlags, chosen.forbiddenOtherCategoryTerms),
+    seoAllowed: applyForbiddenCategoryTerms(chosen.seoAllowed, chosen.forbiddenOtherCategoryTerms),
+  };
+  const mustAskSupplier = uniq(filteredChosen.mustAskSupplier, 10).slice(0, 10);
   const images = collectProductIntelligenceImages(product, 3);
   const supplierRaw = product?.supplierType ?? product?.normalized1688?.supplierType ?? product?.normalized1688?.debug?.sellerType;
   return {
@@ -878,28 +1031,28 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
     },
     procurement: {
       status: missing.length ? '🟡 Нужны данные поставщика' : '🟢 Готов к заказу образца',
-      verdict: buildKindVerdict(kind, product, missing.length > 0),
+      verdict: filteredChosen.verdict || buildKindVerdict(kind, product, missing.length > 0),
       nextAction: 'Отправьте вопросы поставщику и скачайте закупочный пакет.',
       mustAskSupplier,
-      mustCheckBeforeSample: uniq([...rules.beforeSample, ...sanitizeDraftAskList(array<string>(draftProcurement.mustCheckBeforeSample).map(safeRu))], 8),
-      mustCheckOnSample: uniq([...rules.onSample, ...array<string>(draftProcurement.mustCheckOnSample).map(safeRu)], 12),
-      redFlags: removeBadRiskTags(uniq([...rules.redFlags, ...array<string>(draftProcurement.redFlags).map(safeRu), ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu)], 12)),
+      mustCheckBeforeSample: uniq(filteredChosen.beforeSample, 8),
+      mustCheckOnSample: uniq(filteredChosen.onSample, 12),
+      redFlags: removeBadRiskTags(uniq(filteredChosen.redFlags, 12)),
     },
     cargo: {
-      mustAsk: uniq(['вес одной единицы с упаковкой', 'габариты индивидуальной упаковки', 'количество в транспортной коробке', 'вес транспортной коробки', 'габариты транспортной коробки', 'фото индивидуальной упаковки', 'фото транспортной коробки', 'материал товара', 'ограничения по перевозке', ...rules.cargo], 14),
-      likelySensitiveCargoIssues: uniq(kind === 'mini_washer' || kind === 'small_appliance' || kind === 'usb_device' ? ['питание/вилка/напряжение', 'аккумулятор или батарейка — уточнить', 'сертификаты для техники'] : [], 6),
+      mustAsk: uniq(filteredChosen.cargo, 14),
+      likelySensitiveCargoIssues: uniq(array<string>(record(aiDraft.cargo).likelySensitiveCargoIssues).map(safeRu), 6),
     },
     content: {
-      seoAllowedClaims: uniq([...array<string>(record(aiDraft.content).seoAllowedClaims).map(safeRu), ...rules.seoAllowed, ...array<string>(intelligence?.reportRules?.seoAllowedClaims).map(safeRu)], 12),
-      seoForbiddenClaims: uniq([...array<string>(record(aiDraft.content).seoForbiddenClaims).map(safeRu), ...rules.seoForbidden, ...array<string>(intelligence?.reportRules?.seoForbiddenClaims).map(safeRu), ...DANGEROUS_CLAIMS], 18),
+      seoAllowedClaims: uniq(filteredChosen.seoAllowed, 12),
+      seoForbiddenClaims: uniq([...filteredChosen.seoForbidden, ...DANGEROUS_CLAIMS], 18),
       titleWarnings: dangerousClaims(titleForSeo).map(c => `Не писать в названии без подтверждения: ${c}`),
-      infographicIdeas: uniq([...array<string>(record(aiDraft.content).infographicIdeas).map(safeRu), ...rules.infographic, ...array<string>(intelligence?.reportRules?.infographicIdeas).map(safeRu)], 7),
+      infographicIdeas: uniq(filteredChosen.infographic, 7),
     },
     dataQuality: {
       missingCriticalFields: missing,
       contradictions: uniq([...(sku.selectedSkuReliable ? [] : ['выбранный SKU не подтверждён']), ...array<any>(product?.productContext?.conflicts).map((c: any) => safeRu(c.field || c.message || c))], 8),
       confidence: (['high','medium','low'].includes(String(intelligence?.dataQuality?.overallConfidence)) ? intelligence.dataQuality.overallConfidence : missing.length > 3 ? 'low' : 'medium') as any,
-      reason: safeRu(intelligence?.dataQuality?.reason || `Профиль собран из Product Intelligence v2, selected SKU, цены, поставщика, атрибутов и ${images.length ? 'фото' : 'текстовых данных'} 1688. Уверенность классификации: ${classifier.confidenceLabel}.`),
+      reason: safeRu(intelligence?.dataQuality?.reason || `Профиль собран из Product Intelligence v2, selected SKU, цены, поставщика, атрибутов и ${images.length ? 'фото' : 'текстовых данных'} 1688. Правила документов: ${chosen.source === 'dynamic_llm' ? 'LLM domainRules' : 'safe fallback'}. Уверенность классификации: ${classifier.confidenceLabel}.`),
     },
     classifier,
     intelligenceImages: images,
@@ -1031,7 +1184,7 @@ export function buildMainReportFromProfile(product: any, statusInfo?: { creditsR
     `• MOQ: ${moq ? `${Math.round(moq)} шт` : 'уточнить'}`,
     `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
     p.sku.colors.length ? `• Цвета: ${escapeHtml(p.sku.colors.join(', '))}` : '',
-    p.sku.sizes.length ? `• Размеры: ${escapeHtml(p.sku.sizes.join(', '))}` : (p.sku.ambiguousParams.length ? (p.identity.productKind === 'tool_kit' ? `• Комплектации/параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — уточнить точный состав` : `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — значение нужно уточнить`) : ''),
+    p.sku.sizes.length ? `• Размеры: ${escapeHtml(p.sku.sizes.join(', '))}` : (p.sku.ambiguousParams.length ? `• Модель/версия/комплектация: ${escapeHtml(p.sku.ambiguousParams.join(' / '))} — уточнить смысл у поставщика` : ''),
     p.sku.plugStandards.length ? `• Стандарт питания/вилка: ${escapeHtml(plugStandardsDisplayValue(p.sku.plugStandards))}` : '',
     `• Материал: ${escapeHtml(materialsDisplayLine(p))}`,
     `• Вес: ${weight ? `${weight} кг` : 'не указан'}`,

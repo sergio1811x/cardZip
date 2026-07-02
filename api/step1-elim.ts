@@ -12,6 +12,36 @@ export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
+function compactSkuButtonLabel(value: unknown, fallback: string): string {
+  let label = String(value ?? '').replace(/\s+/g, ' ').trim() || fallback;
+
+  // Generic UI cleanup only. Do not translate or normalize product terms here:
+  // SKU meaning belongs to the LLM translator because the product can be anything.
+  label = label
+    .replace(/^[-–—:：\s]+/, '')
+    .replace(/[。；;]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Put a model/article-like code first so Telegram does not cut it on narrow screens.
+  // This is format preservation, not a product dictionary.
+  const model = label.match(/\b(?:[A-ZА-Я]{1,6}[- ]?)?\d{2,}[A-ZА-Я0-9-]*\b/i)?.[0];
+  if (model && !label.toLowerCase().startsWith(model.toLowerCase())) {
+    const withoutModel = label
+      .replace(model, '')
+      .replace(/[·,;|/\-–—]+$/g, '')
+      .replace(/^[-–—·,;|/\s]+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    label = withoutModel ? `${model} · ${withoutModel}` : model;
+  }
+
+  const max = 42;
+  if (label.length > max) label = `${label.slice(0, max - 1).trim()}…`;
+  return label || fallback;
+}
+
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -93,7 +123,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { Markup } = require('telegraf');
       const buttons = skus.slice(0, 8).map((sku: any, i: number) => {
         // Убираем китайские символы из названия для кнопки
-        let label = (sku.name ?? `Вариант ${i + 1}`).slice(0, 28);
+        const label = compactSkuButtonLabel(sku.name, `Вариант ${i + 1}`);
         const priceLabel = sku.price ? ` · ${sku.price} ¥` : '';
         return [Markup.button.callback(`${label}${priceLabel}`, `sku_${i}_${jobId}`)];
       });

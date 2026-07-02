@@ -424,7 +424,12 @@ async function safeTranslateSkuNames(product: RawProduct1688): Promise<RawProduc
 
     if (!shouldTranslate) return product;
 
-    const translated = await translateSkuNamesViaLlm(names);
+    const translated = await translateSkuNamesViaLlm(names, {
+      titleCn: product.titleCn,
+      titleRu: product.titleEn,
+      categoryName: product.categoryName,
+      attributes: product.attributes,
+    });
 
     product.skus.forEach((s, i) => {
       if (translated[i]) s.name = translated[i];

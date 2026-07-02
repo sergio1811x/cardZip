@@ -45,7 +45,9 @@ const EXPERT_WRITER_PROMPT = `CardZip 2.0 Expert Writer.
 - claims: влагозащита, антискольжение, антибактериальность, безопасность, сертификаты, бренд — только “заявлено/проверить/подтвердить”;
 - не советуй партию; максимум — образец, если цена/SKU понятны;
 - не пиши: 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, debug, raw SKU;
-- SKU раскрывай как цвет × размер × модель/комплектация, если это видно в данных.
+- SKU раскрывай как цвет × размер × модель/версия/комплектация, если это видно в данных. Не называй модель/версию “параметр SKU”.
+- Если в productContext.procurementProfileDraft.domainRules есть buyerMustCheck/sampleMustCheck/cargoMustAsk/seoAllowedClaims/seoForbiddenClaims/redFlags/verdictTemplate, используй именно их как источник правил. Не смешивай с общими category tags и не превращай riskTags в риски.
+- Не добавляй в текст возможности, которых нет в выбранном SKU: проводной SKU не должен получить беспроводное соединение/Bluetooth/аккумулятор; выбранный SKU не должен содержать marketing-grade слова как технический параметр.
 
 Верни только JSON:
 {
@@ -111,7 +113,7 @@ export async function runExpertWriter(
   const snapshotStr = JSON.stringify(compactSnapshot(snapshot), null, 0);
   const prompt = EXPERT_WRITER_PROMPT.replace(
     "{{ANALYSIS_SNAPSHOT}}",
-    snapshotStr.slice(0, 5000),
+    snapshotStr.slice(0, 9000),
   );
 
   for (const model of WRITER_MODELS) {
