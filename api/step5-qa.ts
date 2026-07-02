@@ -7,7 +7,7 @@ import { getStatus, tryConsumeCredit } from '../src/services/subscriptionService
 import { buildMainMessage, buildSafeSummary } from '../src/core/messageBuilder';
 import { runHardValidator, validateReport } from '../src/core/reportValidator';
 import { buildDecisionContext } from '../src/core/decisionLayer';
-import { buildSupplierQuestionsFromProfile, translateSupplierQuestionsRuToCn } from '../src/core/procurementProfile';
+import { buildSupplierQuestionsFromProfile, translateSupplierQuestionsRuToCn, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile } from '../src/core/procurementProfile';
 import { buildUserFacingAnalysis } from '../src/core/userFacingAnalysis';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
@@ -142,6 +142,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (analysis.warnings.length) console.warn('[step5] user-facing analysis repaired:', analysis.warnings.join('; '));
 
+    const preBuiltDocs = {
+      supplierQuestionsText: supplierQuestionSet.text,
+      supplierQuestionsRu: supplierQuestionSet.ru,
+      supplierQuestionsCn: translatedCn,
+      buyerBriefMd: buildBuyerBriefFromProfile(initialAnalysis.product, { sourceUrl: job.input_url }),
+      cargoBriefMd: buildCargoBriefFromProfile(initialAnalysis.product, { sourceUrl: job.input_url }),
+      sampleChecklistMd: buildSampleChecklistFromProfile(initialAnalysis.product, { sourceUrl: job.input_url }),
+      seoDraftMd: buildSeoDraftFromProfile(initialAnalysis.product, { sourceUrl: job.input_url }),
+    };
+
     await supabase.from('jobs').update({
       result_json: {
         ...result,
@@ -149,6 +159,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         productProcurementProfile: profileForFiles,
         procurementProfile: profileForFiles,
         analysisStatus: analysis.status,
+        preBuiltDocs,
         generatedFiles: {
           seoText,
           briefText,
@@ -270,6 +281,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         productProcurementProfile: profileForFiles,
         procurementProfile: profileForFiles,
         generatedFiles: { seoText, briefText, supplierQuestions: supplierText, supplierQuestionsCn: analysis.generatedFiles.supplierQuestionsCn, supplierQuestionsCnValid: analysis.generatedFiles.supplierQuestionsCnValid, cargoText, sampleChecklistText, readmeText },
+        preBuiltDocs,
         finalUserCard: finalText,
         qaResult,
       },

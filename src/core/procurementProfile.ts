@@ -22,7 +22,11 @@ export type ProductKind =
   | 'beauty_accessory'
   | 'pet_product'
   | 'toy'
+  | 'nail_drill_bits'
+  | 'barcode_scanner'
   | 'generic_product';
+
+export type PowerNature = 'powered_device' | 'passive_accessory' | 'consumable' | 'spare_part' | 'non_powered_product' | 'unknown';
 
 export type SelectedSkuDecision = {
   selectedSkuText: string | null;
@@ -50,6 +54,11 @@ export type ProductProcurementProfile = {
     visibleFeatures: string[];
     claimedFeatures: string[];
     unconfirmedFeatures: string[];
+    powerNature: PowerNature;
+    classificationEvidence: {
+      whyProductKind: string;
+      whyPowerNature: string;
+    };
   };
   sku: {
     skuSummary: string;
@@ -419,6 +428,150 @@ const KIND_RULES: Record<ProductKind, {
     infographic: ['Игрушка общий вид', 'Материал крупно', 'Возрастная маркировка', 'Комплектация', 'Упаковка'],
     forbiddenCategoryWords: ['мощность', 'напряжение', 'тип вилки', 'подошва', 'стелька'],
   },
+  nail_drill_bits: {
+    mustAskSupplier: [
+      'Подтвердите цену выбранного SKU.',
+      'Уточните, это одна насадка или комплект. Укажите количество насадок в комплекте.',
+      'Подтвердите форму насадки: лепесток, шар, пламя, кукуруза, цилиндр.',
+      'Уточните размер S/M/L или диаметр рабочей части.',
+      'Уточните диаметр хвостовика (стандарт 2.35 мм?).',
+      'Уточните материал рабочей части: керамика, корунд, алмазное напыление, карбид.',
+      'Уточните назначение: кутикула, боковые валики, снятие гель-лака, шлифовка.',
+      'Укажите вес одной единицы с индивидуальной упаковкой.',
+      'Укажите габариты индивидуальной упаковки.',
+      'Пришлите реальные фото выбранного SKU, упаковки и маркировки.',
+      'Можно ли заказать 1–2 образца перед партией?',
+    ],
+    beforeSample: ['подтвердить форму и размер SKU', 'получить диаметр хвостовика', 'получить вес и габариты упаковки', 'запросить фото выбранного SKU'],
+    onSample: [
+      'соответствие формы выбранному SKU',
+      'соответствие размера S/M/L или диаметра',
+      'подходит ли хвостовик к стандартной фрезе',
+      'качество абразива/напыления',
+      'нет ли сколов, трещин, кривого хвостовика',
+      'не бьёт ли насадка при вращении в аппарате',
+      'качество обработки кутикулы/гель-лака на тесте',
+      'нагрев насадки при работе',
+      'износ после короткого теста',
+      'качество упаковки',
+    ],
+    cargo: [
+      'вес одной единицы с индивидуальной упаковкой',
+      'габариты индивидуальной упаковки',
+      'количество в транспортной коробке',
+      'вес транспортной коробки',
+      'габариты транспортной коробки',
+      'фото индивидуальной упаковки и транспортной коробки',
+      'материал насадок',
+      'есть ли острые/абразивные части',
+      'как насадки защищены от повреждения при перевозке',
+    ],
+    redFlags: [
+      'не подтверждён материал насадки',
+      'не подтверждён размер/диаметр рабочей части',
+      'не подтверждён диаметр хвостовика',
+      'непонятно: одна насадка или набор',
+      'нет реальных фото выбранного SKU',
+      'нет данных по упаковке',
+      'высокий MOQ для непроверенного расходника',
+      '0 заказов у поставщика',
+    ],
+    seoAllowed: [
+      'насадка для маникюрного аппарата',
+      'фреза для маникюра',
+      'абразивная насадка',
+      'для обработки кутикулы',
+      'для снятия гель-лака',
+      'для шлифовки ногтей',
+    ],
+    seoForbidden: [
+      'профессиональная',
+      'безопасная',
+      'стерильная',
+      'медицинская',
+      'не травмирует кожу',
+      'подходит для всех аппаратов',
+      'не нагревается',
+      'долговечная',
+      'алмазная без подтверждения',
+      'керамическая без подтверждения',
+      'для салона',
+      ...DANGEROUS_CLAIMS,
+    ],
+    infographic: ['Насадка общий вид', 'Форма и размер крупно', 'Хвостовик и диаметр', 'Назначение', 'Упаковка'],
+    forbiddenCategoryWords: ['напряжение', 'мощность', 'тип вилки', 'электросеть', 'кабель питания', 'шильдик', 'перегрев', 'защита от перегрева', 'малая техника', 'панель', 'режимы питания', 'совместимость с электросетью'],
+  },
+  barcode_scanner: {
+    mustAskSupplier: [
+      'Подтвердите цену выбранного SKU.',
+      'Подтвердите тип сканера: 1D / 2D.',
+      'Подтвердите какие коды читает: QR, DataMatrix, EAN-13, Code128, PDF417.',
+      'Подтвердите интерфейс: USB HID, USB COM или virtual COM.',
+      'Уточните, нужны ли драйверы.',
+      'Уточните совместимость с Windows/macOS/Linux/Android POS/1C, если применимо.',
+      'Укажите длину USB-кабеля.',
+      'Подтвердите комплектацию: сканер, кабель, инструкция, подставка.',
+      'Запросите видео сканирования QR, EAN-13, DataMatrix и повреждённого кода.',
+      'Укажите вес одной единицы с индивидуальной упаковкой.',
+      'Укажите габариты индивидуальной упаковки.',
+    ],
+    beforeSample: ['подтвердить тип 1D/2D и поддерживаемые коды', 'получить вес и габариты', 'получить видео сканирования', 'запросить инструкцию и комплектацию'],
+    onSample: [
+      'читает ли QR-код',
+      'читает ли DataMatrix',
+      'читает ли EAN-13',
+      'читает ли Code128',
+      'работает ли как USB HID без драйверов',
+      'работает ли в Excel/1C/POS',
+      'скорость и стабильность считывания',
+      'работа с повреждёнными кодами',
+      'дальность считывания',
+      'качество кнопки/курка',
+      'качество кабеля и USB-разъёма',
+      'длина кабеля',
+      'эргономика корпуса',
+      'комплектация и инструкция',
+    ],
+    cargo: [
+      'вес одной единицы с упаковкой',
+      'габариты индивидуальной упаковки',
+      'количество в транспортной коробке',
+      'вес транспортной коробки',
+      'габариты транспортной коробки',
+      'есть ли аккумулятор',
+      'есть ли магнит',
+      'сертификаты CE/FCC/RoHS',
+      'фото упаковки и маркировки',
+    ],
+    redFlags: [
+      'не подтверждены типы поддерживаемых кодов',
+      'не подтверждён режим USB HID/COM',
+      'нет видео сканирования',
+      'не подтверждена совместимость с POS/1C',
+      'нет сертификатов',
+      'непонятная комплектация',
+      'нет данных по кабелю',
+    ],
+    seoAllowed: [
+      'сканер штрих-кодов',
+      'ручной сканер',
+      'типы кодов — только подтверждённые',
+      'USB подключение — только подтверждённое',
+    ],
+    seoForbidden: [
+      'профессиональный',
+      'самый быстрый',
+      'безошибочный',
+      'подходит для Честного знака без подтверждения',
+      'работает с 1С без подтверждения',
+      'plug-and-play без подтверждения',
+      'не требует драйверов без подтверждения',
+      'читает все коды',
+      ...DANGEROUS_CLAIMS,
+    ],
+    infographic: ['Сканер общий вид', 'Считывание QR/DataMatrix', 'USB подключение', 'Комплектация', 'Упаковка'],
+    forbiddenCategoryWords: ['подошва', 'стелька', 'рукав', 'срок годности', 'тип вилки', 'напряжение', 'мощность'],
+  },
   generic_product: genericRules('товар'),
 };
 
@@ -620,6 +773,8 @@ function normalizeProductKind(value: unknown): ProductKind | null {
   if (/насеком|insect|ловуш|粘虫|捕虫/.test(raw)) return 'passive_insect_trap';
   if (/набор\s+инструмент|hand\s*tool\s*set|tool\s*kit|工具套装|工具组|多功能工具/.test(raw)) return 'tool_kit';
   if (/весы|кухонн[а-яё ]*вес|весы\s+для\s+кухн|kitchen\s*scale|electronic\s*scale|電子秤|厨房秤|电子秤|电子称|вес.*\d+\s*кг|food\s*scale/.test(raw)) return 'kitchen_scale';
+  if (/美甲打磨头|打磨头|nail.?drill.?bit|маникюрн[а-яё ]*фреза|насадк[аи]\s+для\s+(фрезы|маникюр|аппарат)|фреза\s+для\s+маникюр|абразивн[а-яё ]*насадк|снятие\s+гель.лака.*насадк|nail\s*bit/i.test(raw)) return 'nail_drill_bits';
+  if (/сканер\s+(штрих|qr|barcode)|штрихкод.*сканер|barcode.?scanner|qr.*scanner|二维码扫描|条码扫描/i.test(raw)) return 'barcode_scanner';
   if (/кухон|kitchen/.test(raw)) return 'kitchen_tool';
   if (/сумк|bag|кошел|брелок/.test(raw)) return 'bag_accessory';
   if (/электр|220v|вилка|мощность|appliance|прибор/.test(raw)) return 'small_appliance';
@@ -668,6 +823,55 @@ export function classifyProductKindConsensus(product: any, intelligence?: Produc
 
 function detectKind(product: any, intelligence?: ProductIntelligence | any): ProductKind {
   return classifyProductKindConsensus(product, intelligence).productKind;
+}
+
+const PASSIVE_SIGNALS = /насадк|аксессуар|для\s+(фрезы|аппарата|дрели|пылесоса|шуруповёрта|машинки)|сменн|чехол|держатель|щётка|диск|бит|лезвие|nail.?drill.?bit|attachment|for\s+(nail\s*drill|driller|vacuum)|美甲打磨头|打磨头/i;
+const CONSUMABLE_SIGNALS = /фильтр|мешок|картридж|сменный\s+блок|расходн|абразив|одноразов|refill/i;
+const SPARE_PART_SIGNALS = /запчасть|spare\s*part|replacement\s+part|двигатель\s+отдельно|корпус\s+запасной|ремень\s+привод/i;
+const POWERED_SIGNALS = /мотор|электро|аккумулятор|заряд|USB.powered|кабель\s+питания|вилка|220|напряжение|мощность|ватт|вольт|режимы\s+работы|heating|cooling|battery|motor|voltage|wattage|charger/i;
+const FOR_DEVICE_PATTERN = /для\s+(электрофрезы|пылесоса|дрели|шуруповёрта|аппарата|машинки)/i;
+
+export function classifyPowerNature(product: any, kind: ProductKind): PowerNature {
+  if (kind === 'nail_drill_bits') return 'passive_accessory';
+  if (kind === 'passive_insect_trap') return 'passive_accessory';
+
+  const text = `${product?.titleCn ?? ''} ${product?.titleEn ?? ''} ${product?.titleRu ?? ''} ${product?.categoryName ?? ''} ${JSON.stringify(product?.attributes ?? [])}`;
+
+  // "для X" pattern: item is an accessory for a device
+  if (FOR_DEVICE_PATTERN.test(text)) return 'passive_accessory';
+
+  const hasPassive = PASSIVE_SIGNALS.test(text);
+  const hasConsumable = CONSUMABLE_SIGNALS.test(text);
+  const hasSparePart = SPARE_PART_SIGNALS.test(text);
+  const hasPowered = POWERED_SIGNALS.test(text);
+
+  if (hasConsumable && !hasPowered) return 'consumable';
+  if (hasSparePart && !hasPowered) return 'spare_part';
+  if (hasPassive && !hasPowered) return 'passive_accessory';
+  if (hasPowered && !hasPassive) return 'powered_device';
+  if (hasPowered && hasPassive) {
+    // "для X" takes priority — already handled above
+    return 'passive_accessory';
+  }
+
+  // Kind-based fallback
+  if (['small_appliance', 'food_warmer', 'heating_appliance', 'mini_washer', 'juicer', 'kitchen_scale', 'usb_device', 'barcode_scanner'].includes(kind)) {
+    return 'powered_device';
+  }
+  if (['footwear', 'clothing', 'towel_kilt', 'sleep_mask', 'passive_insect_trap', 'bag_accessory', 'home_textile', 'beauty_accessory', 'umbrella'].includes(kind)) {
+    return 'non_powered_product';
+  }
+
+  return 'unknown';
+}
+
+const ELECTRICAL_TERMS = /напряжени[ея]|мощность|тип\s+вилки|тип\s+питания|электросет[иь]|кабель\s+питания|шильдик|перегрев|совместимость с электросетью|220v|вольт|ватт/i;
+
+function filterElectricalQuestions(questions: string[], powerNature: PowerNature): string[] {
+  if (powerNature === 'passive_accessory' || powerNature === 'consumable' || powerNature === 'spare_part') {
+    return questions.filter(q => !ELECTRICAL_TERMS.test(q));
+  }
+  return questions;
 }
 
 
@@ -907,6 +1111,12 @@ function buildKindVerdict(kind: ProductKind, product: any, needsSupplierData: bo
   if (kind === 'tool_kit') {
     return 'Товар нельзя закупать партией без проверки образца. Сначала подтвердите точный состав комплектации, материал металлических частей и ручек, вес и габариты кейса. На образце проверьте фактическую комплектацию, качество металла, ручек, кейса и фиксаторов.';
   }
+  if (kind === 'nail_drill_bits') {
+    return 'Товар можно рассматривать для образца после подтверждения формы, размера, диаметра хвостовика и материала насадки. На образце проверить совместимость с аппаратом, качество абразива, нагрев и износ. Партию закупать рано.';
+  }
+  if (kind === 'barcode_scanner') {
+    return 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите тип сканера, поддерживаемые коды, режим USB HID, совместимость с POS/1C, получите видео сканирования и сертификаты.';
+  }
   return needsSupplierData
     ? 'Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите выбранный SKU, цену, вес, упаковку, материал и реальные фото.'
     : 'Можно готовить заказ образца. Партию закупать только после проверки образца и упаковки.';
@@ -1089,6 +1299,11 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
       visibleFeatures: uniq([...array<string>(draftIdentity.visibleFeatures), ...array<string>(identity.visibleFeatures)].map(safeRu), 8),
       claimedFeatures: uniq([...array<string>(draftIdentity.claimedFeatures), ...array<string>(identity.importantFeatures), ...array<string>(intelligence?.claimsPolicy?.claimedButNeedProof)].map(safeRu), 8),
       unconfirmedFeatures: uniq([...array<string>(draftIdentity.unconfirmedFeatures), ...array<string>(identity.notConfirmedFeatures), ...array<string>(identity.unconfirmedFeatures)].map(safeRu), 8),
+      powerNature: classifyPowerNature(product, kind),
+      classificationEvidence: {
+        whyProductKind: `kind=${kind} classifier=${classifier.confidenceLabel} rules=${classifier.rulesKind} vision=${classifier.visionKind ?? 'n/a'} text=${classifier.textKind ?? 'n/a'}`,
+        whyPowerNature: `powerNature=${classifyPowerNature(product, kind)} kind=${kind}`,
+      },
     },
     sku,
     pricing,
@@ -1096,11 +1311,12 @@ export function buildProductProcurementProfile(product: any, opts: { sourceUrl?:
   const draftProcurement = record(aiDraft.procurement);
   const dynamicRules = extractDynamicDomainRules(aiDraft);
   const chosen = chooseProcurementRules(rules, dynamicRules, baseProfile, draftProcurement, aiDraft);
+  const powerNature = classifyPowerNature(product, kind);
   const filteredChosen = {
     ...chosen,
-    mustAskSupplier: applyForbiddenCategoryTerms(chosen.mustAskSupplier, chosen.forbiddenOtherCategoryTerms),
-    beforeSample: applyForbiddenCategoryTerms(chosen.beforeSample, chosen.forbiddenOtherCategoryTerms),
-    onSample: applyForbiddenCategoryTerms(chosen.onSample, chosen.forbiddenOtherCategoryTerms),
+    mustAskSupplier: filterElectricalQuestions(applyForbiddenCategoryTerms(chosen.mustAskSupplier, chosen.forbiddenOtherCategoryTerms), powerNature),
+    beforeSample: filterElectricalQuestions(applyForbiddenCategoryTerms(chosen.beforeSample, chosen.forbiddenOtherCategoryTerms), powerNature),
+    onSample: filterElectricalQuestions(applyForbiddenCategoryTerms(chosen.onSample, chosen.forbiddenOtherCategoryTerms), powerNature),
     cargo: applyForbiddenCategoryTerms(chosen.cargo, chosen.forbiddenOtherCategoryTerms),
     redFlags: applyForbiddenCategoryTerms(chosen.redFlags, chosen.forbiddenOtherCategoryTerms),
     seoAllowed: applyForbiddenCategoryTerms(chosen.seoAllowed, chosen.forbiddenOtherCategoryTerms),

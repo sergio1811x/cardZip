@@ -59,7 +59,21 @@ export async function handleSupplierQuestions(ctx: Context) {
   const data = job.result_json as any;
   const product = data.product ?? data.rawProduct ?? {};
   ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
-  const questionSet = buildSupplierQuestionsFromProfile(product);
+  // Prefer pre-built documents stored at step5 time to avoid regeneration drift
+  const preBuilt = data.preBuiltDocs;
+  let questionSet: import('../../core/procurementProfile').SupplierQuestionsProfileResult;
+  if (preBuilt?.supplierQuestionsText && preBuilt?.supplierQuestionsRu) {
+    questionSet = {
+      text: preBuilt.supplierQuestionsText,
+      ru: Array.isArray(preBuilt.supplierQuestionsRu) ? preBuilt.supplierQuestionsRu : [],
+      cn: Array.isArray(preBuilt.supplierQuestionsCn) ? preBuilt.supplierQuestionsCn : [],
+      cnValid: Array.isArray(preBuilt.supplierQuestionsCn) && preBuilt.supplierQuestionsCn.length > 0,
+      label: '💬 Вопросы поставщику',
+      errors: [],
+    };
+  } else {
+    questionSet = buildSupplierQuestionsFromProfile(product);
+  }
   const firstRow = questionSet.cnValid
     ? [Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`), Markup.button.callback('📋 Скопировать CN', `sq_cn:${job.id}`)]
     : [Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`)];
@@ -107,10 +121,24 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
     const data = job.result_json as any;
     const product = data.product ?? data.rawProduct ?? {};
     const profile = ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
-    const questionSet = buildSupplierQuestionsFromProfile(product);
-    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 10);
+    // Prefer pre-built documents stored at step5 time
+    const preBuilt2 = data.preBuiltDocs;
+    let questionSet2: import('../../core/procurementProfile').SupplierQuestionsProfileResult;
+    if (preBuilt2?.supplierQuestionsText && preBuilt2?.supplierQuestionsRu) {
+      questionSet2 = {
+        text: preBuilt2.supplierQuestionsText,
+        ru: Array.isArray(preBuilt2.supplierQuestionsRu) ? preBuilt2.supplierQuestionsRu : [],
+        cn: Array.isArray(preBuilt2.supplierQuestionsCn) ? preBuilt2.supplierQuestionsCn : [],
+        cnValid: Array.isArray(preBuilt2.supplierQuestionsCn) && preBuilt2.supplierQuestionsCn.length > 0,
+        label: '💬 Вопросы поставщику',
+        errors: [],
+      };
+    } else {
+      questionSet2 = buildSupplierQuestionsFromProfile(product);
+    }
+    const questions = (lang === 'cn' ? questionSet2.cn : questionSet2.ru).slice(0, 10);
 
-    if (lang === 'cn' && !questionSet.cnValid) {
+    if (lang === 'cn' && !questionSet2.cnValid) {
       await ctx.reply('⚠️ Китайская версия не сформирована — используйте русскую версию или переведите через байера.', {
         ...Markup.inlineKeyboard([[Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`)], [Markup.button.callback('⬅️ Назад', `supplier_questions:${job.id}`)]])
       });
