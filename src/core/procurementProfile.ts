@@ -8,6 +8,7 @@ import {
 } from "./rawAttributeCleaner";
 import { selectBestProductTitle, isBadTitleCandidate } from "./titleSelection";
 import { sanitizeUserFacingText } from "./userFacingSanitizer";
+import { isPlaceholderValue, safeTitle } from "./placeholderGuard";
 
 export type ProductKind =
   | "footwear"
@@ -23,6 +24,7 @@ export type ProductKind =
   | "small_appliance"
   | "kitchen_tool"
   | "bag_accessory"
+  | "fake_security_camera"
   | "generic_product";
 
 export type SelectedSkuDecision = {
@@ -705,6 +707,95 @@ const KIND_RULES: Record<
       "лампа",
     ],
   },
+  fake_security_camera: {
+    mustAskSupplier: [
+      "Подтвердите цену выбранного SKU.",
+      "Как реализовано питание светодиода: батарейки, аккумулятор или без питания?",
+      "Входят ли батарейки в комплект?",
+      "Как работает светодиод: мигает, горит постоянно, реагирует на движение или включается вручную?",
+      "Можно ли отключить светодиод?",
+      "Укажите размеры: диаметр и высоту.",
+      "Укажите вес единицы с упаковкой.",
+      "Укажите габариты индивидуальной упаковки.",
+      "Подтвердите материал корпуса.",
+      "Что входит в комплектацию: крепёж, наклейки, инструкция?",
+      "Пришлите реальные фото товара и упаковки.",
+      "Можно ли заказать 1–2 образца?",
+    ],
+    beforeSample: [
+      "подтвердить питание и комплектацию",
+      "получить размеры и вес",
+      "запросить фото",
+    ],
+    onSample: [
+      "реалистичность внешнего вида",
+      "качество пластика",
+      "качество купола/линзы",
+      "работа светодиода",
+      "тип батареек и замена",
+      "наличие крепежа",
+      "установка на стену/потолок",
+      "качество упаковки",
+      "соответствие цвета SKU",
+    ],
+    cargo: [
+      "вес единицы с упаковкой",
+      "габариты индивидуальной упаковки",
+      "количество в транспортной коробке",
+      "вес коробки",
+      "габариты коробки",
+      "есть ли батарейки",
+      "фото индивидуальной упаковки",
+      "фото коробки",
+    ],
+    redFlags: [
+      "цена SKU не подтверждена",
+      "неясно питание светодиода",
+      "неясно, входят ли батарейки",
+      "работа светодиода не подтверждена",
+      "нет веса с упаковкой",
+      "нет габаритов упаковки",
+      "риск претензий из-за позиционирования как настоящей камеры",
+    ],
+    seoAllowed: [
+      "муляж камеры видеонаблюдения",
+      "имитация камеры",
+      "декоративная камера",
+      "визуальная имитация видеонаблюдения",
+      "красный светодиод (после подтверждения)",
+      "для дома/офиса/магазина как визуальный декор",
+    ],
+    seoForbidden: [
+      "настоящая камера",
+      "видеонаблюдение",
+      "запись видео",
+      "обнаружение движения",
+      "ночное видение",
+      "Wi-Fi",
+      "приложение",
+      "антивандальная",
+      "водонепроницаемая",
+      "работает от батареек (без подтверждения)",
+      "мигающий светодиод (без подтверждения)",
+      ...DANGEROUS_CLAIMS,
+    ],
+    infographic: [
+      "Камера-муляж общий вид",
+      "Купол и светодиод",
+      "Размеры",
+      "Крепёж и комплектация",
+      "Упаковка",
+    ],
+    forbiddenCategoryWords: [
+      "подошва",
+      "стелька",
+      "срок годности",
+      "тип вилки",
+      "напряжение",
+      "мощность",
+      "режимы нагрева",
+    ],
+  },
   usb_device: genericRules("USB-товар"),
   small_appliance: genericRules("малая техника"),
   kitchen_tool: genericRules("кухонный товар"),
@@ -713,12 +804,16 @@ const KIND_RULES: Record<
 };
 
 function genericRules(label: string) {
+  const isPh = isPlaceholderValue(label);
+  const forLabel = isPh ? "" : ` для товара “${label}”`;
+  const ofLabel = isPh ? "" : ` “${label}”`;
+  const atLabel = isPh ? "" : ` для “${label}”`;
   return {
     mustAskSupplier: [
-      `Подтвердите цену выбранного SKU для товара “${label}”.`,
-      `Укажите вес одной единицы “${label}” с индивидуальной упаковкой.`,
-      `Укажите габариты индивидуальной упаковки для “${label}”.`,
-      `Подтвердите основной материал и покрытие/отделку, если они есть у “${label}”.`,
+      `Подтвердите цену выбранного SKU${forLabel}.`,
+      `Укажите вес одной единицы${ofLabel} с индивидуальной упаковкой.`,
+      `Укажите габариты индивидуальной упаковки${atLabel}.`,
+      `Подтвердите основной материал и покрытие/отделку${isPh ? "" : `, если они есть у “${label}”`}.`,
       `Подтвердите комплектацию выбранного SKU: что входит в коробку/пакет.`,
       `Пришлите реальные фото выбранного SKU, комплектации и упаковки.`,
       `Укажите MOQ и срок отгрузки по выбранному SKU.`,
@@ -731,8 +826,8 @@ function genericRules(label: string) {
       "запросить фото товара и упаковки",
     ],
     onSample: [
-      `соответствие выбранному SKU для “${label}”`,
-      `фактический материал/покрытие “${label}”`,
+      `соответствие выбранному SKU${atLabel}`,
+      `фактический материал/покрытие${ofLabel}`,
       `полную комплектацию выбранного SKU`,
       `фактические размеры и сборку/форму, если применимо`,
       `вес с упаковкой и состояние упаковки после доставки`,
@@ -1027,9 +1122,15 @@ function normalizeProductKind(value: unknown): ProductKind | null {
     .toLowerCase();
   if (!raw) return null;
   const direct = raw.match(
-    /footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|dish_rack|kitchen_storage_rack|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product/,
+    /footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|dish_rack|kitchen_storage_rack|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|fake_security_camera|generic_product/,
   )?.[0];
   if (direct && direct in KIND_RULES) return direct as ProductKind;
+  if (
+    /仿真摄像头|假监控|假摄像头|dummy\s*camera|fake\s*camera|imitation\s*(security\s*)?camera|имитац[а-яё ]*камер|муляж\s*камер|фальш[- ]?камер|камера[- ]?муляж|fake\s*cctv/i.test(
+      raw,
+    )
+  )
+    return "fake_security_camera";
   if (/зонт|umbrella|雨伞|雨傘|伞|傘/.test(raw)) return "umbrella";
   if (/маск[аи]\s+для\s+сна|sleep\s*mask|眼罩|睡眠/.test(raw))
     return "sleep_mask";
@@ -1178,6 +1279,49 @@ function collectMaterials(
     ];
   }
   return items.length ? items : ["уточнить у поставщика"];
+}
+
+/**
+ * Normalizes and dedups material strings for user-facing output.
+ * - maps 塑料 / ABS / 苯乙烯 → "ABS-пластик — подтвердить"
+ * - dedups "ABS-пластик, ABS" → single entry
+ * - drops raw Chinese when a Russian equivalent exists
+ * - keeps at most `limit` materials (default 2 for main report)
+ */
+function normalizeMaterials(items: string[], limit = 2): string[] {
+  const cleaned = (items ?? [])
+    .map((s) => String(s ?? "").trim())
+    .filter(Boolean)
+    .filter((s) => !isPlaceholderValue(s));
+  const out: string[] = [];
+  let absAdded = false;
+  const seen = new Set<string>();
+  for (const rawItem of cleaned) {
+    // Split combined entries like "ABS-пластик, ABS" or "塑料（ABS（苯乙烯）"
+    const parts = rawItem
+      .split(/[,，、;；/／()（）]+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    for (const part of parts) {
+      const low = part.toLowerCase();
+      if (/塑料|苯乙烯|^abs$|abs[- ]?пластик|\babs\b/i.test(low)) {
+        if (!absAdded) {
+          out.push("ABS-пластик — подтвердить");
+          absAdded = true;
+        }
+        continue;
+      }
+      // Drop raw-Chinese-only fragments if a Russian material already present
+      const isChineseOnly = /^[㐀-鿿\s]+$/.test(part);
+      if (isChineseOnly) continue;
+      const key = low.replace(/\s+/g, " ").replace(/\s*—.*$/, "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(part);
+    }
+  }
+  const result = out.slice(0, limit);
+  return result.length ? result : ["уточнить у поставщика"];
 }
 
 function collectSkuVariants(product: any): any[] {
@@ -1427,15 +1571,8 @@ function buildPricing(
   const selectedPrice =
     selected.selectedPriceYuan ??
     (selected.reliable ? pos(product?.priceYuan ?? product?.price) : null);
-  const displayPriceText = selectedPrice
-    ? `Выбранный SKU: ${cny(selectedPrice)}`
-    : min && max && min !== max
-      ? `Цена по SKU: ${String(min).replace(".", ",")}–${String(max).replace(".", ",")} ¥`
-      : min
-        ? `Цена: ${cny(min)}`
-        : "Цена: нужно уточнить";
-  return {
-    displayPriceText,
+  const pricingCore: ProductProcurementProfile["pricing"] = {
+    displayPriceText: "",
     selectedPriceYuan: selectedPrice,
     minPriceYuan: min,
     maxPriceYuan: max,
@@ -1455,6 +1592,28 @@ function buildPricing(
       4,
     ),
   };
+  pricingCore.displayPriceText = formatPriceForDisplay(pricingCore);
+  return pricingCore;
+}
+
+/**
+ * Single source of truth for price display. Returns ONLY the value,
+ * never prefixed with "Цена:". Never emits "0 ¥" / "0 ₽".
+ */
+export function formatPriceForDisplay(
+  pricing: Pick<
+    ProductProcurementProfile["pricing"],
+    "selectedPriceYuan" | "minPriceYuan" | "maxPriceYuan"
+  >,
+): string {
+  const selected = pos(pricing.selectedPriceYuan);
+  const min = pos(pricing.minPriceYuan);
+  const max = pos(pricing.maxPriceYuan);
+  if (selected) return cny(selected);
+  if (min && max && min !== max)
+    return `${String(min).replace(".", ",")}–${String(max).replace(".", ",")} ¥`;
+  if (min) return cny(min);
+  return "нужно уточнить";
 }
 
 function buildQuestions(
@@ -1612,7 +1771,7 @@ export function buildProductProcurementProfile(
           ? "home_kitchen"
           : safeRu(identity.categoryType || product?.categoryType || kind),
       subCategoryType: safeRu(identity.subCategoryType || ""),
-      titleForReport,
+      titleForReport: safeTitle(titleForReport),
       titleForSeo,
       shortTitle: safeRu(identity.shortNameRu || titleForReport),
       coreObject: safeRu(identity.coreObject || titleForReport),
@@ -1627,9 +1786,12 @@ export function buildProductProcurementProfile(
         ].map(safeRu),
         6,
       ),
-      materials: uniq(
-        [...array<string>(draftIdentity.materials).map(safeRu), ...materials],
-        6,
+      materials: normalizeMaterials(
+        uniq(
+          [...array<string>(draftIdentity.materials).map(safeRu), ...materials],
+          6,
+        ),
+        2,
       ),
       visibleFeatures: uniq(
         [
@@ -1980,7 +2142,7 @@ export function buildMainReportFromProfile(
     `Поставщик: ${escapeHtml(p.supplier.displayType)}${p.supplier.rating && p.supplier.rating !== "—" ? ` · рейтинг ${escapeHtml(p.supplier.rating)}` : ""}${p.supplier.orders && p.supplier.orders !== "—" ? ` · заказов ${escapeHtml(p.supplier.orders)}` : ""}`,
     "",
     "📌 <b>Товар</b>",
-    `• Цена: ${escapeHtml(p.pricing.displayPriceText.replace(/^Цена:\s*/i, "").replace(/^Цена по SKU:\s*/i, "по SKU: "))}`,
+    `• Цена: ${escapeHtml(formatPriceForDisplay(p.pricing))}`,
     `• Выбранный SKU: ${escapeHtml(p.sku.selectedSkuText || (p.sku.selectedSkuReliable ? "не определён" : `не определён. ${p.pricing.minPriceYuan && p.pricing.maxPriceYuan ? `Цена по SKU: ${String(p.pricing.minPriceYuan).replace(".", ",")}${p.pricing.maxPriceYuan !== p.pricing.minPriceYuan ? `–${String(p.pricing.maxPriceYuan).replace(".", ",")}` : ""} ¥.` : "Нужен выбор SKU."}`))}`,
     `• MOQ: ${moq ? `${Math.round(moq)} шт` : "уточнить"}`,
     `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
@@ -1993,7 +2155,7 @@ export function buildMainReportFromProfile(
         ? `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(" / "))} — значение нужно уточнить`
         : "",
     `• Материал: ${escapeHtml(p.identity.materials.join(", "))}${/подтверд/i.test(p.identity.materials.join(" ")) ? "" : " — подтвердить"}`,
-    `• Вес: ${weight ? `${weight} кг` : "не указан"}`,
+    `• Вес: ${weight ? `${String(weight).replace(".", ",")} кг — подтвердить, нужен вес с упаковкой` : "не указан"}`,
     "",
     "<b>🟡 Статус: нужны данные поставщика</b>",
     "",
@@ -2327,7 +2489,7 @@ export function buildBuyerBriefFromProfile(
     "## 1. Товар",
     `Название: ${p.identity.titleForReport}`,
     `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? "—"}`,
-    `Цена: ${p.pricing.displayPriceText}`,
+    `Цена: ${formatPriceForDisplay(p.pricing)}`,
     `SKU: ${p.sku.selectedSkuText ?? "не определён"}`,
     `SKU в карточке: ${p.sku.skuSummary}`,
     `Цвета: ${p.sku.colors.length ? p.sku.colors.join(", ") : "уточнить"}`,
@@ -2374,7 +2536,7 @@ export function buildCargoBriefFromProfile(
     `Название: ${p.identity.titleForReport}`,
     `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? "—"}`,
     `SKU: ${p.sku.selectedSkuText ?? "не определён"}`,
-    `Цена: ${p.pricing.displayPriceText}`,
+    `Цена: ${formatPriceForDisplay(p.pricing)}`,
     "",
     "## Что нужно запросить для доставки",
     ...list(p.cargo.mustAsk, 16),
@@ -2387,7 +2549,7 @@ export function buildCargoBriefFromProfile(
         ]),
     "",
     "## Текущий статус",
-    `Вес: ${weight ? `${weight} кг` : "не указан"}`,
+    `Вес: ${weight ? `${String(weight).replace(".", ",")} кг — подтвердить, нужен вес с упаковкой` : "не указан"}`,
     "Габариты: не указаны",
     `SKU: ${p.sku.selectedSkuText ?? "не определён"}`,
     "",
@@ -2449,7 +2611,10 @@ export function buildSeoDraftFromProfile(
   opts: { sourceUrl?: string } = {},
 ): string {
   const p = ensureProductProcurementProfile(product, opts);
-  const title = safeSeoTitle(p.identity.titleForSeo, p.identity.productKind);
+  const title = safeSeoTitle(
+    safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
+    p.identity.productKind,
+  );
   const useCases = p.identity.useCases.length
     ? p.identity.useCases.join(", ")
     : "повседневного использования";
@@ -2566,7 +2731,22 @@ function seoDescription(p: ProductProcurementProfile, title: string): string {
   if (p.identity.productKind === "umbrella") {
     return "Складной автоматический зонт с крючком и чехлом подходит для повседневного использования в дороге, на прогулке и в поездках. Перед публикацией подтвердите размер, материал купола и спиц, механизм, комплектацию и заявленную защиту от солнца.";
   }
-  return `${title} — черновик карточки товара на основе закупочных данных. Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.`;
+  if (p.identity.productKind === "fake_security_camera") {
+    return "Муляж камеры видеонаблюдения — декоративная имитация настоящей камеры для визуального эффекта дома, в офисе или магазине. Это не рабочая камера: она не ведёт запись, не подключается к сети и не обнаруживает движение. Перед публикацией подтвердите питание светодиода, комплектацию, размеры, вес и реальные фото у поставщика.";
+  }
+  const objectName = safeTitle(
+    p.identity.coreObject,
+    p.identity.shortTitle,
+    title,
+  );
+  const materialPart =
+    p.identity.materials.length && p.identity.materials[0] !== "уточнить у поставщика"
+      ? ` Материал: ${p.identity.materials.slice(0, 2).join(", ")}.`
+      : "";
+  const useCasePart = p.identity.useCases.length
+    ? ` Подходит для: ${p.identity.useCases.slice(0, 3).join(", ")}.`
+    : "";
+  return `${objectName}.${useCasePart}${materialPart} Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.`;
 }
 
 function seoCharacteristics(

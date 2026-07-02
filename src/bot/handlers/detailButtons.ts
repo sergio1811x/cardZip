@@ -6,6 +6,7 @@ import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementP
 import { buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
 import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateProcurementResult, ensureProductProcurementProfile } from '../../core/procurementProfile';
 import { zipBuilder } from '../../core/zipBuilder';
+import { validateFileFormatting } from '../../core/fileFormatValidator';
 import type { ProductWithContent } from '../../types';
 
 async function getJobData(ctx: Context, jobId: string): Promise<any | null> {
@@ -149,6 +150,10 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
     if (checked.errors.length) console.warn('[materials-validator]', checked.errors.join('; '));
     docs = checked.fixedDocs.map((fixed) => ({ ...docs.find((d) => d.filename === fixed.filename)!, text: fixed.text }));
   }
+
+  // Guardrail: block collapsed / malformed files (lost newlines, one-line docs, broken md tables)
+  const formatErrors = docs.flatMap((d) => validateFileFormatting(d.filename, d.text));
+  if (formatErrors.length) console.error('[file-format-validator]', formatErrors.join('; '));
 
   return { product, prefix, docs, imageUrls };
 }

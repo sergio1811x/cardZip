@@ -164,18 +164,22 @@ export function normalizeCnText(text: string): string {
   for (const [cn, ru] of entries) {
     result = result.split(cn).join(` ${ru} `);
   }
+  // Preserve `\n`: collapse only spaces/tabs so multi-line input survives; cap blank runs.
   return result
     .replace(/[【】（）()]/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
 export function normalizeMixedProductText(input: unknown): string {
   let text = normalizeCnText(String(input ?? ""));
+  // Preserve `\n`: collapse only spaces/tabs so multi-line input survives; cap blank runs.
   text = text
     .replace(/[一-鿿]+/g, " ")
-    .replace(/\s+([,.;:!?])/g, "$1")
-    .replace(/\s+/g, " ")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
   return text;
 }

@@ -135,7 +135,8 @@ export interface ProductContext {
     titleCn: string;
     cleanRu: string;
     shortRu: string;
-    wbTitleDraft: string;
+    wbTitleDraft?: string;
+    titleForSeo?: string;
   };
 
   facts: Record<string, string>;

@@ -31,9 +31,12 @@ const EVIDENCE_ONLY_KEY_RX = /категор|category|1688|跨境|cross[\s-]?bor
 const FASHION_ONLY_KEYS_RX = /аудитория|audience|gender|пол|season|сезон/i;
 
 function text(value: unknown): string {
+  // Preserve `\n`: collapse only spaces/tabs so this stays safe even if a
+  // multi-line attribute value is passed. Also cap 3+ blank lines to max 2.
   return String(value ?? '')
     .replace(SOURCE_LABEL_RX, '')
-    .replace(/\s+/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 

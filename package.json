@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "clean": "rm -rf dist",
-    "test:quality": "vitest run src/core/cardzipQuality.test.ts --config vitest.config.ts"
+    "test:quality": "vitest run src/core/cardzipQuality.test.ts src/core/procurementQuality.test.ts --config vitest.config.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.0",
