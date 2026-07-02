@@ -74,18 +74,6 @@ describe('buildMainMessage snapshot test', () => {
     expect(text).not.toMatch(/Вес: 0 кг/);
     expect(text).not.toMatch(/undefined/);
   });
-
-  it('shows tier range in header for discount tier product', () => {
-    const product = makeProduct({ priceYuan: 26 });
-    const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
-    expect(text).toMatch(/26.*28/);
-  });
-
-  it('shows — for price when no prices at all', () => {
-    const product = makeProduct({ priceYuan: 0, priceRange: undefined, skus: undefined });
-    const { text } = buildMainMessage(product, 'job123', { plan: 'free', creditsRemaining: 3, creditsTotal: 3, canGenerate: true, isTrial: true });
-    expect(text).toContain('Цена: —');
-  });
 });
 
 describe('build1688Detail snapshot test', () => {

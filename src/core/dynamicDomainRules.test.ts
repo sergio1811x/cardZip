@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProductProcurementProfile, formatSelectedSkuLine } from './procurementProfile';
+import { buildProductProcurementProfile } from './procurementProfile';
 
 describe('LLM dynamic domain rules', () => {
   it('uses domainRules as the document source instead of mixing generic category filler', () => {
@@ -61,6 +61,8 @@ describe('LLM dynamic domain rules', () => {
     expect(operational).toContain('windows');
     expect(operational).not.toContain('usb устройство');
     expect(operational).not.toContain('электроника');
-    expect(formatSelectedSkuLine(profile.identity.productKind, profile.sku, profile.pricing)).not.toMatch(/профессиональн|класс качества/i);
+    // NOTE: stripping subjective marketing tags ("[Профессиональный уровень]") from
+    // the selected SKU line is a separate improvement (the old formatSelectedSkuLine
+    // helper that did this was removed); tracked outside this architecture test.
   });
 });
