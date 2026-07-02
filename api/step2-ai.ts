@@ -95,9 +95,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (!job || job.status !== 'elim_done') return res.status(200).json({ ok: true, skip: true });
-    if (!await acquireStepLock('step2', jobId)) return res.status(200).json({ ok: true, skip: true });
+    console.log(`[step2] Start: ${jobId}`);
+    const { data: job, error: jobErr } = await supabase.from('jobs').select('*').eq('id', jobId).single();
+    if (jobErr) console.error('[step2] supabase error', jobErr.message);
+    if (!job || job.status !== 'elim_done') {
+      console.warn(`[step2] Skip: job=${!!job} status=${job?.status}`);
+      return res.status(200).json({ ok: true, skip: true });
+    }
+    if (!await acquireStepLock('step2', jobId)) {
+      console.warn(`[step2] Skip: lock already held`);
+      return res.status(200).json({ ok: true, skip: true });
+    }
     await extendProcessingLock(job.user_id);
 
     await supabase.from('jobs').update({ status: 'ai_processing', updated_at: new Date().toISOString() }).eq('id', jobId);
@@ -169,7 +177,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | cat: ${categoryType} | wbCore: ${wbCoreQuery}`);
 
-    await supabase.from('jobs').update({
+    const { error: updateErr } = await supabase.from('jobs').update({
       status: 'ai_done',
       result_json: {
         ...(job.result_json as any),
@@ -209,6 +217,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } : null,
       },
     }).eq('id', jobId);
+    if (updateErr) console.error('[step2] Supabase update ai_done failed:', updateErr.message);
+    else console.log('[step2] Status set to ai_done');
 
     // Chain → step3-package (legacy endpoint name step3-market)
     const sent = await triggerPipelineStep(req, '/api/step3-market', { jobId }, { logPrefix: 'step2', timeoutMs: 8_000 });

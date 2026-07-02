@@ -12,6 +12,16 @@ export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
+async function supabaseUpdateWithRetry(table: string, data: Record<string, unknown>, matchField: string, matchValue: string, retries = 3): Promise<void> {
+  for (let i = 0; i < retries; i++) {
+    const { error } = await (supabase.from(table) as any).update(data).eq(matchField, matchValue);
+    if (!error) return;
+    console.warn(`[step1] supabase update attempt ${i + 1} failed: ${error.message}`);
+    if (i < retries - 1) await new Promise(r => setTimeout(r, 300 * (i + 1)));
+  }
+  throw new Error('supabase update failed after retries');
+}
+
 function compactSkuButtonLabel(value: unknown, fallback: string): string {
   let label = String(value ?? '').replace(/\s+/g, ' ').trim() || fallback;
 
@@ -111,7 +121,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       attributes: rawProduct.attributes?.slice(0, 15),
       skus: rawProduct.skus?.slice(0, 15),
       selectedSkuName: rawProduct.selectedSkuName,
-      normalized1688: rawProduct.normalized1688,
+      // Limit normalized1688 to essential fields only to avoid Supabase payload limit
+      normalized1688: rawProduct.normalized1688 ? {
+        pricing: rawProduct.normalized1688.pricing,
+        supplierType: rawProduct.normalized1688.supplierType,
+        moq: rawProduct.normalized1688.moq,
+        salesCount: rawProduct.normalized1688.salesCount,
+        soldCountText: rawProduct.normalized1688.soldCountText,
+        skuVariants: rawProduct.normalized1688.skuVariants?.slice(0, 15),
+        attributes: rawProduct.normalized1688.attributes?.slice(0, 15),
+      } : undefined,
     };
 
     // SKU выбор: 2+ SKU с разными ценами или вариантами
@@ -145,10 +164,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Без SKU выбора — продолжаем как раньше
-    await supabase.from('jobs').update({
-      status: 'elim_done',
-      result_json: { rawProduct: rawForJob, imageUrls: rawProduct.images },
-    }).eq('id', jobId);
+    // Set status first (small payload, with retry) so step2 can proceed
+    const imageUrls = (rawProduct.images ?? []).slice(0, 10);
+    await supabaseUpdateWithRetry('jobs', { status: 'elim_done' }, 'id', jobId);
+    console.log(`[step1] Status set to elim_done`);
+
+    // Write result_json separately — allowed to fail without blocking pipeline
+    supabaseUpdateWithRetry('jobs', { result_json: { rawProduct: rawForJob, imageUrls } }, 'id', jobId)
+      .catch(e => console.error(`[step1] result_json update failed: ${e.message}`));
 
     // Вызываем step2. Важно: проверяем HTTP status и используем правильный origin
     // (на VPS это может быть http://..., а не всегда https://host).
