@@ -59,7 +59,7 @@ type CanonicalizerModelResult = Partial<ProductContext> & {
 };
 
 const DEFAULT_MULTIMODAL_MODELS = [
-  "qwen/qwen3.7-plus",
+  "minimax/minimax-m3",
   "google/gemini-2.5-flash-lite",
   "stepfun/step-3.7-flash",
 ];
@@ -71,7 +71,7 @@ const DEFAULT_TEXT_MODELS = [
 ];
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 80_000;
 const DEFAULT_IMAGE_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_IMAGE_BYTES = 1_200_000;
 const DEFAULT_MAX_TOKENS = 8000;
