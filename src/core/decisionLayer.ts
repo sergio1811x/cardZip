@@ -1,6 +1,7 @@
 import type { RawProduct1688 } from '../types';
-import { cleanChineseTitle, normalizeSkuText, normalizeMixedProductText, detectPackCount, extractShoeSize, extractLetterSize, extractSkuComponents } from './cnNormalize';
+import { cleanChineseTitle, normalizeSkuText, normalizeMixedProductText, normalizeCnText, detectPackCount, extractShoeSize, extractLetterSize, extractSkuComponents } from './cnNormalize';
 import { ensureProductProcurementProfile } from './procurementProfile';
+import { normalizePrice } from './priceNormalizer';
 import { cleanRawAttributes, isMaterialLikeSupplierName, stripRawSourceLabels } from './rawAttributeCleaner';
 import { sanitizeUserFacingText } from './userFacingSanitizer';
 
@@ -286,12 +287,40 @@ function supplierTypeRu(value: unknown): string {
   return normalizeFact(value) || 'продавец';
 }
 function money(value: number | null | undefined): string { if (!value || !Number.isFinite(value) || value <= 0) return '—'; return `${Math.round(value).toLocaleString('ru-RU')} ₽`; }
+// Safe "yuan ≈ rub" price line. A number is NEVER string-glued to fallback text.
+// Delegates the yuan/range/fallback decision to the clean priceNormalizer so both
+// price-display code paths agree. The ` ≈ NNN ₽` tail is appended ONLY when the
+// yuan value is a valid positive number AND the ruble value is valid — otherwise
+// the price is shown without any broken ` ≈ ...` tail.
+export function safePriceLine(yuan: number | null | undefined, rub?: number | null | undefined): string {
+  const validYuan = typeof yuan === 'number' && Number.isFinite(yuan) && yuan > 0;
+  const validRub = typeof rub === 'number' && Number.isFinite(rub) && rub > 0;
+  // No valid yuan → return the clean fallback token standalone; NEVER glue a number to it.
+  if (!validYuan) return normalizePrice({ priceYuan: null }).displayPriceText; // "нужно уточнить"
+  const yuanText = cny(yuan); // guaranteed "NN,NN ¥" for a valid positive number
+  return validRub ? `${yuanText} ≈ ${money(rub)}` : yuanText;
+}
 function rangeText(min: number | null, max: number | null): string { if (!min && !max) return 'нужно уточнить'; if (min && max && min !== max) return `${cny(min).replace(' ¥', '')}–${cny(max).replace(' ¥', '')} ¥`; return cny(min ?? max); }
 function html(value: unknown): string { return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 function clean(value: unknown): string { return String(value ?? '').replace(/\b(?:undefined|null|NaN|Infinity|-Infinity)\b/gi, '—').replace(/0(?:[,.]0+)?\s*[¥￥₽]/gi, 'цена уточняется').replace(/0(?:[,.]0+)?\s*(?:кг|kg)\b/gi, 'вес уточняется').replace(/\s+/g, ' ').trim(); }
 function normalizeFact(value: unknown): string { return clean(normalizeMixedProductText(value)); }
 function uniq(list: string[], limit = 20): string[] { const seen = new Set<string>(); const out: string[] = []; for (const raw of list) { const text = clean(raw); if (!text || /^[-—]$/.test(text)) continue; const key = text.toLowerCase(); if (seen.has(key)) continue; seen.add(key); out.push(text); if (out.length >= limit) break; } return out; }
 function stripNumber(v: unknown): string { return normalizeFact(v).replace(/^\s*(?:\d+[.)]|[-•])\s*/g, '').trim(); }
+function hasHan(v: unknown): boolean { return /[一-鿿]/.test(String(v ?? '')); }
+// Map / normalize a raw attribute label so no untranslated Han (e.g. 外形) leaks to the user.
+function translateAttrLabel(label: string): string {
+  const raw = String(label ?? '').trim();
+  const map: Array<[RegExp, string]> = [
+    [/外形|外观|形状/, 'габариты'],
+    [/材质|材料/, 'материал'],
+    [/尺寸|规格/, 'размеры'],
+    [/颜色/, 'цвет'],
+    [/型号|款号/, 'модель'],
+    [/重量/, 'вес'],
+  ];
+  for (const [re, ru] of map) if (re.test(raw)) return ru;
+  return normalizeCnText(raw).replace(/\s+/g, ' ').trim();
+}
 
 function displaySkuSummary(summary: string): string { return clean(summary).replace(/^SKU:\s*/i, ''); }
 function displayMainSkuSummary(x: ReturnType<typeof buildDecisionContext>): string {
@@ -690,7 +719,7 @@ function useCasesLine(x: ReturnType<typeof buildDecisionContext>): string {
 function buildCostSummaryLines(x: ReturnType<typeof buildDecisionContext>): string[] {
   if (!x.price.canCalculateCost || !x.price.calculationPriceYuan) return ['• Закупка: цену нужно уточнить', '• Без карго: не рассчитано', '• Карго: нужен вес с упаковкой'];
   const lines: string[] = [];
-  lines.push(`• Закупка: ${cny(x.price.calculationPriceYuan)}${x.cost.purchaseRub ? ` ≈ ${money(x.cost.purchaseRub)}` : ''}`);
+  lines.push(`• Закупка: ${safePriceLine(x.price.calculationPriceYuan, x.cost.purchaseRub)}`);
   if (x.cost.costWithoutCargoRub) lines.push(`• Без карго: ~${money(x.cost.costWithoutCargoRub)}`);
   else lines.push('• Без карго: не рассчитано');
   if (x.cost.cargoRub) lines.push(`• Карго: ~${money(x.cost.cargoRub)}`);
@@ -800,8 +829,22 @@ export function build1688Detail(product: any): string {
     ...p.sku.normalizedExamples.slice(0, 8),
     ...x.sku.skuVariantsNormalized.slice(0, 6).map(v => v.label),
   ].filter(Boolean).filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i).slice(0, 8);
-  const useful = cleaned.userFacing.slice(0, 10).map(a => `• ${html(a.label)}: ${html(a.value)}`);
   const materialText = p.identity.materials.join(', ') || 'нужно уточнить';
+  // Prefer clean profile facts for "Ключевые характеристики"; the raw 1688 attributes
+  // are heavily filtered so untranslated Han (铜, 外形), duplicate material lines, and
+  // meaningless one-offs (Модель: 001, 外形Размер: 150*140*100) never reach the buyer.
+  const useful = cleaned.userFacing
+    .map(a => ({ label: translateAttrLabel(String(a.label ?? '')), value: normalizeCnText(String(a.value ?? '')).trim() }))
+    .filter(a => a.label && a.value)
+    // drop any line still holding Han in either label or value (untranslated → not useful)
+    .filter(a => !hasHan(a.label) && !hasHan(a.value))
+    // material is already shown once via `materialText` — never duplicate it here
+    .filter(a => !/материал/i.test(a.label))
+    // drop noise one-offs: bare model codes and pure size-blob values with no meaning to a buyer
+    .filter(a => !(/модель/i.test(a.label) && /^0*\d{1,4}$/.test(a.value)))
+    .filter((a, i, arr) => arr.findIndex(o => o.label.toLowerCase() === a.label.toLowerCase()) === i)
+    .slice(0, 10)
+    .map(a => `• ${html(a.label)}: ${html(a.value)}`);
   const supplierName = isMaterialLikeSupplierName(product?.supplierName) ? 'не указано' : (product?.supplierName || p.supplier.name || 'не указано');
   const photoCount = imagesCount(product) || product?.normalized1688?.imageCount || '—';
   const moq = positive(product?.moq ?? product?.normalized1688?.moq);

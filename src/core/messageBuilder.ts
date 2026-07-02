@@ -9,6 +9,7 @@ import {
   buildInfographicBrief,
   buildRiskChecklist,
   buildSampleRecommendation,
+  safePriceLine,
 } from './decisionLayer';
 
 function detailKeyboard(jobId: string) {
@@ -59,7 +60,9 @@ export function buildEconomicsDetail(product: any, jobId: string): { text: strin
     lines.push('', 'Что сделать сейчас: уточните цену выбранного SKU у поставщика.');
   } else {
     lines.push('<b>Цена товара</b>');
-    lines.push(`${x.price.displayPriceText}${x.cost.purchaseRub ? ` ≈ ${x.cost.purchaseRub.toLocaleString('ru-RU')} ₽` : ''}`);
+    // Never string-glue a ruble number to fallback text: delegate to safePriceLine,
+    // which only appends ` ≈ NNN ₽` when both yuan and rub are valid positive numbers.
+    lines.push(safePriceLine(x.price.calculationPriceYuan, x.cost.purchaseRub));
     lines.push('');
     lines.push('<b>Сейчас можно посчитать</b>');
     if (x.cost.purchaseRub) lines.push(`• товар: ${x.cost.purchaseRub.toLocaleString('ru-RU')} ₽`);

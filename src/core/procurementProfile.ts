@@ -80,6 +80,8 @@ export type ProductProcurementProfile = {
     skuWarnings: string[];
     normalizedExamples: string[];
     ambiguousParams: string[];
+    /** LLM-labeled SKU dimension summary, e.g. "ёмкость: 26800 мА·ч". */
+    labeledParams: string[];
   };
   pricing: {
     displayPriceText: string;
@@ -1383,7 +1385,40 @@ function collectMaterials(
       /материал|材质|面料|成分|material/i.test(String(a?.name ?? "")),
     )
     .map((a) => safeRu(a?.value));
-  let items = uniq([...fromIntel, ...fromAttrs].map(safeRu), 6);
+  // A material that actually describes a sub-component (wire core / cable /
+  // plug), e.g. 铜线 (copper wire) or 铜芯 (copper core), is NOT the product's
+  // housing material — mark it component-scoped and unconfirmed instead of
+  // presenting it as THE material.
+  const rawMaterialText = [
+    ...fromIntel,
+    ...attrs
+      .filter((a) =>
+        /материал|材质|面料|成分|material/i.test(String(a?.name ?? "")),
+      )
+      .map((a) => String(a?.value ?? "")),
+  ].join(" ");
+  const isWireComponentMaterial =
+    /铜线|铜芯|线芯|медн\w*\s+(?:провод|жил|шнур|кабел)|провод|кабел|шнур/i.test(
+      rawMaterialText,
+    );
+
+  let items = uniq(
+    [...fromIntel, ...fromAttrs]
+      .map(safeRu)
+      // Translate copper and drop the sub-component wire material from the
+      // main product-material list; keep general (not solar-specific).
+      .map((s) => s.replace(/\bcopper\b/gi, "медь"))
+      .filter((s) => {
+        if (!isWireComponentMaterial) return true;
+        return !/медн?\w*|copper/i.test(s);
+      }),
+    6,
+  );
+  // If ALL materials were the wire sub-component, surface it as component-scoped
+  // and unconfirmed rather than dropping the info entirely.
+  if (isWireComponentMaterial && !items.length) {
+    items = ["медь — только жила шнура/вилки, не корпус — подтвердить"];
+  }
   if (kind === "umbrella") {
     const joined = items.join(" ").toLowerCase();
     const hasMetal = /желез|сплав|металл|iron|alloy|钢|铁|合金/i.test(
@@ -1564,6 +1599,82 @@ function structureElectricalSku(rawLabel: string): {
   };
 }
 
+type StructuredSkuDimension = { label: string; value: string };
+type StructuredSkuVariant = {
+  raw: string;
+  model: string | null;
+  color: string | null;
+  plugStandard: string | null;
+  dimensions: StructuredSkuDimension[];
+};
+
+/**
+ * Reads the LLM-provided structured SKU breakdown from the canonicalizer draft.
+ * Returns [] when absent (old jobs / LLM miss) so callers fall back to the
+ * deterministic path.
+ */
+function readStructuredSkuVariants(product: any): StructuredSkuVariant[] {
+  const draft = record(
+    product?.productProcurementProfileDraft ??
+      product?.procurementProfileDraft ??
+      product?.productContext?.procurementProfileDraft ??
+      product?.productContext?.profileDraft,
+  );
+  const raw = array<any>(record(draft.sku).variants);
+  const out: StructuredSkuVariant[] = [];
+  for (const v of raw) {
+    const obj = record(v);
+    const dims = array<any>(obj.dimensions)
+      .map((d) => {
+        const dd = record(d);
+        const label = safeRu(dd.label);
+        const value = clean(dd.value);
+        return label && value ? { label, value } : null;
+      })
+      .filter((d): d is StructuredSkuDimension => !!d);
+    const rawLabel = clean(obj.raw);
+    const model = safeRu(obj.model) || null;
+    const color = safeRu(obj.color) || null;
+    const plug = (extractPlugStandard(obj.plugStandard) ??
+      String(obj.plugStandard ?? "").trim()) || null;
+    if (!rawLabel && !model && !color && !dims.length) continue;
+    out.push({
+      raw: rawLabel,
+      model,
+      color,
+      plugStandard: plug && /^(US|EU|UK|JP|KR|AU|CN)$/i.test(plug) ? plug.toUpperCase() : null,
+      dimensions: dims,
+    });
+  }
+  return out;
+}
+
+/** Joins a structured variant into a single labeled human string. */
+function renderStructuredVariant(v: StructuredSkuVariant): string {
+  const parts = [
+    v.model,
+    ...v.dimensions.map((d) => d.value),
+    v.color,
+    v.plugStandard,
+  ].filter((x): x is string => !!x && x.trim().length > 0);
+  return uniq(parts, 8).join(" · ");
+}
+
+/**
+ * Safe deterministic cleanup of a raw SKU label when no structured data exists.
+ * Strips trailing " _", dangling "-", stray separators — so we show a cleaned
+ * raw label instead of number-soup like `68800M 80 _10 -`.
+ */
+function cleanRawSkuLabel(label: string): string {
+  return clean(label)
+    .replace(/[_·\-–—/]+\s*$/g, "")
+    .replace(/\s*[_·\-–—/]{2,}\s*/g, " · ")
+    .replace(/\s+_\s+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[_\-–—]+$/g, "")
+    .trim();
+}
+
 function buildSkuProfile(
   product: any,
   kind: ProductKind,
@@ -1572,6 +1683,25 @@ function buildSkuProfile(
   const variants = collectSkuVariants(product);
   const labels = variants.map(skuName).filter(Boolean);
   const electrical = isElectricalKind(kind);
+  const structuredVariants = readStructuredSkuVariants(product);
+  const hasStructured = structuredVariants.length > 0;
+  // Distinct labeled dimensions the LLM identified across all variants, e.g.
+  // "ёмкость", "мощность", "длина кабеля" — used to render a clean summary and
+  // to replace the anonymous number pile.
+  const structuredLabels = uniq(
+    structuredVariants.flatMap((v) => v.dimensions.map((d) => d.label)),
+    8,
+  );
+  // One representative value per label (e.g. "ёмкость: 26800 мА·ч").
+  const structuredSummaryPairs: string[] = structuredLabels.map((label) => {
+    const values = uniq(
+      structuredVariants
+        .flatMap((v) => v.dimensions.filter((d) => d.label === label))
+        .map((d) => d.value),
+      4,
+    );
+    return `${label}: ${values.join(" / ")}`;
+  });
   // Raw (still-Chinese) variant names — needed because skuName()/safeRu strips
   // CJK, which would destroy plug/color/model tokens for electrical goods.
   const rawNames = variants
@@ -1582,9 +1712,9 @@ function buildSkuProfile(
     )
     .filter(Boolean);
   const colors = extractColors(labels);
-  const ambiguousParams = electrical
-    ? []
-    : extractAmbiguousParams(labels, kind);
+  // When the LLM provided labeled dimensions, never emit the bare number pile.
+  const ambiguousParams =
+    electrical || hasStructured ? [] : extractAmbiguousParams(labels, kind);
   const plugStandards = electrical
     ? uniq(
         rawNames
@@ -1663,24 +1793,70 @@ function buildSkuProfile(
         : "размер",
     );
   if (ambiguousParams.length) dims.push("параметр SKU");
+  // Add LLM-identified labeled dimensions (ёмкость, мощность, длина кабеля…).
+  for (const label of structuredLabels) {
+    if (!dims.some((d) => d.toLowerCase() === label.toLowerCase()))
+      dims.push(label);
+  }
   if (!dims.length && variants.length > 1) dims.push("вариант");
   const count = variants.length || labels.length;
   const skuSummary = count
     ? `${count} ${pluralRu(count, "вариант", "варианта", "вариантов")} · ${dims.join(" × ") || "вариант"}`
     : "SKU нужно уточнить";
-  const normalizedExamples = electrical
+  const normalizedExamples = hasStructured
     ? uniq(
-        rawNames.map((l) => structureElectricalSku(l).text).filter(Boolean),
+        structuredVariants
+          .map(renderStructuredVariant)
+          .filter(Boolean),
         5,
       )
-    : labels
-        .slice(0, 5)
-        .map((l) =>
-          ambiguousParams.length
-            ? l.replace(/\b(8|16|40|120)\b/g, "Параметр $1")
-            : l,
-        );
+    : electrical
+      ? uniq(
+          rawNames.map((l) => structureElectricalSku(l).text).filter(Boolean),
+          5,
+        )
+      : labels
+          .slice(0, 5)
+          .map((l) =>
+            ambiguousParams.length
+              ? cleanRawSkuLabel(l)
+              : cleanRawSkuLabel(l),
+          );
   const selected = makeSelectedSkuDecision(product, variants, sourceUrl, kind);
+  // Prefer a labeled structured render for the selected SKU when the LLM
+  // matched a variant (by raw label). Falls back to the deterministic text.
+  if (hasStructured && selected.selectedSkuText) {
+    const selRaw = clean(selected.selectedSkuText).toLowerCase();
+    // Compare on a token-normalized form so CJK-stripping on the selected text
+    // (e.g. "26800M 20 10m") still matches the structured raw label.
+    const tok = (s: string) =>
+      s.toLowerCase().replace(/[^a-z0-9]+/gi, " ").trim();
+    const selTok = tok(selRaw);
+    const match =
+      structuredVariants.find(
+        (v) => v.raw && selRaw.includes(clean(v.raw).toLowerCase()),
+      ) ??
+      structuredVariants.find(
+        (v) => v.raw && clean(v.raw).toLowerCase().includes(selRaw),
+      ) ??
+      structuredVariants.find((v) => {
+        if (!v.raw || !selTok) return false;
+        const vt = tok(v.raw);
+        return vt.includes(selTok) || selTok.includes(vt);
+      }) ??
+      // Fall back to model-code match (e.g. selected "26800M" vs model "26800mAh").
+      structuredVariants.find((v) => {
+        const modelDigits = (v.model ?? "").replace(/\D/g, "");
+        const selDigits = selRaw.replace(/\D/g, "").slice(0, 6);
+        return modelDigits && selDigits && modelDigits.startsWith(selDigits.slice(0, 4));
+      });
+    const rendered = match ? renderStructuredVariant(match) : "";
+    if (rendered) selected.selectedSkuText = rendered;
+    else selected.selectedSkuText = cleanRawSkuLabel(selected.selectedSkuText);
+  } else if (selected.selectedSkuText) {
+    // Deterministic fallback: never leak `68800M 80 _10 -` style soup.
+    selected.selectedSkuText = cleanRawSkuLabel(selected.selectedSkuText);
+  }
   // For an electrical kind, never show a selected SKU without a plug slot when
   // the variant set contains plug standards.
   if (electrical && selected.selectedSkuText && plugStandards.length) {
@@ -1720,6 +1896,7 @@ function buildSkuProfile(
     ),
     normalizedExamples,
     ambiguousParams,
+    labeledParams: uniq(structuredSummaryPairs, 8),
   };
 }
 
@@ -2447,11 +2624,13 @@ export function buildMainReportFromProfile(
     p.sku.plugStandards.length
       ? `• Стандарты вилки: ${escapeHtml(p.sku.plugStandards.join(", "))} — уточнить выбранный SKU`
       : "",
-    p.sku.sizes.length
-      ? `• Размеры: ${escapeHtml(p.sku.sizes.join(", "))}`
-      : p.sku.ambiguousParams.length
-        ? `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(" / "))} — значение нужно уточнить`
-        : "",
+    p.sku.labeledParams.length
+      ? `• Параметры: ${escapeHtml(p.sku.labeledParams.join(" · "))}`
+      : p.sku.sizes.length
+        ? `• Размеры: ${escapeHtml(p.sku.sizes.join(", "))}`
+        : p.sku.ambiguousParams.length
+          ? `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(" / "))} — значение нужно уточнить`
+          : "",
     `• Материал: ${escapeHtml(p.identity.materials.join(", "))}${/подтверд/i.test(p.identity.materials.join(" ")) ? "" : " — подтвердить"}`,
     `• Вес: ${weight ? `${String(weight).replace(".", ",")} кг — подтвердить, нужен вес с упаковкой` : "не указан"}`,
     "",

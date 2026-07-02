@@ -209,6 +209,74 @@ export function validateProcurementResult(
     }
   }
 
+  // ---- Report-rendering regressions over every user-facing blob ----
+  // (glued price fallback, raw Chinese in labeled fields, raw attribute
+  //  labels, number-soup SKU lines, duplicate material)
+  // Chinese is allowed only in proper-name fields the buyer needs verbatim:
+  // the CN title and supplier/store/brand names (used to find the shop on 1688).
+  // Spec fields (материал, размер, 型号, …) must never contain Han.
+  const labelAllowsChinese = (label: string): boolean =>
+    /CN\b|китайск|Название\s*CN|назван|\bимя\b|бренд|магазин|store|поставщик|продавец|фабрик/i.test(label);
+
+  const rawChineseLabeledRe = /^[•\-\s]*([^\n:]{0,40}):\s*[^\n]*[一-鿿]/;
+  const rawAttrLabelRe = /^[•\-\s]*[一-鿿]+[^:]*:/;
+  const unitWordRe = /Вт|мА·?ч|мАч|мА|мм|см|кг|км|¥|元|\bм\b/i;
+
+  for (const blob of userFacingBlobs) {
+    const lines = blob.text.split("\n");
+    for (const rawLine of lines) {
+      const line = rawLine;
+
+      // Glued digit immediately before "нужно уточнить" (no space), incl. after ≈.
+      if (/\d+нужно уточнить/.test(line) || /≈\s*\d+\s*нужно уточнить/.test(line)) {
+        errors.push(`[${blob.label}] glued price fallback ("<digits>нужно уточнить")`);
+      }
+
+      // Raw attribute label: the LABEL itself contains Han (e.g. "外形Размер:").
+      if (rawAttrLabelRe.test(line)) {
+        errors.push(`[${blob.label}] raw attribute label`);
+        continue;
+      }
+
+      // Raw Chinese in the VALUE of a labeled user-facing line — unless it is a
+      // legitimately-Chinese CN-title line (label contains CN/китайск).
+      const cn = line.match(rawChineseLabeledRe);
+      if (cn) {
+        const label = cn[1] ?? "";
+        if (!labelAllowsChinese(label)) {
+          errors.push(`[${blob.label}] raw Chinese in labeled field`);
+        }
+      }
+
+      // Number-soup SKU line: an SKU/Параметры line that is 4+ bare number
+      // tokens (separated by " / " or spaces) with no unit/label words.
+      if (/SKU|Параметр/i.test(line)) {
+        const valuePart = line.replace(/^[^:]*:/, "");
+        if (!unitWordRe.test(valuePart)) {
+          const numTokens = valuePart.match(/\b\d+(?:[.,]\d+)?\b/g) ?? [];
+          const nonNumWords = valuePart.match(/[A-Za-zА-Яа-яЁё]{2,}/g) ?? [];
+          if (numTokens.length >= 4 && nonNumWords.length === 0) {
+            errors.push(`[${blob.label}] number-soup SKU without labels`);
+          }
+        }
+      }
+    }
+
+    // Duplicate material: two material labels in the same blob, OR a Cyrillic
+    // material value alongside a Han material value.
+    if (/Материал[:\s][^\n]*\n?[^\n]*Материал[:\s]/i.test(blob.text)) {
+      const materialLines = lines.filter((l) => /материал[:\s]/i.test(l));
+      const hasCyr = materialLines.some((l) => /материал[:\s].*[А-Яа-яЁё]/i.test(l));
+      const hasHan = materialLines.some((l) => /материал[:\s].*[一-鿿]/i.test(l));
+      const distinctValues = new Set(
+        materialLines.map((l) => l.replace(/^[^:]*:/, "").trim()).filter(Boolean),
+      );
+      if ((hasCyr && hasHan) || distinctValues.size >= 2) {
+        errors.push(`[${blob.label}] duplicate material with different values`);
+      }
+    }
+  }
+
   // ---- Raw long SKU list one-liner in productDetails ----
   {
     const modelTokenRe = /[A-Z]{2,}-?\d{2,}/g;
