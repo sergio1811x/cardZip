@@ -2976,7 +2976,7 @@ function dedupMarkdownBulletLines(text: string): string {
   return out.join("\n");
 }
 
-export function validateProcurementResult(input: {
+export function repairProcurementTexts(input: {
   mainReport?: string;
   productDetails?: string;
   docs?: Array<{ filename: string; text: string }>;

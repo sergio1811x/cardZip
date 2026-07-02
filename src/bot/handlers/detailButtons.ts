@@ -4,9 +4,10 @@ import AdmZip from 'adm-zip';
 import { supabase } from '../../db/supabase';
 import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail, buildMainMessage } from '../../core/messageBuilder';
 import { buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
-import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateProcurementResult, ensureProductProcurementProfile } from '../../core/procurementProfile';
+import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, repairProcurementTexts, ensureProductProcurementProfile } from '../../core/procurementProfile';
 import { zipBuilder } from '../../core/zipBuilder';
 import { validateFileFormatting } from '../../core/fileFormatValidator';
+import { validateProcurementResult } from '../../core/validateProcurementResult';
 import type { ProductWithContent } from '../../types';
 
 async function getJobData(ctx: Context, jobId: string): Promise<any | null> {
@@ -151,9 +152,19 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
     docs = checked.fixedDocs.map((fixed) => ({ ...docs.find((d) => d.filename === fixed.filename)!, text: fixed.text }));
   }
 
-  // Guardrail: block collapsed / malformed files (lost newlines, one-line docs, broken md tables)
+  // Guardrail: detect collapsed / malformed files + placeholder/label/material/SEO defects
   const formatErrors = docs.flatMap((d) => validateFileFormatting(d.filename, d.text));
   if (formatErrors.length) console.error('[file-format-validator]', formatErrors.join('; '));
+  const seoDoc = docs.find((d) => d.filename === '05_SEO_черновик.md');
+  const quality = validateProcurementResult({
+    files: docs.map((d) => ({ name: d.filename, content: d.text })),
+    productDetailsText: '',
+    mainReportText: '',
+    seoDraftMd: seoDoc?.text ?? '',
+    productKind: product ? ensureProductProcurementProfile(product, { sourceUrl: job.input_url }).identity.productKind : undefined,
+  });
+  if (!quality.passed) console.error('[procurement-quality-gate]', quality.errors.join('; '));
+  if (quality.warnings.length) console.warn('[procurement-quality-gate:warn]', quality.warnings.join('; '));
 
   return { product, prefix, docs, imageUrls };
 }
@@ -226,7 +237,7 @@ export async function handleProductDetail(ctx: Context): Promise<void> {
   await ctx.answerCbQuery();
   const { text, keyboard } = build1688Detail(product, jobId);
   const profile = ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
-  const checked = validateProcurementResult({ productDetails: text, profile });
+  const checked = repairProcurementTexts({ productDetails: text, profile });
   if (checked.errors.length) console.warn('[product-details-validator]', checked.errors.join('; '));
   await ctx.reply(checked.fixed.productDetails ?? text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...keyboard });
 }

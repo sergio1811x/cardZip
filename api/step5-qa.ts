@@ -7,7 +7,8 @@ import { getStatus, tryConsumeCredit } from '../src/services/subscriptionService
 import { buildMainMessage, buildSafeSummary } from '../src/core/messageBuilder';
 
 import { buildDecisionContext } from '../src/core/decisionLayer';
-import { ensureProductProcurementProfile, buildSupplierQuestionsFromProfile, translateSupplierQuestionsRuToCn, formatSupplierQuestionsText, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateMainReport, validateProfile, validateProcurementResult } from '../src/core/procurementProfile';
+import { ensureProductProcurementProfile, buildSupplierQuestionsFromProfile, translateSupplierQuestionsRuToCn, formatSupplierQuestionsText, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateMainReport, validateProfile, repairProcurementTexts } from '../src/core/procurementProfile';
+import { validateProcurementResult } from '../src/core/validateProcurementResult';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
 import { acquireStepLock } from '../src/lib/stepLock';
@@ -177,7 +178,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let finalText = mainText;
 
-    const procurementResultValidation = validateProcurementResult({
+    const procurementResultValidation = repairProcurementTexts({
       mainReport: finalText,
       docs: [
         { filename: '01_Вопросы_поставщику.txt', text: supplierText },
@@ -240,7 +241,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (fixed?.seoText) seoText = String(fixed.seoText);
       if (fixed?.buyerBrief) briefText = String(fixed.buyerBrief);
 
-      const postFixValidation = validateProcurementResult({
+      const postFixValidation = repairProcurementTexts({
         mainReport: finalText,
         docs: [
           { filename: '01_Вопросы_поставщику.txt', text: supplierText },
@@ -262,6 +263,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (doc.filename === '00_Инструкция.txt') readmeText = doc.text;
       }
     }
+
+    // Final read-only quality gate over the finalized package (logs defects; non-blocking).
+    const finalQuality = validateProcurementResult({
+      files: [
+        { name: '01_Вопросы_поставщику.txt', content: supplierText },
+        { name: '02_ТЗ_байеру.md', content: briefText },
+        { name: '03_ТЗ_карго.md', content: cargoText },
+        { name: '04_Чеклист_образца.md', content: sampleChecklistText },
+        { name: '05_SEO_черновик.md', content: seoText },
+        { name: '00_Инструкция.txt', content: readmeText },
+      ],
+      productDetailsText: '',
+      mainReportText: finalText,
+      seoDraftMd: seoText,
+      productKind: profileForFiles?.identity?.productKind,
+    });
+    if (!finalQuality.passed) console.error('[step5] procurement quality gate defects:', finalQuality.errors.join('; '));
+    if (finalQuality.warnings.length) console.warn('[step5] procurement quality warnings:', finalQuality.warnings.join('; '));
 
     progress?.step('charge');
     // Charge only after hard validator + QA allow the full user report.
