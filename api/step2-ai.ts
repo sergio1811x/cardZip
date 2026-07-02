@@ -8,6 +8,7 @@ import { cleanChineseTitle } from '../src/core/cnNormalize';
 import { buildProductProcurementProfile, preprocessMainImageForProductIntelligence, validateProfile } from '../src/core/procurementProfile';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
+import { getJobById, updateJob } from '../src/lib/supabaseRetry';
 
 export const config = { maxDuration: 60 };
 
@@ -95,12 +96,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (!job || job.status !== 'elim_done') return res.status(200).json({ ok: true, skip: true });
+    console.log(`[step2] Start: ${jobId}`);
+    const { data: job, error: jobErr } = await getJobById(jobId);
+    if (jobErr) console.error('[step2] supabase error', jobErr.message);
+    if (!job || job.status !== 'elim_done') {
+      console.warn(`[step2] Skip: job=${!!job} status=${(job as any)?.status}`);
+      return res.status(200).json({ ok: true, skip: true });
+    }
     if (!await acquireStepLock('step2', jobId)) return res.status(200).json({ ok: true, skip: true });
     await extendProcessingLock(job.user_id);
 
-    await supabase.from('jobs').update({ status: 'ai_processing', updated_at: new Date().toISOString() }).eq('id', jobId);
+    await updateJob(jobId, { status: 'ai_processing', updated_at: new Date().toISOString() });
 
     const raw = (job.result_json as any).rawProduct;
 
@@ -169,7 +175,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | cat: ${categoryType} | wbCore: ${wbCoreQuery}`);
 
-    await supabase.from('jobs').update({
+    await updateJob(jobId, {
       status: 'ai_done',
       result_json: {
         ...(job.result_json as any),
@@ -208,7 +214,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           hardNegativeTerms: productContext.wbSearch.mustExclude,
         } : null,
       },
-    }).eq('id', jobId);
+    });
+    console.log('[step2] Status set to ai_done');
 
     // Chain → step3-package (legacy endpoint name step3-market)
     const sent = await triggerPipelineStep(req, '/api/step3-market', { jobId }, { logPrefix: 'step2', timeoutMs: 8_000 });

@@ -538,7 +538,7 @@ async function callProvider(
         ],
       }),
       signal: AbortSignal.timeout(
-        Number(process.env.AI_TEXT_TIMEOUT_MS ?? 35_000),
+        Number(process.env.AI_TEXT_TIMEOUT_MS ?? 70_000),
       ),
     });
 

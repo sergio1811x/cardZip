@@ -7,6 +7,7 @@ import { normalizeCnText } from '../src/core/cnNormalize';
 import { createStepProgress } from '../src/core/progress';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock } from '../src/lib/stepLock';
+import { updateJob } from '../src/lib/supabaseRetry';
 
 export const config = { maxDuration: 60 };
 
@@ -145,10 +146,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Без SKU выбора — продолжаем как раньше
-    await supabase.from('jobs').update({
-      status: 'elim_done',
-      result_json: { rawProduct: rawForJob, imageUrls: rawProduct.images },
-    }).eq('id', jobId);
+    const imageUrls = (rawProduct.images ?? []).slice(0, 10);
+    await updateJob(jobId, { status: 'elim_done', result_json: { rawProduct: rawForJob, imageUrls } });
+    console.log(`[step1] Status set to elim_done`);
 
     // Вызываем step2. Важно: проверяем HTTP status и используем правильный origin
     // (на VPS это может быть http://..., а не всегда https://host).

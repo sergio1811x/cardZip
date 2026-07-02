@@ -71,7 +71,7 @@ export async function handleRewrite(ctx: Context) {
               { role: 'user', content: `${prompt}\n\nИСХОДНЫЙ ТЕКСТ:\n${originalText}` },
             ],
           }),
-          signal: AbortSignal.timeout(20_000),
+          signal: AbortSignal.timeout(45_000),
         });
         if (!res.ok) continue;
         const data = await res.json() as any;

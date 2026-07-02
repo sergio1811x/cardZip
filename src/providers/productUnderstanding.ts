@@ -97,7 +97,7 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
           model, max_tokens: 2400, temperature: 0.2,
           messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
         }),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(45_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as any;
@@ -119,7 +119,7 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
           max_tokens: 2400, temperature: 0.2,
           messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
         }),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(45_000),
       });
       if (res.ok) {
         const data = await res.json() as any;
@@ -369,7 +369,7 @@ async function callLlmWithVision(prompt: string, systemMsg: string, imageBase64:
           model, max_tokens: 3000, temperature: 0.2,
           messages,
         }),
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(60_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as any;
@@ -493,7 +493,7 @@ export async function generateProductIntelligence(raw: {
   let imageBase64: string | null = null;
   if (raw.mainImageUrl) {
     try {
-      const imgRes = await fetch(raw.mainImageUrl, { signal: AbortSignal.timeout(5000) });
+      const imgRes = await fetch(raw.mainImageUrl, { signal: AbortSignal.timeout(10_000) });
       if (imgRes.ok) {
         const buffer = Buffer.from(await imgRes.arrayBuffer());
         // Limit to 500KB

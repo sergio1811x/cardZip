@@ -80,7 +80,7 @@ export async function handleAdminWbDateInput(ctx: Context, text: string): Promis
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-cardzip-admin-secret': secret ?? '' },
       body: JSON.stringify({ secret, date: dateMatch[0] }),
-      signal: AbortSignal.timeout(55_000),
+      signal: AbortSignal.timeout(120_000),
     });
     const data = await res.json() as any;
 

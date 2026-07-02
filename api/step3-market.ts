@@ -5,6 +5,7 @@ import { supabase } from '../src/db/supabase';
 import { createStepProgress } from '../src/core/progress';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
+import { getJobById, updateJob } from '../src/lib/supabaseRetry';
 import { buildDecisionContext } from '../src/core/decisionLayer';
 import { buildProductProcurementProfile, validateProfile } from '../src/core/procurementProfile';
 
@@ -18,12 +19,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (!job || job.status !== 'ai_done') return res.status(200).json({ ok: true, skip: true });
+    console.log(`[step3] Start: ${jobId}`);
+    const { data: job, error: jobErr } = await getJobById(jobId);
+    if (jobErr) console.error('[step3] supabase error', jobErr.message);
+    if (!job || job.status !== 'ai_done') {
+      console.warn(`[step3] Skip: job=${!!job} status=${(job as any)?.status}`);
+      return res.status(200).json({ ok: true, skip: true });
+    }
     if (!await acquireStepLock('step3', jobId)) return res.status(200).json({ ok: true, skip: true });
     await extendProcessingLock(job.user_id);
 
-    await supabase.from('jobs').update({ status: 'package_processing', updated_at: new Date().toISOString() }).eq('id', jobId);
+    await updateJob(jobId, { status: 'package_processing', updated_at: new Date().toISOString() });
 
     const result = job.result_json as any;
     const raw = result.rawProduct;
@@ -83,7 +89,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     progress?.step('package');
     progress?.stop({ clear: false });
 
-    await supabase.from('jobs').update({
+    await updateJob(jobId, {
       status: 'done',
       result_json: {
         ...result,
@@ -102,7 +108,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         durationMarketMs: 0,
       },
       updated_at: new Date().toISOString(),
-    }).eq('id', jobId);
+    });
+    console.log('[step3] Status set to done');
 
     const sent = await triggerPipelineStep(req, '/api/step4-send', { jobId }, { logPrefix: 'step3', timeoutMs: 8_000 });
     if (!sent) {

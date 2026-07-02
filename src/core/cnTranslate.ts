@@ -146,7 +146,7 @@ export async function translateSkuNamesViaLlm(names: string[], context?: SkuTran
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(14_000),
+        signal: AbortSignal.timeout(30_000),
       });
 
       if (!res.ok) {

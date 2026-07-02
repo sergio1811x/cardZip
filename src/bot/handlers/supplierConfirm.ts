@@ -327,7 +327,7 @@ async function extractSupplierData(text: string): Promise<ExtractedData | null> 
             { role: 'user', content: `${EXTRACT_PROMPT}\n\nТекст: ${text.slice(0, 2000)}` },
           ],
         }),
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as any;
