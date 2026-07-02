@@ -97,6 +97,15 @@ export type ProductProcurementProfile = {
     rating: string;
     orders: string;
     name: string;
+    reliability: {
+      level: "high" | "medium" | "low" | "unknown";
+      badge: "🟢" | "🟡" | "🔴" | "⚪";
+      score: number | null;
+      reasons: string[];
+    };
+  };
+  logistics: {
+    weightKg: number | null;
   };
   procurement: {
     status: string;
@@ -1143,6 +1152,193 @@ function pos(v: unknown): number | null {
   const n = num(v);
   return n && n > 0 ? Math.round(n * 100) / 100 : null;
 }
+/**
+ * Resolve product weight (kg) from all known locations, in priority order:
+ * 1. explicit weightKg / packedWeightKg / normalized1688.weightKg
+ * 2. a numeric value parsed from product.attributes whose name matches
+ *    重量 / 毛重 / 净重 / вес / weight. Supports "2.65", "2.65kg", "2.65 кг",
+ *    and gram values ("2650 г" → 2.65). Absurd values (<=0 or >200kg) ignored.
+ */
+export function extractWeightKg(product: any): number | null {
+  // Highest priority: the LLM canonicalizer already extracted + unit-normalized
+  // weight into a structured logistics block (g→kg done upstream).
+  const llm = pos(
+    product?.productContext?.procurementProfileDraft?.logistics?.weightKg ??
+      product?.productContext?.logistics?.weightKg,
+  );
+  if (llm && llm <= 200) return llm;
+  const direct = pos(
+    product?.weightKg ??
+      product?.packedWeightKg ??
+      product?.normalized1688?.weightKg,
+  );
+  if (direct && direct <= 200) return direct;
+  const attrs = array<any>(
+    product?.attributes ?? product?.normalized1688?.attributes,
+  );
+  for (const a of attrs) {
+    const name = String(a?.name ?? "");
+    if (!/重量|毛重|净重|вес|weight/i.test(name)) continue;
+    const raw = String(a?.value ?? "");
+    const n = num(raw);
+    if (n === null || n <= 0) continue;
+    // Detect gram units → convert to kg.
+    const isGram = /\b(g|г|克|gram)\b|(?<![a-zа-я])g(?![a-zа-я])/i.test(raw);
+    let kg = isGram ? n / 1000 : n;
+    // Heuristic: a bare number ≥ 200 in a weight field is almost certainly grams.
+    if (!isGram && kg > 200) kg = kg / 1000;
+    kg = Math.round(kg * 100) / 100;
+    if (kg > 0 && kg <= 200) return kg;
+  }
+  return null;
+}
+
+/**
+ * Deterministic supplier reliability assessment. Uses only signals present on
+ * the product — never invents data. Scoring (documented, simple):
+ *   start at 50 (neutral).
+ *   rating ≥4.6 → +20; 4.0–4.5 → 0; <4.0 → −20.
+ *   orders ≥500 → +15; 50–499 → 0; <50 → −15 (thin history).
+ *   return rate >20% → −25; >10% → −12.
+ *   delivery rate <95% → −12.
+ *   positive-review rate ≥95% → +8; <85% → −10.
+ * Clamped to 0–100 then mapped to level/badge. Reasons are evidence, not a
+ * guarantee — we never assert a supplier is "safe/reliable" as fact.
+ */
+export function computeSupplierReliability(product: any): {
+  level: "high" | "medium" | "low" | "unknown";
+  badge: "🟢" | "🟡" | "🔴" | "⚪";
+  score: number | null;
+  reasons: string[];
+} {
+  const present = (v: unknown): boolean =>
+    v !== undefined && v !== null && String(v).trim() !== "";
+  const pick = (...vals: unknown[]): unknown =>
+    vals.find((v) => present(v));
+  const pct = (v: unknown): number | null => {
+    if (!present(v)) return null;
+    const n = num(v);
+    if (n === null || n < 0) return null;
+    return n <= 1 ? n * 100 : n; // accept 0.36 or 36
+  };
+  const numIf = (v: unknown): number | null => (present(v) ? num(v) : null);
+  const rating = numIf(
+    pick(product?.supplierRating, product?.rating, product?.supplier?.rating),
+  );
+  const orders = numIf(
+    pick(product?.sold, product?.orders, product?.supplier?.orders),
+  );
+  const returnRate = pct(
+    product?.returnRate ?? product?.supplier?.returnRate,
+  );
+  const deliveryRate = pct(
+    product?.deliveryRate ??
+      product?.onTimeRate ??
+      product?.supplier?.deliveryRate,
+  );
+  const positiveRate = pct(
+    product?.positiveRate ??
+      product?.positiveReviewRate ??
+      product?.supplier?.positiveRate,
+  );
+
+  const reasons: string[] = [];
+  let score = 50;
+  let signals = 0;
+
+  if (rating !== null && rating > 0) {
+    signals++;
+    const r = String(Math.round(rating * 10) / 10).replace(".", ",");
+    if (rating >= 4.6) {
+      score += 20;
+      reasons.push(`рейтинг ${r}/5 — высокий`);
+    } else if (rating >= 4.0) {
+      reasons.push(`рейтинг ${r}/5`);
+    } else {
+      score -= 20;
+      reasons.push(`рейтинг ${r}/5 — низкий`);
+    }
+  }
+  if (orders !== null && orders > 0) {
+    signals++;
+    const o = Math.round(orders);
+    if (orders >= 500) {
+      score += 15;
+      reasons.push(`${o} заказов`);
+    } else if (orders >= 50) {
+      reasons.push(`${o} заказов (мало статистики)`);
+    } else {
+      score -= 15;
+      reasons.push(`${o} заказов — мало статистики`);
+    }
+  }
+  if (returnRate !== null) {
+    signals++;
+    const rr = Math.round(returnRate);
+    if (returnRate > 20) {
+      score -= 25;
+      reasons.push(`возвраты ${rr}% — высокий`);
+    } else if (returnRate > 10) {
+      score -= 12;
+      reasons.push(`возвраты ${rr}%`);
+    } else {
+      reasons.push(`возвраты ${rr}%`);
+    }
+  }
+  if (deliveryRate !== null) {
+    signals++;
+    const dr = Math.round(deliveryRate);
+    if (deliveryRate < 95) {
+      score -= 12;
+      reasons.push(`доставка в срок ${dr}% — ниже нормы`);
+    } else {
+      reasons.push(`доставка в срок ${dr}%`);
+    }
+  }
+  if (positiveRate !== null) {
+    signals++;
+    const pr = Math.round(positiveRate);
+    if (positiveRate >= 95) {
+      score += 8;
+      reasons.push(`положительных отзывов ${pr}%`);
+    } else if (positiveRate < 85) {
+      score -= 10;
+      reasons.push(`положительных отзывов ${pr}% — низкий`);
+    } else {
+      reasons.push(`положительных отзывов ${pr}%`);
+    }
+  }
+
+  if (signals === 0) {
+    return {
+      level: "unknown",
+      badge: "⚪",
+      score: null,
+      reasons: ["мало данных о поставщике"],
+    };
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  let level: "high" | "medium" | "low";
+  let badge: "🟢" | "🟡" | "🔴";
+  if (score >= 70) {
+    level = "high";
+    badge = "🟢";
+  } else if (score >= 45) {
+    level = "medium";
+    badge = "🟡";
+  } else {
+    level = "low";
+    badge = "🔴";
+  }
+  return { level, badge, score, reasons };
+}
+const RELIABILITY_LEVEL_RU: Record<string, string> = {
+  high: "высокая",
+  medium: "средняя",
+  low: "низкая",
+  unknown: "нет данных",
+};
 function cny(v: number | null | undefined): string {
   return v && Number.isFinite(v) && v > 0
     ? `${String(Math.round(v * 100) / 100).replace(".", ",")} ¥`
@@ -2297,6 +2493,10 @@ export function buildProductProcurementProfile(
       name: isMaterialLikeSupplierName(product?.supplierName)
         ? "не указано"
         : safeRu(product?.supplierName || "") || "не указано",
+      reliability: computeSupplierReliability(product),
+    },
+    logistics: {
+      weightKg: extractWeightKg(product),
     },
     procurement: {
       status: missing.length
@@ -2603,12 +2803,15 @@ export function buildMainReportFromProfile(
     ? Math.round(purchaseRub * (1 + BANK_MARKUP) + FULFILLMENT_RUB)
     : null;
   const moq = pos(product?.moq ?? product?.normalized1688?.moq);
-  const weight = pos(product?.weightKg ?? product?.packedWeightKg);
+  const weight = p.logistics?.weightKg ?? extractWeightKg(product);
+  const rel = p.supplier.reliability;
+  const relLine = `Надёжность: ${rel.badge} ${RELIABILITY_LEVEL_RU[rel.level]}${rel.reasons.length ? ` — ${rel.reasons.slice(0, 3).join(", ")}` : ""}`;
   const lines = [
     `📦 <b>${escapeHtml(p.identity.titleForReport)}</b>`,
     "",
     "Источник: 1688",
     `Поставщик: ${escapeHtml(p.supplier.displayType)}${p.supplier.rating && p.supplier.rating !== "—" ? ` · рейтинг ${escapeHtml(p.supplier.rating)}` : ""}${p.supplier.orders && p.supplier.orders !== "—" ? ` · заказов ${escapeHtml(p.supplier.orders)}` : ""}`,
+    escapeHtml(relLine),
     "",
     "📌 <b>Товар</b>",
     `• Цена: ${escapeHtml(formatPriceForDisplay(p.pricing))}`,
@@ -3005,7 +3208,7 @@ export function buildCargoBriefFromProfile(
   opts: { sourceUrl?: string } = {},
 ): string {
   const p = ensureProductProcurementProfile(product, opts);
-  const weight = pos(product?.weightKg ?? product?.packedWeightKg);
+  const weight = p.logistics?.weightKg ?? extractWeightKg(product);
   return [
     "# ТЗ карго",
     "",

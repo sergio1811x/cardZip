@@ -825,11 +825,48 @@ export function build1688Detail(product: any): string {
     fashionLike: /clothing|footwear|одежд|обув/i.test(String(p.identity.productKind)),
   });
   const x = buildDecisionContext(product);
-  const skuExamples = [
-    ...p.sku.normalizedExamples.slice(0, 8),
-    ...x.sku.skuVariantsNormalized.slice(0, 6).map(v => v.label),
-  ].filter(Boolean).filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i).slice(0, 8);
+  // Render ONE clean SKU representation. Prefer the structured variant labels
+  // (color/size/components) and drop redundant leftovers: the raw selected-SKU
+  // name when an equivalent structured line exists, and bare "Цвет: X" lines
+  // whose color already appears among the structured variants.
+  const norm = (v: string) => String(v ?? '').toLowerCase().replace(/[\s;,·|]+/g, ' ').replace(/цвет:|размер:|модель:/g, '').trim();
+  const structured = x.sku.skuVariantsNormalized.map(v => String(v.label ?? '')).filter(Boolean);
+  const structuredKeys = new Set(structured.map(norm));
+  // colors already represented by structured variants (so we can drop bare color-only lines)
+  const structuredColorSet = new Set(
+    x.sku.skuVariantsNormalized.map(v => String(v.color ?? '').toLowerCase().trim()).filter(Boolean)
+  );
+  const selectedKey = norm(String(p.sku.selectedSkuText ?? ''));
+  const isBareColorLine = (v: string) => {
+    const m = /^\s*цвет:\s*([^;·|]+?)\s*$/i.exec(String(v));
+    return !!m && structuredColorSet.has(m[1].toLowerCase().trim());
+  };
+  const skuCandidates = [
+    ...structured,
+    ...p.sku.normalizedExamples.map(e => String((e as any)?.normalized ?? (e as any) ?? '')),
+  ]
+    .filter(Boolean)
+    .filter(v => !isBareColorLine(v))
+    // drop the raw selected-SKU name if an equivalent structured line already exists
+    .filter(v => !(structuredKeys.size && norm(v) === selectedKey && structuredKeys.has(selectedKey)));
+  const seenSku = new Set<string>();
+  const skuDeduped = skuCandidates.filter(v => {
+    const k = norm(v);
+    if (seenSku.has(k)) return false;
+    seenSku.add(k);
+    return true;
+  });
+  const SKU_CAP = 6;
+  const skuExamples = skuDeduped.slice(0, SKU_CAP);
+  const skuTail = skuDeduped.length > SKU_CAP ? `• +${skuDeduped.length - SKU_CAP} ещё` : '';
   const materialText = p.identity.materials.join(', ') || 'нужно уточнить';
+  const formatDims = (v: string): string => {
+    const s = String(v).trim();
+    const m = /^(\d+(?:[.,]\d+)?)\s*[*x×хХ]\s*(\d+(?:[.,]\d+)?)\s*[*x×хХ]\s*(\d+(?:[.,]\d+)?)\s*(см|cm|мм|mm|m|м)?$/i.exec(s);
+    if (!m) return s;
+    const dims = `${m[1]}×${m[2]}×${m[3]}`;
+    return m[4] ? `${dims} ${m[4]}` : `${dims} см`;
+  };
   // Prefer clean profile facts for "Ключевые характеристики"; the raw 1688 attributes
   // are heavily filtered so untranslated Han (铜, 外形), duplicate material lines, and
   // meaningless one-offs (Модель: 001, 外形Размер: 150*140*100) never reach the buyer.
@@ -842,13 +879,34 @@ export function build1688Detail(product: any): string {
     .filter(a => !/материал/i.test(a.label))
     // drop noise one-offs: bare model codes and pure size-blob values with no meaning to a buyer
     .filter(a => !(/модель/i.test(a.label) && /^0*\d{1,4}$/.test(a.value)))
+    // weight is shown once in Логистика — never duplicate it here (avoids "2.65" vs "не указан")
+    .filter(a => !/^вес$|^вес\b|重量|weight/i.test(a.label))
+    // normalize dimension blobs: 17*17*23 → 17×17×23 см
+    .map(a => (/габарит|размер|尺寸|dimension/i.test(a.label) ? { ...a, value: formatDims(a.value) } : a))
     .filter((a, i, arr) => arr.findIndex(o => o.label.toLowerCase() === a.label.toLowerCase()) === i)
     .slice(0, 10)
     .map(a => `• ${html(a.label)}: ${html(a.value)}`);
   const supplierName = isMaterialLikeSupplierName(product?.supplierName) ? 'не указано' : (product?.supplierName || p.supplier.name || 'не указано');
   const photoCount = imagesCount(product) || product?.normalized1688?.imageCount || '—';
   const moq = positive(product?.moq ?? product?.normalized1688?.moq);
-  const weight = positive(product?.weightKg ?? product?.packedWeightKg ?? product?.normalized1688?.weightKg);
+  // Resolve weight from the SAME source the profile uses so "Вес" (key chars)
+  // and "вес" (Логистика) agree. Prefer a profile-resolved weight if a sibling
+  // agent added one; else fall back to product fields or the 重量/вес attribute.
+  const anyP = p as any;
+  const profileWeight = positive(anyP?.logistics?.weightKg ?? anyP?.pricing?.weightKg ?? anyP?.identity?.weightKg);
+  const attrWeight = (() => {
+    const attrs = product?.attributes ?? product?.normalized1688?.attributes ?? [];
+    for (const a of attrs) {
+      const label = String(a?.name ?? a?.label ?? '');
+      if (/重量|вес|weight/i.test(label)) {
+        const m = /(\d+(?:[.,]\d+)?)/.exec(String(a?.value ?? ''));
+        if (m) return positive(m[1].replace(',', '.'));
+      }
+    }
+    return null;
+  })();
+  const weight = profileWeight ?? positive(product?.weightKg ?? product?.packedWeightKg ?? product?.normalized1688?.weightKg) ?? attrWeight;
+  const weightText = weight ? `${String(weight).replace('.', ',')} кг` : null;
   const detailLines = [
     '📦 <b>Данные товара с 1688</b>',
     '',
@@ -867,6 +925,7 @@ export function build1688Detail(product: any): string {
     '<b>SKU:</b>',
     html(p.sku.skuSummary),
     ...(skuExamples.length ? skuExamples.map(v => `• ${html(v)}`) : ['• SKU нужно уточнить']),
+    ...(skuTail ? [skuTail] : []),
     '',
     '<b>Поставщик:</b>',
     `• название: ${html(supplierName)}`,
@@ -880,11 +939,12 @@ export function build1688Detail(product: any): string {
     p.identity.formFactor ? `• конструкция: ${html(p.identity.formFactor)}` : '',
     p.sku.sizes.length ? `• размер: ${html(p.sku.sizes.join(', '))}` : '',
     `• материал: ${html(materialText)}`,
+    weightText ? `• вес: ${html(weightText)}` : '',
     ...(useful.length ? useful : []),
     ...(p.identity.useCases.length ? [`• назначение: ${html(p.identity.useCases.slice(0, 3).join(', '))}`] : []),
     '',
     '<b>Логистика:</b>',
-    `• вес: ${weight ? `${weight} кг` : 'не указан'}`,
+    `• вес: ${weightText ? html(weightText) : 'не указан'}`,
     `• упаковка: ${p.cargo.mustAsk.some(v => /габарит|упаков/i.test(v)) ? 'нужно уточнить' : 'не указана'}`,
     `• фото: ${html(photoCount)}`,
   ].filter(Boolean);

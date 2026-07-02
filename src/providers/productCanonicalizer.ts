@@ -90,7 +90,7 @@ const DEFAULT_TEXT_MODELS = [
   "deepseek/deepseek-chat-v3.1",
   "qwen/qwen3-32b",
   "google/gemini-2.5-flash-lite",
-  "z-ai/glm-4.5-air",
+  "openai/gpt-5-mini",
 ];
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -261,6 +261,50 @@ function normalizeConflicts(value: unknown): ProductContext["conflicts"] {
       action: safeRu(obj.action, "Не выводить как подтверждённый факт"),
     };
   });
+}
+
+type NormalizedLogistics = {
+  weightKg: number | null;
+  weightSource: "card" | "attribute" | "unknown";
+  dimensionsCm: string | null;
+  packageNote: string | null;
+};
+
+function normalizeLogistics(rawLogistics: unknown): NormalizedLogistics {
+  const obj =
+    rawLogistics && typeof rawLogistics === "object" && !Array.isArray(rawLogistics)
+      ? (rawLogistics as Record<string, unknown>)
+      : {};
+
+  const weightRaw =
+    typeof obj.weightKg === "number" ? obj.weightKg : Number(obj.weightKg);
+  const weightKg =
+    Number.isFinite(weightRaw) && weightRaw > 0 && weightRaw < 100000
+      ? Math.round(weightRaw * 1000) / 1000
+      : null;
+
+  const weightSourceRaw = safeString(obj.weightSource).toLowerCase();
+  const weightSource: NormalizedLogistics["weightSource"] =
+    weightSourceRaw === "card" || weightSourceRaw === "attribute"
+      ? weightSourceRaw
+      : "unknown";
+
+  const dimsRaw = safeString(obj.dimensionsCm);
+  const dimensionsCm = dimsRaw
+    ? dimsRaw.replace(/[x*х]/gi, "×").replace(/\s+/g, "") || null
+    : null;
+
+  const noteRaw = safeRu(obj.packageNote);
+  const packageNote = noteRaw ? truncate(noteRaw, 160) : null;
+
+  return {
+    weightKg,
+    // Если модель дала вес, но не указала источник, считаем его атрибутом карточки.
+    weightSource:
+      weightKg && weightSource === "unknown" ? "attribute" : weightSource,
+    dimensionsCm,
+    packageNote,
+  };
 }
 
 function cleanJson(raw: string): string {
@@ -710,6 +754,12 @@ const CANONICALIZER_PROMPT = `Ты — старший закупщик 1688/Taob
       "titleWarnings": ["что не добавлять в title"],
       "infographicIdeas": ["5-7 идей слайдов под этот товар"]
     },
+    "logistics": {
+      "weightKg": "число в кг (вес единицы, нетто/брутто) если явно указано в карточке/атрибутах, иначе null",
+      "weightSource": "card|attribute|unknown",
+      "dimensionsCm": "внешние габариты как \"N×N×N\" в см (ДхШхВ) если указаны, иначе null",
+      "packageNote": "короткая пометка про вес/упаковку по-русски или null"
+    },
     "dataQuality": {
       "missingCriticalFields": ["чего не хватает"],
       "contradictions": ["противоречия"],
@@ -758,6 +808,9 @@ const CANONICALIZER_PROMPT = `Ты — старший закупщик 1688/Taob
 30. НИКОГДА не выводи голый список чисел без меток. Если смысл числа непонятен — добавь его как dimension с label "параметр — уточнить" и value равным самому числу; не сваливай числа в анонимную кучу и не теряй их.
 31. Не приклеивай число к fallback-тексту внутри value (никаких "80 _10 -"). Каждый value — чистое осмысленное значение или само число с меткой "параметр — уточнить".
 32. Материал провода/кабеля/вилки/жилы (铜线 медный провод, 铜芯 медная жила, 线芯) — это материал ПОДкомпонента (шнур/вилка), а НЕ материал корпуса товара. Не выводи такой материал как основной материал товара: клади его в unconfirmedFeatures/claimedFeatures с пометкой, что это относится к шнуру/вилке, а не к корпусу. Китайские материалы переводи на русский (铜 → медь) и не дублируй русский и китайский вариант.
+33. logistics.weightKg: заполняй ТОЛЬКО если вес единицы явно указан в карточке или атрибутах (重量/毛重/净重/вес). Переводи граммы в килограммы (2650 г → 2.65). Никогда не выдумывай вес. Если указан только вес короба/партии или вес с упаковкой — всё равно захвати его в weightKg и напиши это в packageNote (например "указан вес короба, а не единицы" или "вес с упаковкой не указан"). weightSource: card — вес виден в основной карточке/на фото данных, attribute — из атрибута/характеристик, unknown — если веса нет.
+34. logistics.dimensionsCm: заполняй ТОЛЬКО если внешние габариты указаны (尺寸/规格/外形/размер). Нормализуй в формат "N×N×N" в сантиметрах (ДхШхВ). Если единицы явно миллиметры — переведи мм→см. Используй разделитель × (НЕ * и НЕ х). Если габаритов нет — null.
+35. НЕ клади вес и габариты в поля materials, sku или в свободный текст. Только в logistics.
 `;
 
 const SYSTEM_MSG =
@@ -1085,8 +1138,15 @@ function normalizeContext(
     },
   };
 
-  if (profileDraft && typeof profileDraft === "object")
+  const logistics = normalizeLogistics(profileDraft.logistics);
+  if (profileDraft && typeof profileDraft === "object") {
+    // Гарантируем нормализованный logistics-блок внутри draft, чтобы downstream
+    // (procurementProfile) читал его по стабильному пути.
+    (profileDraft as Record<string, unknown>).logistics = logistics;
     ctx.procurementProfileDraft = profileDraft;
+  }
+  // Дублируем на верхний уровень контекста для удобного доступа downstream.
+  ctx.logistics = logistics;
   const classifier = result.productKindClassifier ?? result.classifier;
   if (classifier && typeof classifier === "object")
     ctx.productKindClassifier = classifier;

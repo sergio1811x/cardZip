@@ -2,7 +2,7 @@ import type { AnalysisSnapshot, QaResult } from '../types';
 
 const FIX_MODELS = [
   'google/gemini-2.5-flash-lite',
-  'z-ai/glm-4.5-air',
+  'openai/gpt-5-mini',
   'qwen/qwen3-235b-a22b',
 ];
 

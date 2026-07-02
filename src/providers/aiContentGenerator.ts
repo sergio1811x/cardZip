@@ -28,7 +28,7 @@ const DEFAULT_OPENROUTER_MODELS = [
   process.env.AI_TEXT_PRIMARY_MODEL ?? "deepseek/deepseek-chat-v3.1",
   process.env.AI_TEXT_FALLBACK_MODEL_1 ?? "qwen/qwen3-32b",
   process.env.AI_TEXT_FALLBACK_MODEL_2 ?? "google/gemini-2.5-flash-lite",
-  process.env.AI_TEXT_FALLBACK_MODEL_3 ?? "z-ai/glm-4.5-air",
+  process.env.AI_TEXT_FALLBACK_MODEL_3 ?? "openai/gpt-5-mini",
 ].filter(Boolean);
 
 function getModelChain(): string[] {
