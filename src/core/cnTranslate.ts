@@ -131,7 +131,7 @@ export async function translateSkuNamesViaLlm(names: string[], context?: SkuTran
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 900,
+          max_tokens: 1800,
           temperature: 0,
           messages: [
             {

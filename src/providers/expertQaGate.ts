@@ -9,40 +9,92 @@ const QA_MODELS = [
 function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 }
+const QA_GATE_PROMPT = `CardZip QA Gate.
 
-const QA_GATE_PROMPT = `CardZip 2.0 QA Gate.
+Роль: контроль качества закупочного пакета.
+Проверяй пользовательские тексты, но не анализируй товар заново.
 
-Цель: пропускать полезный закупочный пакет, а не блокировать из-за отсутствия WB/ROI. BLOCK — только при реальной опасности для пользователя.
+Цель:
+пропускать полезный закупочный пакет, если его можно безопасно показать.
+Не блокируй из-за отсутствия веса, сертификатов, полного ответа поставщика или неподтверждённых свойств.
 
 Решения:
-PASS — можно показывать.
-FIX_REQUIRED — есть исправимые формулировки/мусор.
-BLOCK — только если после repair нельзя безопасно показать.
+- PASS: можно показывать пользователю.
+- FIX_REQUIRED: есть мусор, дубли, опасные формулировки или слабый текст, но это можно исправить.
+- BLOCK: только если после repair пакет нельзя безопасно показать.
 
-Проверка:
-1. Main короткий, без дублей и debug.
+BLOCK разрешён только если:
+- товар не определён вообще и нет честного fallback;
+- текст содержит опасную медицинскую/детскую/сертификационную гарантию как факт;
+- есть вредный или юридически опасный совет;
+- в тексте массово raw/debug/NaN/undefined/null и repair не сможет восстановить смысл;
+- документы относятся к явно чужой категории и могут ввести пользователя в заблуждение.
+
+Не блокируй:
+- нет веса;
+- нет сертификатов;
+- цена или SKU требуют подтверждения;
+- есть вопросы про сертификаты;
+- есть осторожные формулировки “заявлено”, “проверить”, “подтвердить”;
+- товар подходит только для запроса данных или образца.
+
+Проверь:
+1. Main report короткий, понятный, без debug и дублей.
 2. Есть товар, цена/SKU или честная причина отсутствия.
-3. SEO похож на черновик карточки, не на техвыгрузку.
-4. Buyer/cargo/risk/sample документы пригодны человеку.
-5. Claims не выданы как факт без “заявлено/проверить/подтвердить”.
-6. Нет чужой категории: обуви не нужны мощность/аккумулятор/рукав; пассивной ловушке — лампа/220V; USB-товару — стелька/рукав.
-7. Нет 0 ¥/0 ₽/0 кг/NaN/undefined/null/raw SKU.
-8. Нет обещаний прибыли или рыночной доходности.
+3. Поставщик не показан как seller/factory/merchant, только по-русски.
+4. Вес без данных = “не указан”.
+5. SEO похож на черновик карточки товара, а не на техвыгрузку.
+6. SEO title не содержит “черновик”, “1688”, “заявлено”, “подтвердить”.
+7. SEO bullets: ровно 5, без дублей.
+8. Buyer/cargo/sample документы пригодны человеку.
+9. Supplier questions без дублей, максимум 10 вопросов.
+10. Claims не выданы как факт без “заявлено/проверить/подтвердить”.
+11. Нет чужой категории:
+   - обуви не нужны мощность, аккумулятор, рукав;
+   - одежде не нужны подошва, тип вилки, напряжение;
+   - зонту не нужны размерная сетка обуви, стелька;
+   - пассивной ловушке не нужны лампа/220V, если их нет в данных;
+   - USB-товару не нужны стелька/рукав.
+12. Нет 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, file://, raw SKU.
+13. Нет советов “точно брать партию”.
+14. Нет латиницы внутри русских слов: поставщpику, матеpиал и т.п.
+15. CN-блок либо валидный, либо скрыт.
 
-Не блокируй: отсутствие WB, “рынок проверить вручную”, вопросы про сертификаты, “медицинские сабо” как тип товара.
+Верни строго JSON без markdown:
 
-Верни только JSON:
 {
-  "decision":"PASS|FIX_REQUIRED|BLOCK",
-  "canShowToUser":true,
-  "qualityScore":0,
-  "confidence":"low|medium|high",
-  "summary":"коротко",
-  "criticalIssues":[],
-  "warnings":[],
-  "requiredEdits":[{"artifact":"UserCard|SeoText|BuyerBrief|SupplierQuestions","operation":"replace|remove|rewrite","find":"...","replaceWith":"...","reason":"..."}],
-  "safeUserSummary":{"status":"черновик|рабочая гипотеза|отклонить","verdict":"...","mainRisk":"...","nextStep":"...","doNotDo":"..."}
+  "decision": "PASS|FIX_REQUIRED|BLOCK",
+  "canShowToUser": true,
+  "qualityScore": 0,
+  "confidence": "low|medium|high",
+  "summary": "коротко",
+  "criticalIssues": [],
+  "warnings": [],
+  "requiredEdits": [
+    {
+      "artifact": "UserCard|SeoText|BuyerBrief|CargoBrief|SampleChecklist|SupplierQuestions|Readme",
+      "operation": "replace|remove|rewrite",
+      "find": "...",
+      "replaceWith": "...",
+      "reason": "..."
+    }
+  ],
+  "safeUserSummary": {
+    "status": "готово|требует правки|рабочая гипотеза|нельзя показать",
+    "verdict": "...",
+    "mainRisk": "...",
+    "nextStep": "...",
+    "doNotDo": "..."
+  }
 }
+
+Правила ответа:
+- qualityScore: 0-100.
+- Если decision=PASS, requiredEdits должен быть [].
+- Если decision=FIX_REQUIRED, canShowToUser обычно true после repair.
+- Если decision=BLOCK, canShowToUser=false и criticalIssues должен объяснять реальную опасность.
+- Не блокируй осторожные закупочные пакеты.
+- Лучше FIX_REQUIRED, чем BLOCK, если текст можно безопасно поправить.
 
 DATA:
 {{QA_REVIEW_PACKAGE}}
@@ -95,7 +147,7 @@ export async function runQaGate(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 1200,
+          max_tokens: 2400,
           temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — QA-ревьюер CardZip. Верни СТРОГО JSON.' },

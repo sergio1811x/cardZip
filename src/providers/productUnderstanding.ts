@@ -94,7 +94,7 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model, max_tokens: 2400, temperature: 0.2,
+          model, max_tokens: 4800, temperature: 0.2,
           messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
         }),
         signal: AbortSignal.timeout(45_000),
@@ -116,7 +116,7 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
         headers: { Authorization: `Bearer ${fwKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'accounts/fireworks/models/deepseek-v4-flash',
-          max_tokens: 2400, temperature: 0.2,
+          max_tokens: 4800, temperature: 0.2,
           messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
         }),
         signal: AbortSignal.timeout(45_000),
@@ -366,7 +366,7 @@ async function callLlmWithVision(prompt: string, systemMsg: string, imageBase64:
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model, max_tokens: 3000, temperature: 0.2,
+          model, max_tokens: 6000, temperature: 0.2,
           messages,
         }),
         signal: AbortSignal.timeout(60_000),
@@ -381,88 +381,100 @@ async function callLlmWithVision(prompt: string, systemMsg: string, imageBase64:
 
   return null;
 }
+const INTELLIGENCE_PROMPT = `CardZip Product Intelligence.
 
-const INTELLIGENCE_PROMPT = `CardZip 2.0 Product Intelligence.
+Роль: закупщик 1688. Нужно точно определить товар и собрать единый профиль для закупочного пакета: отчёт, SKU, вопросы поставщику, ТЗ байеру/карго, чек-лист образца и SEO.
 
-Роль: закупщик 1688. Нужно понять товар и подготовить правила для закупочного пакета: main report, SKU, вопросы поставщику, SEO, ТЗ байеру/карго, риски и образец. Фото используй только для визуально очевидного.
+Фото используй только для визуально очевидного: тип товара, форма, конструкция, видимые детали. 
+Цену, MOQ, вес, SKU, размеры и документы бери только из переданных данных, не с фото.
 
 Верни строго JSON без markdown:
+
 {
   "productIdentity": {
-    "marketNameRu": "рыночное название",
-    "shortNameRu": "2-4 слова",
-    "productKind": "конкретный тип",
-    "categoryPath": ["..."],
+    "productKind": "footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product",
     "categoryType": "shoes|clothes|electronics|home|beauty|accessory|kitchen|other",
     "subCategoryType": "подкатегория",
-    "audience": "мужской/женский/детский/унисекс",
-    "useCases": ["сценарии применения"],
+    "marketNameRu": "рыночное название",
+    "shortNameRu": "2-4 слова",
+    "titleForReport": "3-6 слов",
+    "titleForSeo": "название для WB/Ozon без неподтверждённых claims",
     "coreObject": "базовый объект",
     "formFactor": "форма/конструкция",
-    "material": ["материалы, если указаны"],
-    "powerType": ["USB/220V/аккумулятор/без питания"],
-    "season": "лето/зима/демисезон/всесезон/не применимо",
-    "gender": "мужской/женский/унисекс",
-    "ageGroup": "взрослый/детский/все",
-    "importantFeatures": ["важные свойства"],
-    "notConfirmedFeatures": ["claim — подтвердить"],
+    "audience": "мужской|женский|детский|унисекс|не ясно",
+    "ageGroup": "взрослый|детский|все|не ясно",
+    "gender": "мужской|женский|унисекс|не ясно",
+    "season": "лето|зима|демисезон|всесезон|не применимо",
+    "useCases": ["сценарии применения"],
+    "materials": ["материалы только из данных"],
     "visibleFeatures": ["только то, что видно на фото"],
-    "possibleConfusions": ["похожие, но другие товары"]
+    "claimedFeatures": ["заявлено, но требует подтверждения"],
+    "unconfirmedFeatures": ["что нельзя писать как факт"],
+    "possibleConfusions": ["с чем можно перепутать"]
   },
-  "cleanTitles": {
-    "titleCnClean": "CN без маркетингового мусора",
-    "titleRuClean": "чистое RU название",
-    "titleForReport": "3-6 слов для отчёта",
-    "titleForWb": "2-4 слова для карточки"
+
+  "sku": {
+    "skuSummary": "кратко: цвет × размер / модель / параметр",
+    "selectedSkuText": "выбранный SKU или null",
+    "selectedSkuReliable": true,
+    "colors": ["цвета"],
+    "sizes": ["размеры"],
+    "models": ["модели"],
+    "packageTypes": ["упаковки"],
+    "packCounts": ["количество в наборе"],
+    "skuWarnings": ["что непонятно по SKU"],
+    "normalizedExamples": ["понятные примеры SKU"]
   },
-  "wbSearch": {
-    "wbCoreQuery": "1-3 слова",
-    "queryCandidates": ["3-5 запросов"],
-    "negativeSearchTerms": [],
-    "tooBroadQueries": [],
-    "tooNarrowQueries": []
+
+  "procurement": {
+    "status": "нужны данные поставщика|можно запрашивать образец|готов к заказу образца|данных мало",
+    "verdict": "короткий вывод под конкретный товар",
+    "nextAction": "что сделать сейчас",
+    "mustAskSupplier": ["5-10 конкретных вопросов"],
+    "mustCheckBeforeSample": ["что проверить до образца"],
+    "mustCheckOnSample": ["что проверить на образце"],
+    "redFlags": ["риски"]
   },
-  "matchingRules": {
-    "mustHaveForDirectAnalog": [],
-    "allowedDifferences": [],
-    "directAnalogBlockers": [],
-    "similarOnlyIf": [],
-    "rejectIf": []
+
+  "cargo": {
+    "mustAsk": ["что запросить для доставки"],
+    "likelySensitiveCargoIssues": ["батарейка/жидкость/магнит/стекло/сертификаты/нет"]
   },
-  "reportRules": {
-    "buyerMustCheck": ["что проверить"],
-    "buyerMustNotAsk": ["чужие вопросы"],
-    "seoAllowedClaims": ["можно писать"],
-    "seoForbiddenClaims": ["нельзя как факт"],
-    "importantAttributesToShow": ["важные характеристики"],
-    "attributesToHide": ["мусор/служебное"],
-    "riskFlags": ["риски"]
+
+  "content": {
+    "seoAllowedClaims": ["что можно писать безопасно"],
+    "seoForbiddenClaims": ["что нельзя писать без подтверждения"],
+    "titleWarnings": ["что не добавлять в title"],
+    "infographicIdeas": ["идеи слайдов"]
   },
-  "supplierQuestions": {
-    "ru": ["5-10 вопросов"],
-    "cn": ["5-10 вопросов на китайском"]
-  },
+
   "dataQuality": {
-    "missingCriticalFields": [],
+    "missingCriticalFields": ["чего не хватает"],
+    "contradictions": ["противоречия"],
     "skuRisk": "ok|mixed_sku|needs_selection|unknown",
     "priceRisk": "ok|range|needs_confirmation|missing",
-    "weightRisk": "ok|estimated|missing",
+    "weightRisk": "ok|missing",
     "overallConfidence": "high|medium|low",
     "visionConfidence": "high|medium|low|none",
     "textConfidence": "high|medium|low",
-    "reason": "почему"
+    "reason": "почему такая уверенность"
   }
 }
 
 Правила:
-- Не возвращай китайский в RU-полях. Переводи смысл.
-- Не придумывай материал, размер, вес, документы, рынок или свойства.
-- Сохраняй полезные claims как “заявлено/подтвердить”, не удаляй их.
-- visibleFeatures только с фото; если фото нет — [].
-- SKU: выделяй цвет, размер, модель, pack-count, молнию, шнурок/манжету, размерные примечания.
-- Если “цвет” содержит свойство, не пиши цвет=свойство; перенеси в importantFeatures/notConfirmedFeatures.
-- buyerMustNotAsk должен защищать от чужих чек-листов: обувь ≠ мощность/аккумулятор; техника ≠ стелька/рукав; пассивная ловушка ≠ лампа/220V.
-- SEO: продающий, но безопасный; спорные claims только в уточнения.
+- Не возвращай китайский в русских полях.
+- Не придумывай материал, размер, вес, документы, сертификаты, аудиторию или свойства.
+- Если свойство заявлено, но не подтверждено — клади в claimedFeatures/unconfirmedFeatures.
+- Если SKU-значение непонятно, не называй его размером/цветом. Пиши как параметр SKU.
+- Если цвет содержит свойство, не пиши "цвет = свойство"; перенеси свойство в claimedFeatures.
+- mustAskSupplier должен быть без дублей, максимум 10 вопросов.
+- Вопросы должны быть под конкретный productKind, без чужих категорий.
+- Для одежды спрашивай состав, размеры, посадку, упаковку, фото на модели.
+- Для обуви спрашивай стельку, материал верха/подошвы, запах EVA/PU, размерность, упаковку.
+- Для зонта спрашивай механизм, спицы, купол, чехол, размер, UPF только как подтверждение.
+- Для техники спрашивай мощность, напряжение, вилку, кабель, инструкцию, видео работы, сертификаты.
+- SEO должен быть продающим, но безопасным: dangerous claims только в seoForbiddenClaims.
+- Не используй claims как факт: медицинский, ортопедический, лечебный, антибактериальный, сертифицированный, гипоаллергенный, безопасный для детей, профессиональный, оригинальный бренд, 100% водонепроницаемый, UPF50+, дезинфекция, стерилизация.
 `;
 
 export async function generateProductIntelligence(raw: {

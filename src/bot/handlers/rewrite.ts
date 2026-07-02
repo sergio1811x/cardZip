@@ -65,7 +65,7 @@ export async function handleRewrite(ctx: Context) {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: cfg.model, max_tokens: 3000, temperature: 0.8,
+            model: cfg.model, max_tokens: 6000, temperature: 0.8,
             messages: [
               { role: 'system', content: 'Ты копирайтер для маркетплейса. Пиши на русском и не добавляй неподтверждённые claims.' },
               { role: 'user', content: `${prompt}\n\nИСХОДНЫЙ ТЕКСТ:\n${originalText}` },

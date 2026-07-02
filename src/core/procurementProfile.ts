@@ -1447,7 +1447,7 @@ export async function translateSupplierQuestionsRuToCn(ru: string[]): Promise<st
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 900,
+          max_tokens: 1800,
           temperature: 0,
           messages: [
             { role: 'system', content: 'Ты переводчик закупочных вопросов RU→CN для 1688/Taobao/Tmall. Верни строго JSON: {"questionsCn":[""]}. Переводи 1:1: не добавляй, не удаляй, не объединяй и не переставляй вопросы. Количество и порядок questionsCn должны точно совпадать с questionsRu. Не используй русский. Десятичные числа пиши через точку: 12.5 元.' },
