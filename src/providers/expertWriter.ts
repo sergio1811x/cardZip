@@ -137,7 +137,7 @@ export async function runExpertWriter(
             { role: "user", content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(60_000),
       });
       if (!res.ok) {
         console.log(`[expert-writer] ${model} HTTP ${res.status}`);

@@ -102,7 +102,7 @@ export async function runQaGate(
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(60_000),
       });
       if (!res.ok) {
         console.log(`[qa-gate] ${model} HTTP ${res.status}`);

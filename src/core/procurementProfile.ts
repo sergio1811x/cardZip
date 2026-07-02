@@ -14,6 +14,7 @@ export type ProductKind =
   | 'food_warmer'
   | 'heating_appliance'
   | 'juicer'
+  | 'kitchen_scale'
   | 'kitchen_tool'
   | 'tool_kit'
   | 'bag_accessory'
@@ -273,6 +274,83 @@ const KIND_RULES: Record<ProductKind, {
     seoForbidden: ['сохраняет витамины', 'полезно для здоровья', 'для детского питания', 'бесшумная', 'безопасная', 'сертифицированная', 'мощная', 'профессиональная', 'можно мыть в посудомоечной машине', 'защита от перегрева', ...DANGEROUS_CLAIMS],
     infographic: ['Соковыжималка общий вид', 'Загрузочная горловина и чаша', 'Напряжение и мощность', 'Комплектация', 'Упаковка'],
     forbiddenCategoryWords: ['подошва', 'стелька', 'размерная сетка', 'срок годности', 'консистенция', 'состав ткани в процентах'],
+  },
+  kitchen_scale: {
+    mustAskSupplier: [
+      'Подтвердите цену выбранного SKU.',
+      'Подтвердите максимальную нагрузку и точность/шаг измерения (например, 10 кг / 0,1 г).',
+      'Укажите минимальный вес измерения и доступные единицы (г, кг, oz, lb, мл).',
+      'Подтвердите наличие функции тарирования.',
+      'Укажите тип и количество батареек, входят ли они в комплект.',
+      'Укажите вес одной единицы с индивидуальной упаковкой.',
+      'Укажите габариты индивидуальной упаковки.',
+      'Пришлите видео работы весов, фото дисплея, кнопок, платформы и упаковки.',
+      'Есть ли инструкция на русском или английском языке?',
+      'Можно ли заказать 1–2 образца перед партией?',
+    ],
+    beforeSample: [
+      'подтвердить цену выбранного SKU',
+      'получить максимальную нагрузку и точность/шаг',
+      'получить тип и количество батареек',
+      'получить вес и габариты упаковки',
+      'запросить видео работы весов и фото дисплея/кнопок/платформы',
+    ],
+    onSample: [
+      'включение/выключение',
+      'работа всех кнопок',
+      'функция тарирования',
+      'смена единиц измерения',
+      'точность на разных весах: 1 г, 10 г, 100 г, 1 кг, 10 кг',
+      'стабильность показаний',
+      'читаемость дисплея при разном освещении',
+      'качество пластика и сборки',
+      'устойчивость на столе',
+      'работа от заявленного типа батареек',
+      'автоотключение, если заявлено',
+      'вес и габариты упаковки',
+    ],
+    cargo: [
+      'вес одной единицы с индивидуальной упаковкой',
+      'габариты индивидуальной упаковки',
+      'количество в транспортной коробке',
+      'вес и габариты транспортной коробки',
+      'есть ли батарейки в комплекте и их тип',
+      'нужна ли дополнительная защита дисплея',
+      'фото индивидуальной упаковки и транспортной коробки',
+    ],
+    redFlags: [
+      'не подтверждена точность/шаг измерения',
+      'не подтверждена максимальная нагрузка',
+      'не указан тип батареек',
+      'нет веса и габаритов упаковки',
+      'нет видео работы весов',
+      'не видно дисплей, кнопки или платформу на фото',
+      'нет инструкции',
+      'слишком низкая цена при заявленных характеристиках',
+    ],
+    seoAllowed: [
+      'электронные кухонные весы',
+      'весы для кухни',
+      'весы для выпечки',
+      'весы для ингредиентов',
+      'функция тарирования — только если подтверждена',
+      'максимальная нагрузка — только если подтверждена',
+      'точность — только если подтверждена',
+    ],
+    seoForbidden: [
+      'профессиональные',
+      'медицинские',
+      'лабораторные',
+      'торговые',
+      'сертифицированные',
+      'высокая точность без подтверждения',
+      'до 10 кг без подтверждения',
+      'батарейки в комплекте без подтверждения',
+      'гарантия без документов',
+      'безопасные для детей без документов',
+    ],
+    infographic: ['Весы общий вид', 'Дисплей и кнопки крупно', 'Максимальная нагрузка и точность', 'Функция тарирования', 'Упаковка'],
+    forbiddenCategoryWords: ['подошва', 'стелька', 'размерная сетка', 'срок годности', 'консистенция', 'напряжение', 'тип вилки', 'мощность'],
   },
   kitchen_tool: genericRules('кухонный товар'),
   tool_kit: {
@@ -541,6 +619,7 @@ function normalizeProductKind(value: unknown): ProductKind | null {
   if (/usb|type-c|type c/.test(raw)) return 'usb_device';
   if (/насеком|insect|ловуш|粘虫|捕虫/.test(raw)) return 'passive_insect_trap';
   if (/набор\s+инструмент|hand\s*tool\s*set|tool\s*kit|工具套装|工具组|多功能工具/.test(raw)) return 'tool_kit';
+  if (/весы|кухонн[а-яё ]*вес|весы\s+для\s+кухн|kitchen\s*scale|electronic\s*scale|電子秤|厨房秤|电子秤|电子称|вес.*\d+\s*кг|food\s*scale/.test(raw)) return 'kitchen_scale';
   if (/кухон|kitchen/.test(raw)) return 'kitchen_tool';
   if (/сумк|bag|кошел|брелок/.test(raw)) return 'bag_accessory';
   if (/электр|220v|вилка|мощность|appliance|прибор/.test(raw)) return 'small_appliance';
@@ -678,9 +757,17 @@ function extractAmbiguousParams(labels: string[], kind: ProductKind): string[] {
   return uniq(nums.filter(n => !/^20\d{2}$/.test(n)), 10);
 }
 
+function normalizeSkuLabelForKind(label: string, kind: ProductKind): string {
+  if (kind === 'kitchen_scale') {
+    // "10кг" / "10 kg" / "10公斤" = max load, not a model number
+    return label.replace(/\b(\d+(?:[.,]\d+)?)\s*(?:кг|kg|公斤|千克)\b/gi, (_, n) => `макс. ${n} кг`);
+  }
+  return label;
+}
+
 function buildSkuProfile(product: any, kind: ProductKind, sourceUrl?: string): ProductProcurementProfile['sku'] {
   const variants = collectSkuVariants(product);
-  const labels = variants.map(skuName).filter(Boolean);
+  const labels = variants.map(skuName).filter(Boolean).map(l => normalizeSkuLabelForKind(l, kind));
   const rawLabels = variants.map(skuRawText).filter(Boolean);
   const colors = extractColors(labels);
   const plugStandards = extractPlugStandards(rawLabels);
@@ -1367,7 +1454,7 @@ export async function translateSupplierQuestionsRuToCn(ru: string[]): Promise<st
             { role: 'user', content: JSON.stringify({ questionsRu: cleanRu }) },
           ],
         }),
-        signal: g.AbortSignal.timeout(12_000),
+        signal: g.AbortSignal.timeout(25_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as any;
@@ -1574,10 +1661,12 @@ export function buildSeoDraftFromProfile(product: any, opts: { sourceUrl?: strin
     'Размер купола, длину в сложенном виде и материал спиц подтвердите перед публикацией',
     'Не пишите про UPF или ветроустойчивость без документов и теста образца',
   ] : [
-    useCases.length ? `Сценарии использования: ${useCases.join(', ')}` : `${p.identity.shortTitle || title} для повседневного использования`,
-    features.length ? `Особенности: ${features.join(', ')}` : 'Основные свойства опишите только после проверки выбранного SKU',
-    material ? `Материал: ${material}` : 'Материал и состав вынесите в карточку только после подтверждения',
-    variantLine ?? (p.sku.skuSummary ? `Варианты SKU: ${p.sku.skuSummary}` : 'Цвет, размер и комплектацию уточните по выбранному SKU'),
+    useCases.length
+      ? `${p.identity.shortTitle || p.identity.coreObject || title} — ${useCases.slice(0, 3).join(', ')}`
+      : `${p.identity.shortTitle || title} для повседневного использования`,
+    features.length ? features[0] : 'Основные свойства укажите только после проверки выбранного SKU',
+    material ? `${material} — подтвердить у поставщика` : 'Материал и состав вынесите в карточку только после подтверждения',
+    variantLine ?? (p.sku.skuSummary ? p.sku.skuSummary : 'Цвет, размер и комплектацию уточните по выбранному SKU'),
     'Перед публикацией проверьте образец, вес, упаковку и реальные фото',
   ];
 

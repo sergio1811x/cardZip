@@ -7,6 +7,7 @@ import { track } from '../src/services/analyticsService';
 import { createStepProgress } from '../src/core/progress';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
+import { getJobById } from '../src/lib/supabaseRetry';
 import { runExpertWriter } from '../src/providers/expertWriter';
 import { buildDecisionContext } from '../src/core/decisionLayer';
 import { ensureProductProcurementProfile } from '../src/core/procurementProfile';
@@ -119,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (!await acquireStepLock('step4', jobId)) return res.status(200).json({ ok: true, skip: true });
 
-    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
+    const { data: job } = await getJobById(jobId);
     if (!job || job.status !== 'done' || job.sent_to_telegram) return res.status(200).json({ ok: true, skip: true });
 
     await extendProcessingLock(job.user_id);
