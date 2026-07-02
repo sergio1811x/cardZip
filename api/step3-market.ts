@@ -18,17 +18,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    console.log(`[step3] Start: ${jobId}`);
-    const { data: job, error: jobErr } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (jobErr) console.error('[step3] supabase error', jobErr.message);
-    if (!job || job.status !== 'ai_done') {
-      console.warn(`[step3] Skip: job=${!!job} status=${job?.status}`);
-      return res.status(200).json({ ok: true, skip: true });
-    }
-    if (!await acquireStepLock('step3', jobId)) {
-      console.warn(`[step3] Skip: lock already held`);
-      return res.status(200).json({ ok: true, skip: true });
-    }
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
+    if (!job || job.status !== 'ai_done') return res.status(200).json({ ok: true, skip: true });
+    if (!await acquireStepLock('step3', jobId)) return res.status(200).json({ ok: true, skip: true });
     await extendProcessingLock(job.user_id);
 
     await supabase.from('jobs').update({ status: 'package_processing', updated_at: new Date().toISOString() }).eq('id', jobId);
@@ -45,39 +37,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       procurementProfile: result.productProcurementProfile ?? result.procurementProfile,
       sourceUrl: job.input_url,
       productContext: result.productContext,
-      wbData: null,
-      wbFiltered: null,
-      wbTrends: [],
-      marketDecision: {
-        status: 'not_required',
-        rawCandidatesCount: 0,
-        confirmedDirectCount: 0,
-        similarLocalCount: 0,
-        crossBorderCount: 0,
-        categoryOnlyCount: 0,
-        medianPriceRub: null,
-        p25PriceRub: null,
-        p75PriceRub: null,
-        canShowMedianPrice: false,
-        canCalculateRoi: false,
-        confidence: 'low',
-        reason: 'WB/Ozon не используется как обязательный источник. Рынок проверяется вручную.',
+      packageDecision: {
+        status: 'package_ready',
+        reason: 'Закупочный пакет строится по данным карточки, выбранному SKU, профилю товара и вопросам поставщику.',
       },
-      economics: {
+      costing: {
         yuanToRub: 11.8,
         status: 'cost_only',
-        canShowRoi: false,
-        isSyntheticPrice: false,
       },
       riskFlags: {
         weightMissing: !raw?.weightKg,
-        marketDataUnreliable: true,
       },
       conclusion: {
         platform: raw?.platform ?? '1688',
         icon: '🟡',
-        headline: 'Закупочная гипотеза без автоматической проверки WB/Ozon',
-        disclaimers: ['Продажную цену и рынок пользователь проверяет отдельно.'],
+        headline: 'Закупочный пакет готовится по данным карточки и профилю товара',
+        disclaimers: ['Недостающие данные перенесены в вопросы поставщику.'],
       },
     };
     const profile = buildProductProcurementProfile(product, { sourceUrl: job.input_url, intelligence: product.intelligence });
@@ -87,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     product.procurementProfile = profileValidation.fixedProfile;
     const decision = buildDecisionContext(product);
 
-    const progress = job.tg_message_id ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'market') : null;
+    const progress = job.tg_message_id ? createStepProgress(bot, job.tg_chat_id, job.tg_message_id, 'package') : null;
     progress?.step('package');
     progress?.stop({ clear: false });
 
@@ -105,9 +80,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           readiness: decision.readiness,
           cost: decision.cost,
         },
-        noWbMvp: true,
-        noWbReason: 'MVP работает как закупочный пакет без обязательного WB-парсинга.',
-        durationMarketMs: 0,
+        packageOnlyMvp: true,
+        durationPackageMs: 0,
       },
       updated_at: new Date().toISOString(),
     }).eq('id', jobId);
@@ -118,7 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       await handleStepError(jobId, 'step4_trigger_failed', bot);
     }
 
-    res.status(200).json({ ok: true, noWbMvp: true, chained: sent });
+    res.status(200).json({ ok: true, packageOnlyMvp: true, chained: sent });
   } catch (e: any) {
     console.error('[step3]', e.message);
     const { handleStepError } = require('../src/lib/stepError');

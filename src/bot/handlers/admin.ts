@@ -2,7 +2,6 @@ import type { Context } from 'telegraf';
 import { Markup } from 'telegraf';
 import { getAdminMetrics } from '../../db/queries/events';
 import { redis } from '../../lib/redis';
-import { getPipelineBaseUrl } from '../../lib/pipelineStep';
 
 const ADMIN_IDS: number[] = (process.env.TELEGRAM_ADMIN_TG_ID ?? '')
   .split(',')
@@ -22,9 +21,7 @@ export async function handleAdmin(ctx: Context): Promise<void> {
     const metrics = await getAdminMetrics();
     await ctx.reply(metrics, {
       parse_mode: 'HTML',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('🔄 Обновить WB-категории', 'admin_update_wb_cats')],
-      ]),
+      ...Markup.inlineKeyboard([]),
     });
   } catch (e) {
     console.error('[admin]', e);
@@ -32,66 +29,25 @@ export async function handleAdmin(ctx: Context): Promise<void> {
   }
 }
 
-export async function handleUpdateWbCategories(ctx: Context): Promise<void> {
+export async function handleUpdateLegacyCategories(ctx: Context): Promise<void> {
   if (!isAdmin(ctx)) { await ctx.answerCbQuery('⛔'); return; }
-
-  await ctx.answerCbQuery();
-
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-
-  if (redis) {
-    await redis.set(`admin_wb_date:${chatId}`, '1', { ex: 120 });
-  }
-
-  await ctx.reply(
-    '📅 Введите дату данных wbcon.ru (формат YYYY-MM-DD):\n\nНапример: <code>2026-06-18</code>',
-    { parse_mode: 'HTML' },
-  );
+  await ctx.answerCbQuery('Раздел отключён в MVP закупочного пакета.');
 }
 
-export async function getAdminWbDatePending(chatId: number): Promise<boolean> {
+export async function getAdminLegacyDatePending(chatId: number): Promise<boolean> {
   if (!redis) return false;
-  const v = await redis.get(`admin_wb_date:${chatId}`);
+  const v = await redis.get(`admin_legacy_date:${chatId}`);
   return !!v;
 }
 
-export async function handleAdminWbDateInput(ctx: Context, text: string): Promise<boolean> {
+export async function handleAdminLegacyDateInput(ctx: Context, text: string): Promise<boolean> {
   const chatId = ctx.chat?.id;
   if (!chatId) return false;
 
-  const pending = await getAdminWbDatePending(chatId);
+  const pending = await getAdminLegacyDatePending(chatId);
   if (!pending) return false;
 
-  const dateMatch = text.trim().match(/^\d{4}-\d{2}-\d{2}$/);
-  if (!dateMatch) {
-    await ctx.reply('❌ Неверный формат. Нужен YYYY-MM-DD, например <code>2026-06-18</code>', { parse_mode: 'HTML' });
-    return true;
-  }
-
-  if (redis) await redis.del(`admin_wb_date:${chatId}`);
-
-  await ctx.reply(`⏳ Загружаю WB-категории за ${dateMatch[0]}...`);
-
-  try {
-    const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    const baseUrl = getPipelineBaseUrl(undefined);
-    const res = await fetch(`${baseUrl}/api/update-wb-categories`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-cardzip-admin-secret': secret ?? '' },
-      body: JSON.stringify({ secret, date: dateMatch[0] }),
-      signal: AbortSignal.timeout(120_000),
-    });
-    const data = await res.json() as any;
-
-    if (data.ok) {
-      await ctx.reply(`✅ WB-категории загружены: ${data.loaded} из ${data.total}\nДата: ${data.date}`);
-    } else {
-      await ctx.reply(`❌ Ошибка: ${data.error ?? 'unknown'}`);
-    }
-  } catch (e: any) {
-    await ctx.reply(`❌ ${e.message}`);
-  }
-
+  if (redis) await redis.del(`admin_legacy_date:${chatId}`);
+  await ctx.reply('Старый импорт категорий отключён в MVP закупочного пакета.');
   return true;
 }

@@ -12,46 +12,6 @@ export const config = { maxDuration: 60 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
-async function supabaseUpdateWithRetry(table: string, data: Record<string, unknown>, matchField: string, matchValue: string, retries = 3): Promise<void> {
-  for (let i = 0; i < retries; i++) {
-    const { error } = await (supabase.from(table) as any).update(data).eq(matchField, matchValue);
-    if (!error) return;
-    console.warn(`[step1] supabase update attempt ${i + 1} failed: ${error.message}`);
-    if (i < retries - 1) await new Promise(r => setTimeout(r, 300 * (i + 1)));
-  }
-  throw new Error('supabase update failed after retries');
-}
-
-function compactSkuButtonLabel(value: unknown, fallback: string): string {
-  let label = String(value ?? '').replace(/\s+/g, ' ').trim() || fallback;
-
-  // Generic UI cleanup only. Do not translate or normalize product terms here:
-  // SKU meaning belongs to the LLM translator because the product can be anything.
-  label = label
-    .replace(/^[-–—:：\s]+/, '')
-    .replace(/[。；;]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // Put a model/article-like code first so Telegram does not cut it on narrow screens.
-  // This is format preservation, not a product dictionary.
-  const model = label.match(/\b(?:[A-ZА-Я]{1,6}[- ]?)?\d{2,}[A-ZА-Я0-9-]*\b/i)?.[0];
-  if (model && !label.toLowerCase().startsWith(model.toLowerCase())) {
-    const withoutModel = label
-      .replace(model, '')
-      .replace(/[·,;|/\-–—]+$/g, '')
-      .replace(/^[-–—·,;|/\s]+/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    label = withoutModel ? `${model} · ${withoutModel}` : model;
-  }
-
-  const max = 42;
-  if (label.length > max) label = `${label.slice(0, max - 1).trim()}…`;
-  return label || fallback;
-}
-
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
@@ -121,16 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       attributes: rawProduct.attributes?.slice(0, 15),
       skus: rawProduct.skus?.slice(0, 15),
       selectedSkuName: rawProduct.selectedSkuName,
-      // Limit normalized1688 to essential fields only to avoid Supabase payload limit
-      normalized1688: rawProduct.normalized1688 ? {
-        pricing: rawProduct.normalized1688.pricing,
-        supplierType: rawProduct.normalized1688.supplierType,
-        moq: rawProduct.normalized1688.moq,
-        salesCount: rawProduct.normalized1688.salesCount,
-        soldCountText: rawProduct.normalized1688.soldCountText,
-        skuVariants: rawProduct.normalized1688.skuVariants?.slice(0, 15),
-        attributes: rawProduct.normalized1688.attributes?.slice(0, 15),
-      } : undefined,
+      normalized1688: rawProduct.normalized1688,
     };
 
     // SKU выбор: 2+ SKU с разными ценами или вариантами
@@ -142,7 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { Markup } = require('telegraf');
       const buttons = skus.slice(0, 8).map((sku: any, i: number) => {
         // Убираем китайские символы из названия для кнопки
-        const label = compactSkuButtonLabel(sku.name, `Вариант ${i + 1}`);
+        let label = (sku.name ?? `Вариант ${i + 1}`).slice(0, 28);
         const priceLabel = sku.price ? ` · ${sku.price} ¥` : '';
         return [Markup.button.callback(`${label}${priceLabel}`, `sku_${i}_${jobId}`)];
       });
@@ -164,14 +115,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Без SKU выбора — продолжаем как раньше
-    // Set status first (small payload, with retry) so step2 can proceed
-    const imageUrls = (rawProduct.images ?? []).slice(0, 10);
-    await supabaseUpdateWithRetry('jobs', { status: 'elim_done' }, 'id', jobId);
-    console.log(`[step1] Status set to elim_done`);
-
-    // Write result_json separately — allowed to fail without blocking pipeline
-    supabaseUpdateWithRetry('jobs', { result_json: { rawProduct: rawForJob, imageUrls } }, 'id', jobId)
-      .catch(e => console.error(`[step1] result_json update failed: ${e.message}`));
+    await supabase.from('jobs').update({
+      status: 'elim_done',
+      result_json: { rawProduct: rawForJob, imageUrls: rawProduct.images },
+    }).eq('id', jobId);
 
     // Вызываем step2. Важно: проверяем HTTP status и используем правильный origin
     // (на VPS это может быть http://..., а не всегда https://host).

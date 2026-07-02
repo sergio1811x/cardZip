@@ -26,7 +26,7 @@ const STAGES: ProgressStage[] = [
   { key: 'ai_claims', pct: 52, text: 'Отмечаю свойства, которые нужно подтвердить' },
   { key: 'ai_rules', pct: 60, text: 'Готовлю вопросы поставщику и правила проверки' },
 
-  { key: 'market', pct: 64, text: 'Собираю закупочный пакет по данным карточки' },
+  { key: 'package_build', pct: 64, text: 'Собираю закупочный пакет по данным карточки' },
   { key: 'readiness', pct: 68, text: 'Оцениваю готовность товара к образцу' },
   { key: 'cost', pct: 72, text: 'Считаю предварительную себестоимость без карго' },
   { key: 'package', pct: 76, text: 'Формирую короткий отчёт и следующий шаг' },
@@ -50,7 +50,7 @@ const STAGES: ProgressStage[] = [
     'Проверяю, чтобы не было пустых цен, битых значений и дублей',
     'Сверяю, что SKU, цена, вес и материалы показаны понятно',
     'Убираю технические слова и оставляю нормальный текст для селлера',
-    'Проверяю, что в отчёте нет обещаний прибыли без данных',
+    'Проверяю, что в отчёте нет неподтверждённых обещаний',
     'Сохраняю полезные свойства товара, но помечаю, что нужно подтвердить',
   ] },
   { key: 'qa', pct: 94, text: 'Финально сверяю качество закупочного пакета', holdTexts: [
@@ -84,7 +84,8 @@ const STAGE_INDEX: Record<string, number> = Object.fromEntries(STAGES.map((s, i)
 const PHASE_INDEX: Record<string, number> = {
   elim: STAGE_INDEX.elim,
   ai: STAGE_INDEX.ai,
-  market: STAGE_INDEX.market,
+  market: STAGE_INDEX.package_build,
+  package_build: STAGE_INDEX.package_build,
   package: STAGE_INDEX.package,
   send: STAGE_INDEX.send,
   writer: STAGE_INDEX.writer,
@@ -102,6 +103,7 @@ const PHASE_MAX_INDEX: Record<string, number> = {
   elim: STAGE_INDEX.elim_done,
   ai: STAGE_INDEX.ai_rules,
   market: STAGE_INDEX.package,
+  package_build: STAGE_INDEX.package,
   package: STAGE_INDEX.package,
   send: STAGE_INDEX.send,
   writer: STAGE_INDEX.writer,
@@ -206,10 +208,10 @@ function getHoldTexts(stage: ProgressStage): string[] {
       'Формирую закупочный маршрут: вопросы, образец, проверка',
     ],
     market: [
-      'Собираю закупочный пакет без обязательной WB-аналитики',
+      'Собираю закупочный пакет по данным 1688',
       'Фокусируюсь на данных 1688, SKU, рисках и проверке товара',
-      'Готовлю полезный результат без обещаний точной прибыли',
-      'Показываю, что уже можно использовать до проверки рынка',
+      'Готовлю полезный результат без финансовых обещаний',
+      'Показываю, что уже можно отправить поставщику, байеру и карго',
     ],
     readiness: [
       'Считаю готовность товара к закупочному процессу',
@@ -220,7 +222,7 @@ function getHoldTexts(stage: ProgressStage): string[] {
     cost: [
       'Считаю закупку в рублях и себестоимость без карго',
       'Показываю только те расчёты, которые можно обосновать',
-      'Отделяю себестоимость от неподтверждённой прибыли',
+      'Показываю только предварительную себестоимость',
       'Готовлю список данных, которые нужны для полного расчёта',
     ],
     package: [

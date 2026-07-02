@@ -94,10 +94,10 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model, max_tokens: 4800, temperature: 0.2,
+          model, max_tokens: 2400, temperature: 0.2,
           messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
         }),
-        signal: AbortSignal.timeout(45_000),
+        signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as any;
@@ -116,10 +116,10 @@ async function callLlm(prompt: string, systemMsg: string): Promise<any> {
         headers: { Authorization: `Bearer ${fwKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'accounts/fireworks/models/deepseek-v4-flash',
-          max_tokens: 4800, temperature: 0.2,
+          max_tokens: 2400, temperature: 0.2,
           messages: [{ role: 'system', content: systemMsg }, { role: 'user', content: prompt }],
         }),
-        signal: AbortSignal.timeout(45_000),
+        signal: AbortSignal.timeout(20_000),
       });
       if (res.ok) {
         const data = await res.json() as any;
@@ -153,13 +153,13 @@ export async function analyzeProduct(raw: {
     raw.skus.slice(0, 8).forEach(s => { info += `\n  ${s.name} — ${s.price ?? '?'} ¥`; });
   }
 
-  const prompt = `Ты анализируешь товар с 1688 для закупочного пакета CardZip.
+  const prompt = `Ты анализируешь товар с 1688 для продажи на карточка товара.
 
 Твоя задача:
 1. Понять, что это за товар.
 2. Определить категорию товара.
-3. Дать короткое рыночное название на русском.
-4. Подготовить безопасные поисковые термины для ручной проверки конкурентов, если пользователь захочет проверить рынок отдельно.
+3. Дать короткое закупочное название на русском.
+4. Подготовить структуру для поиска похожих товаров на карточка товара.
 
 Верни строго JSON без markdown:
 
@@ -177,7 +177,7 @@ export async function analyzeProduct(raw: {
     "powerType": ["тип питания если применимо"],
     "size": [], "volume": [], "color": [], "compatibility": [],
     "includedItems": ["что в комплекте"],
-    "requiredAttributes": ["обязательные признаки для прямого аналога"],
+    "requiredAttributes": ["обязательные признаки для прямого похожий товара"],
     "importantAttributes": ["важные но не обязательные"],
     "optionalAttributes": ["второстепенные"],
     "subType": "узкий подтип (короткий складной кошелек, настольный USB вентилятор, ...)",
@@ -187,16 +187,16 @@ export async function analyzeProduct(raw: {
     "visualStyle": ["визуальный стиль (мультяшное тиснение, минимализм, ...)"],
     "hardFormConflicts": ["жёсткие конфликты по подтипу/форме (женский клатч, сумка, ...)"],
     "softFormConflicts": ["мягкие конфликты подтипа (длинное портмоне, кошелек для документов, органайзер, travel wallet, кошелек с ремешком, ...)"],
-    "hardConflicts": ["если найдено → товар точно НЕ аналог"],
+    "hardConflicts": ["если найдено → товар точно НЕ похожий товар"],
     "softConflicts": ["похожие но другие товары"],
-    "compatibleAlternatives": ["допустимые рыночные альтернативы (портмоне мужское, бумажник мужской, ...)"],
-    "categoryHypotheses": ["гипотезы категорий маркетплейса"],
-    "searchIntent": "как покупатель может искать товар на маркетплейсе",
+    "compatibleAlternatives": ["допустимые похожие варианты (портмоне мужское, бумажник мужской, ...)"],
+    "categoryHypotheses": ["гипотезы карточка товара-категорий"],
+    "searchIntent": "что ищет покупатель на карточка товара",
     "mustKeep": ["признаки, которые НЕЛЬЗЯ убирать из поиска"],
     "canDrop": ["признаки, которые МОЖНО убрать если поиск слишком узкий (артикул, модель, редкий цвет, ...)"],
-    "doNotSearch": ["слова, которые НЕ НАДО использовать в поисковых запросах (артикулы, модели, маркетинг, китайские фразы)"],
-    "marketSynonyms": ["как товар может называться на маркетплейсе"],
-    "directAnalogBlockers": ["что запрещает считать товар прямым аналогом"],
+    "doNotSearch": ["слова, которые НЕ НАДО использовать в карточка товара-запросах (артикулы, модели, маркетинг, китайские фразы)"],
+    "marketSynonyms": ["как товар может называться на карточка товара"],
+    "directAnalogBlockers": ["что запрещает считать товар прямым похожим товаром"],
     "kitType": "body_only|basic_kit|full_kit|unknown",
     "kitContents": [],
     "confidence": 0.0-1.0
@@ -204,18 +204,18 @@ export async function analyzeProduct(raw: {
   "lexicon": {
     "mainTerms": ["основные термины товара"],
     "alternateNames": ["синонимы (портмоне, бумажник, ...)"],
-    "marketNames": ["как товар называется на маркетплейсе"],
-    "buyerSearchTerms": ["как покупатели ищут на маркетплейсе"],
+    "marketNames": ["как товар называется на рынке карточка товара"],
+    "buyerSearchTerms": ["как покупатели ищут на карточка товара"],
     "attributeTerms": ["ключевые атрибуты"],
     "materialAliases": ["все варианты написания материала"],
     "hardNegativeTerms": ["слова-маркеры нерелевантных товаров"],
-    "softNegativeTerms": ["маркеры похожих но не аналогичных"],
+    "softNegativeTerms": ["маркеры похожих но не похожие товарычных"],
     "broadCategoryTerms": ["широкие категорийные термины"]
   },
-  "wbCoreQuery": "поисковый запрос 1-3 слова, конкретный подтип, не широкий",
+  "wbCoreQuery": "закупочный запрос карточка товара 1-3 слова, конкретный подтип, не широкий",
   "queryLadder": {
     "L1_exact": ["точные запросы: productType + ключевые атрибуты, 2-4 слова"],
-    "L2_commercial": ["запросы языком покупателя, как ищет обычный человек"],
+    "L2_commercial": ["запросы языком покупателя карточка товара, как ищет обычный человек"],
     "L3_subtype": ["запросы по подтипу/формату товара"],
     "L4_core": ["запросы по базовому объекту + широкий признак"],
     "L5_category": ["самые широкие категорийные запросы, 1-2 слова"]
@@ -224,7 +224,7 @@ export async function analyzeProduct(raw: {
 
 Правила:
 - categoryType выбирай только из списка.
-- wbCoreQuery: 1-3 слова, как товар реально могут искать на маркетплейсе.
+- wbCoreQuery: 1-3 слова, как товар реально ищут на карточка товара.
 - Китайские термины переводи на русский смысл.
 
 Для обуви (categoryType=shoes):
@@ -366,10 +366,10 @@ async function callLlmWithVision(prompt: string, systemMsg: string, imageBase64:
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model, max_tokens: 6000, temperature: 0.2,
+          model, max_tokens: 3000, temperature: 0.2,
           messages,
         }),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as any;
@@ -381,24 +381,23 @@ async function callLlmWithVision(prompt: string, systemMsg: string, imageBase64:
 
   return null;
 }
+
 const INTELLIGENCE_PROMPT = `CardZip Product Intelligence.
 
 Роль: закупщик 1688. Нужно точно определить товар и собрать единый профиль для закупочного пакета: отчёт, SKU, вопросы поставщику, ТЗ байеру/карго, чек-лист образца и SEO.
 
-Фото используй только для визуально очевидного: тип товара, форма, конструкция, видимые детали. 
-Цену, MOQ, вес, SKU, размеры и документы бери только из переданных данных, не с фото.
+Фото используй только для визуально очевидного: тип товара, форма, конструкция, видимые детали. Цену, MOQ, вес, SKU, размеры и документы бери только из переданных данных, не с фото.
 
 Верни строго JSON без markdown:
-
 {
   "productIdentity": {
-    "productKind": "footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|generic_product",
+    "productKind": "свободный domainKind, например dish_rack, umbrella, clothing, kitchen_scale",
     "categoryType": "shoes|clothes|electronics|home|beauty|accessory|kitchen|other",
     "subCategoryType": "подкатегория",
-    "marketNameRu": "рыночное название",
+    "marketNameRu": "понятное закупочное название без raw-мусора",
     "shortNameRu": "2-4 слова",
     "titleForReport": "3-6 слов",
-    "titleForSeo": "название для WB/Ozon без неподтверждённых claims",
+    "titleForSeo": "название карточки товара без неподтверждённых claims",
     "coreObject": "базовый объект",
     "formFactor": "форма/конструкция",
     "audience": "мужской|женский|детский|унисекс|не ясно",
@@ -412,20 +411,6 @@ const INTELLIGENCE_PROMPT = `CardZip Product Intelligence.
     "unconfirmedFeatures": ["что нельзя писать как факт"],
     "possibleConfusions": ["с чем можно перепутать"]
   },
-
-  "sku": {
-    "skuSummary": "кратко: цвет × размер / модель / параметр",
-    "selectedSkuText": "выбранный SKU или null",
-    "selectedSkuReliable": true,
-    "colors": ["цвета"],
-    "sizes": ["размеры"],
-    "models": ["модели"],
-    "packageTypes": ["упаковки"],
-    "packCounts": ["количество в наборе"],
-    "skuWarnings": ["что непонятно по SKU"],
-    "normalizedExamples": ["понятные примеры SKU"]
-  },
-
   "procurement": {
     "status": "нужны данные поставщика|можно запрашивать образец|готов к заказу образца|данных мало",
     "verdict": "короткий вывод под конкретный товар",
@@ -435,46 +420,20 @@ const INTELLIGENCE_PROMPT = `CardZip Product Intelligence.
     "mustCheckOnSample": ["что проверить на образце"],
     "redFlags": ["риски"]
   },
-
-  "cargo": {
-    "mustAsk": ["что запросить для доставки"],
-    "likelySensitiveCargoIssues": ["батарейка/жидкость/магнит/стекло/сертификаты/нет"]
-  },
-
-  "content": {
-    "seoAllowedClaims": ["что можно писать безопасно"],
-    "seoForbiddenClaims": ["что нельзя писать без подтверждения"],
-    "titleWarnings": ["что не добавлять в title"],
-    "infographicIdeas": ["идеи слайдов"]
-  },
-
-  "dataQuality": {
-    "missingCriticalFields": ["чего не хватает"],
-    "contradictions": ["противоречия"],
-    "skuRisk": "ok|mixed_sku|needs_selection|unknown",
-    "priceRisk": "ok|range|needs_confirmation|missing",
-    "weightRisk": "ok|missing",
-    "overallConfidence": "high|medium|low",
-    "visionConfidence": "high|medium|low|none",
-    "textConfidence": "high|medium|low",
-    "reason": "почему такая уверенность"
-  }
+  "cargo": {"mustAsk": ["что запросить для доставки"], "likelySensitiveCargoIssues": ["ограничения перевозки или нет"]},
+  "content": {"seoAllowedClaims": ["что можно писать безопасно"], "seoForbiddenClaims": ["что нельзя писать без подтверждения"], "infographicIdeas": ["идеи слайдов"]},
+  "dataQuality": {"missingCriticalFields": [], "contradictions": [], "overallConfidence": "high|medium|low", "visionConfidence": "high|medium|low|none", "textConfidence": "high|medium|low", "reason": "почему"}
 }
 
 Правила:
 - Не возвращай китайский в русских полях.
+- Не копируй raw атрибуты как title; запрещены cross-border, товар, функции, category labels, single number.
 - Не придумывай материал, размер, вес, документы, сертификаты, аудиторию или свойства.
+- Supplier name не должен браться из material.
 - Если свойство заявлено, но не подтверждено — клади в claimedFeatures/unconfirmedFeatures.
-- Если SKU-значение непонятно, не называй его размером/цветом. Пиши как параметр SKU.
-- Если цвет содержит свойство, не пиши "цвет = свойство"; перенеси свойство в claimedFeatures.
-- mustAskSupplier должен быть без дублей, максимум 10 вопросов.
-- Вопросы должны быть под конкретный productKind, без чужих категорий.
-- Для одежды спрашивай состав, размеры, посадку, упаковку, фото на модели.
-- Для обуви спрашивай стельку, материал верха/подошвы, запах EVA/PU, размерность, упаковку.
-- Для зонта спрашивай механизм, спицы, купол, чехол, размер, UPF только как подтверждение.
-- Для техники спрашивай мощность, напряжение, вилку, кабель, инструкцию, видео работы, сертификаты.
+- Вопросы должны быть под конкретный productKind, без чужих категорий, максимум 10.
+- Для кухонной сушилки/стеллажа спрашивай ярусы, размеры 43/53, материал/покрытие, поддон, комплектацию, устойчивость, упаковку.
 - SEO должен быть продающим, но безопасным: dangerous claims только в seoForbiddenClaims.
-- Не используй claims как факт: медицинский, ортопедический, лечебный, антибактериальный, сертифицированный, гипоаллергенный, безопасный для детей, профессиональный, оригинальный бренд, 100% водонепроницаемый, UPF50+, дезинфекция, стерилизация.
 `;
 
 export async function generateProductIntelligence(raw: {
@@ -505,7 +464,7 @@ export async function generateProductIntelligence(raw: {
   let imageBase64: string | null = null;
   if (raw.mainImageUrl) {
     try {
-      const imgRes = await fetch(raw.mainImageUrl, { signal: AbortSignal.timeout(10_000) });
+      const imgRes = await fetch(raw.mainImageUrl, { signal: AbortSignal.timeout(5000) });
       if (imgRes.ok) {
         const buffer = Buffer.from(await imgRes.arrayBuffer());
         // Limit to 500KB
@@ -521,7 +480,7 @@ export async function generateProductIntelligence(raw: {
   }
 
   const prompt = `${INTELLIGENCE_PROMPT}\n\nДанные товара:\n${info}`;
-  const systemMsg = 'Ты — товарный аналитик CardZip для закупочного пакета. Анализируешь товары с 1688. Верни СТРОГО JSON.';
+  const systemMsg = 'Ты — товарный аналитик для карточка товара. Анализируешь товары с 1688. Верни СТРОГО JSON.';
 
   try {
     let result: any = null;
@@ -613,19 +572,19 @@ export async function expandQueries(
   frequentTokens: string[],
   frequentBigrams: string[]
 ): Promise<string[]> {
-  const prompt = `На основе товара и опциональных частотных слов маркетплейса сгенерируй 5-10 ДОПОЛНИТЕЛЬНЫХ русских запросов.
+  const prompt = `На основе товара и частотных слов из карточка товара сгенерируй 5-10 ДОПОЛНИТЕЛЬНЫХ русских запросов.
 
 ТОВАР: ${structure.productType} (${structure.coreObject})
 Аудитория: ${structure.audience}
 
-Частотные слова маркетплейса: ${frequentTokens.slice(0, 15).join(', ')}
-Частотные биграммы маркетплейса: ${frequentBigrams.slice(0, 10).join(', ')}
+Частотные слова карточка товара: ${frequentTokens.slice(0, 15).join(', ')}
+Частотные биграммы карточка товара: ${frequentBigrams.slice(0, 10).join(', ')}
 
-Сгенерируй запросы которых НЕ было в первом поиске. Используй реальные покупательские термины.
+Сгенерируй запросы которых НЕ было в первом поиске. Используй реальные карточка товара-термины.
 Только русский, 2-4 слова. JSON: {"queries": ["запрос1", "запрос2"]}`;
 
   try {
-    const result = await callLlm(prompt, 'Генератор поисковых запросов. ТОЛЬКО JSON.');
+    const result = await callLlm(prompt, 'Генератор карточка товара-запросов. ТОЛЬКО JSON.');
     return validateQueries(
       (result?.queries ?? []).map((q: string) => ({ query: q, purpose: 'adaptive', priority: 2 }))
     );
@@ -649,7 +608,7 @@ export async function judgeCandidate(
   source: ProductStructure,
   candidate: { title: string; category?: string; brand?: string; price: number; detectedConflicts: string[] }
 ): Promise<JudgeResult | null> {
-  const prompt = `Оцени, является ли WB-карточка аналогом товара.
+  const prompt = `Оцени, является ли карточка товара похожим товаром товара.
 
 ТОВАР:
 Тип: ${source.productType}
@@ -661,7 +620,7 @@ export async function judgeCandidate(
 Мягкие конфликты: ${source.softConflicts.join(', ')}
 Допустимые альтернативы: ${source.compatibleAlternatives.join(', ')}
 
-WB-КАРТОЧКА:
+карточка товара-КАРТОЧКА:
 ${candidate.title}
 ${candidate.category ? 'Категория: ' + candidate.category : ''}
 ${candidate.brand ? 'Бренд: ' + candidate.brand : ''}
@@ -700,7 +659,7 @@ export async function judgeCandidateBatch(
     `${i + 1}. "${c.title}" (${c.price}₽)${c.detectedConflicts.length ? ' [конфликты: ' + c.detectedConflicts.join(', ') + ']' : ''}`
   ).join('\n');
 
-  const prompt = `Оцени ${candidates.length} WB-карточек — являются ли они аналогами товара.
+  const prompt = `Оцени ${candidates.length} карточка товара-карточек — являются ли они похожий товарами товара.
 
 ТОВАР:
 Тип: ${source.productType}
@@ -738,7 +697,7 @@ export async function repairSearch(
   topRejectedTitles: string[],
   mining: { tokens: string[]; bigrams: string[] }
 ): Promise<{ newQueries: string[]; reason: string }> {
-  const prompt = `Ты Search Repair Agent. Поиск WB не нашёл достаточно прямых аналогов.
+  const prompt = `Ты Search Repair Agent. Поиск карточка товара не нашёл достаточно прямых похожих товаров.
 
 ТОВАР: ${structure.productType} (${structure.coreObject})
 Подтип: ${structure.subType || 'нет'}
@@ -752,12 +711,12 @@ marketSynonyms: ${structure.marketSynonyms?.join(', ') || 'нет'}
 Топ найденных карточек: ${topFoundTitles.slice(0, 8).join(' | ')}
 Топ отклонённых карточек: ${topRejectedTitles.slice(0, 5).join(' | ')}
 
-Частотные слова маркетплейса: ${mining.tokens.slice(0, 10).join(', ')}
-Частотные биграммы маркетплейса: ${mining.bigrams.slice(0, 5).join(', ')}
+Частотные слова карточка товара: ${mining.tokens.slice(0, 10).join(', ')}
+Частотные биграммы карточка товара: ${mining.bigrams.slice(0, 5).join(', ')}
 
-Проанализируй почему не нашлись аналоги и сгенерируй НОВЫЕ запросы:
+Проанализируй почему не нашлись похожие товары и сгенерируй НОВЫЕ запросы:
 - Убери слова из doNotSearch/canDrop
-- Используй marketSynonyms и частотные слова из WB
+- Используй marketSynonyms и частотные слова из карточка товара
 - Попробуй другие формулировки
 - Только русский, 2-4 слова
 

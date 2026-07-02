@@ -13,7 +13,7 @@ import { validateSeoContent } from "../core/reportValidator";
 import { normalizeMixedProductText } from "../core/cnNormalize";
 
 /**
- * Safe SEO generator for WB/Ozon drafts.
+ * Safe SEO generator for карточки товара drafts.
  *
  * Key principles:
  * - numbers are not invented by LLM;
@@ -383,7 +383,7 @@ function buildPrompt(req: AiContentRequest): string {
     : "";
 
   const wbKeywordsBlock = req.wbTopKeywords?.length
-    ? `\nОПЦИОНАЛЬНЫЕ КЛЮЧЕВЫЕ СЛОВА МАРКЕТПЛЕЙСА, если релевантны товару:\n${req.wbTopKeywords
+    ? `\nКЛЮЧЕВЫЕ СЛОВА ИЗ ТОПА карточка товара, если релевантны товару:\n${req.wbTopKeywords
         .slice(0, 10)
         .map((keyword) => `- ${keyword}`)
         .join("\n")}`
@@ -393,8 +393,8 @@ function buildPrompt(req: AiContentRequest): string {
     req.platform === "taobao"
       ? "Товар с Taobao. Это розничный источник, поэтому цена/партия требуют отдельного подтверждения."
       : req.platform === "tmall"
-        ? "Товар с Tmall. Не использовать бренд в публичном названии без права на бренд."
-        : "Товар с 1688. Это закупочная гипотеза; не обещать продажи, прибыльность или рыночный спрос.";
+        ? "Товар с Tmall. Не использовать бренд в карточка товара-названии без права на бренд."
+        : "Товар с 1688. Это закупочная гипотеза для перепродажи на карточка товара.";
 
   const intelligence = req.intelligence;
   const intelligenceParts: string[] = [];
@@ -433,7 +433,7 @@ function buildPrompt(req: AiContentRequest): string {
         ? "Перед публикацией уточните комплектацию, питание, инструкцию и документы для продажи в РФ."
         : "Перед публикацией уточните характеристики выбранного SKU, комплектацию и документы для продажи в РФ.";
 
-  return `${intelligenceParts.length ? `${intelligenceParts.join("\n\n")}\n\n` : ""}Ты — редактор CardZip 2.0. Сделай продающий, но безопасный SEO-черновик карточки маркетплейса: сохранить полезные факты, перевести их на русский и пометить спорное как “подтвердить”.
+  return `${intelligenceParts.length ? `${intelligenceParts.join("\n\n")}\n\n` : ""}Ты — редактор CardZip 2.0. Сделай продающий, но безопасный черновик карточки товара-карточки: сохранить полезные факты, перевести их на русский и пометить спорное как “подтвердить”.
 
 КОНТЕКСТ:
 ${platformContext}
@@ -462,13 +462,13 @@ ${categoryBlock}
 
 ЗАДАЧИ:
 1. titleRu — название карточки до 120 символов. Только категория + подтверждённые важные свойства. Без бренда, OEM и рекламных слов.
-${req.brand ? "2. titleRuBranded — справочное обозначение поставщика, не для публичной карточки." : ""}
+${req.brand ? "2. titleRuBranded — справочное обозначение поставщика, не для карточка товара." : ""}
 3. description — описание 350-700 символов: что это, подтверждённые характеристики, комплектация/назначение если известно. Последняя фраза: "${categoryEnding}"
 4. bullets — ровно 5 тезисов по 5-10 слов, без эмодзи, только подтверждённые свойства.
-5. keywords — 8-15 релевантных поисковых запросов без бренда и без смены типа товара.
+5. keywords — 8-15 релевантных карточка товара-запросов без бренда и без смены типа товара.
 6. characteristics — только переведённые характеристики поставщика. Не оставляй китайские ключи/значения.
 7. filterKeywords — required 1-2 слова, optional 3-5 слов, exclude 3-8 слов.
-8. searchQueries — 3 запроса для ручной проверки конкурентов на маркетплейсе.
+8. searchQueries — 3 запроса для ручной проверки на карточка товара.
 9. warnings — 1-3 конкретных предупреждения. Только релевантные этому товару.
 10. supplierQuestions — ru/cn, максимум 7 вопросов. Не спрашивай то, что уже известно.
 
@@ -506,7 +506,7 @@ function cleanJsonResponse(raw: string): string {
 }
 
 const SYSTEM_MSG = [
-  "Ты safe-listing редактор CardZip 2.0 для карточек маркетплейса.",
+  "Ты safe-listing редактор CardZip 2.0 для карточки товара.",
   "Отвечай только валидным JSON-объектом.",
   "Не используй Markdown, пояснения или текст вне JSON.",
   "Улучшай данные: переводи, структурируй, помечай сомнительное. Не придумывай свойства.",
@@ -529,7 +529,7 @@ async function callProvider(
       },
       body: JSON.stringify({
         model,
-        max_tokens: Number(process.env.AI_TEXT_MAX_TOKENS ?? 6000),
+        max_tokens: Number(process.env.AI_TEXT_MAX_TOKENS ?? 3000),
         temperature: Number(process.env.AI_TEXT_TEMPERATURE ?? 0.25),
         response_format: { type: "json_object" },
         messages: [
@@ -538,7 +538,7 @@ async function callProvider(
         ],
       }),
       signal: AbortSignal.timeout(
-        Number(process.env.AI_TEXT_TIMEOUT_MS ?? 70_000),
+        Number(process.env.AI_TEXT_TIMEOUT_MS ?? 35_000),
       ),
     });
 

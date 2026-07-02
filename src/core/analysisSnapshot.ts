@@ -339,7 +339,7 @@ function normalizeMarket(input: unknown): AnalysisSnapshot['market'] {
     displayedMainPriceRub: marketConfirmed ? displayedMainPriceRub : null,
     displayedMainPriceType: displayedMainPriceTypeRaw === 'median' || displayedMainPriceTypeRaw === 'average' ? displayedMainPriceTypeRaw : 'unknown',
     canUseForEconomics: marketConfirmed,
-    rejectedReason: marketConfirmed ? undefined : safeString(market.rejectedReason, directAnalogsCount <= 0 ? 'Нет прямых аналогов для подтверждения рыночной цены.' : 'Рынок не подтверждён.'),
+    rejectedReason: marketConfirmed ? undefined : safeString(market.rejectedReason, directAnalogsCount <= 0 ? 'Нет внешнего подтверждения цены.' : 'Цена требует ручной проверки.'),
     directAnalogs,
   };
 }
@@ -356,7 +356,7 @@ function normalizeEconomics(
   if (purchasePrice.valueCny === null) missing.push('purchasePriceCny');
   if (weight.packedWeightKg === null && weight.valueKg === null) missing.push('packedWeightKg');
   if (sku.needsSelection) missing.push('selectedSku');
-  if (!market.marketConfirmed || market.directAnalogsCount <= 0) missing.push('confirmedMarketPrice');
+  
 
   const canShowRoi = Boolean(economics.canShowRoi) && market.marketConfirmed && market.directAnalogsCount > 0 && purchasePrice.valueCny !== null && positiveNumber(economics.sellPriceRub ?? market.displayedMainPriceRub) !== null;
   const canShowMargin = Boolean(economics.canShowMargin) && canShowRoi;
@@ -378,7 +378,7 @@ function normalizeEconomics(
     missing: missing.filter((value, index, arr) => arr.indexOf(value) === index),
     canShowRoi,
     canShowMargin,
-    warning: canShowRoi ? safeString(economics.warning) : 'Рыночная цена не подтверждена. ROI и маржу считать нельзя.',
+    warning: canShowRoi ? safeString(economics.warning) : 'Предварительная себестоимость зависит от веса, упаковки и условий доставки.',
   };
 }
 
@@ -467,10 +467,10 @@ export function getSafeSnapshotSummary(snapshot: AnalysisSnapshot): {
   return {
     status,
     verdict: reliable
-      ? `${title}: можно продолжать проверку, но без обещания результата продаж.`
+      ? `${title}: можно продолжать закупочную проверку по пакету.`
       : `${title}: данных недостаточно для решения о закупке партии.`,
-    mainRisk: missing.length ? `Не подтверждены: ${missing.slice(0, 5).join(', ')}.` : 'Риск ошибок в SKU, упаковке или рынке.',
-    nextStep: 'Запросить у поставщика недостающие данные и вручную проверить прямые аналоги.',
-    doNotDo: 'Не считать ROI/маржу и не закупать партию без подтверждённого SKU, веса с упаковкой, цены партии и прямого рынка.',
+    mainRisk: missing.length ? `Не подтверждены: ${missing.slice(0, 5).join(', ')}.` : 'Риск ошибок в SKU, упаковке или характеристиках.',
+    nextStep: 'Запросить у поставщика недостающие данные и заказать 1–2 образца после подтверждения SKU.',
+    doNotDo: 'Не закупать партию без подтверждённого SKU, веса с упаковкой, комплектации и проверки образца.',
   };
 }

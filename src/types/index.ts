@@ -124,8 +124,6 @@ export interface ProductContext {
     productType: string;
     coreObject: string;
     categoryType: string;
-    /** Free-form domain inferred by LLM, e.g. exact procurement niche. Not a hardcoded enum. */
-    domainKind?: string;
     useCases: string[];
     notThis: string[];
     audience: string;
@@ -192,10 +190,6 @@ export interface ProductContext {
     status: string;
     explanation: string;
   };
-
-  /** LLM-generated, domain-specific procurement rules. This is intentionally dynamic. */
-  procurementProfileDraft?: Record<string, unknown>;
-  productKindClassifier?: Record<string, unknown>;
 }
 
 // ─── Analysis Snapshot (step4 → step5) ─────────────────────────────────────

@@ -72,7 +72,7 @@ export async function handleSupplierConfirmStart(ctx: Context) {
       'Что сделать сейчас:\n' +
       '1. Нажмите «💬 Вопросы поставщику».\n' +
       '2. Скопируйте вопросы.\n' +
-      '3. Отправьте их поставщику.\n' +
+      '3. Отправьте их в чат 1688.\n' +
       '4. Когда поставщик ответит — нажмите «📥 Обновить по ответу».',
       {
         parse_mode: 'HTML',
@@ -177,7 +177,7 @@ export async function handleSupplierConfirmText(ctx: Context, text: string): Pro
       if (extracted.moq && extracted.moq > 0) raw.normalized1688.moq = extracted.moq;
     }
 
-    // Обновляем закупочный пакет без обязательного WB: решения пересчитываются из raw/product.
+    // Обновляем закупочный пакет без внешней проверки: решения пересчитываются из raw/product.
     const updatedProduct: ProductWithContent = {
       ...product,
       ...raw,
@@ -291,109 +291,26 @@ interface ExtractedData {
 }
 
 const EXTRACT_MODELS = [
-  { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite', key: 'OPENROUTER_API_KEY' },
   { base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-flash', key: 'OPENROUTER_API_KEY' },
-  { base: 'https://openrouter.ai/api/v1', model: 'stepfun/step-3.7-flash', key: 'OPENROUTER_API_KEY' },
+  { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite-preview-09-2025', key: 'OPENROUTER_API_KEY' },
+  { base: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-4-scout', key: 'OPENROUTER_API_KEY' },
+  { base: 'https://api.fireworks.ai/inference/v1', model: 'accounts/fireworks/models/deepseek-v4-flash', key: 'FIREWORKS_API_KEY' },
 ];
 
+const EXTRACT_PROMPT = `Извлеки из текста ответа поставщика:
+- weightKg: вес 1 единицы с упаковкой в кг (число)
+- composition: состав ткани/материала (строка)
+- priceCny: цена в юанях при оптовом заказе (число)
+- moq: минимальный заказ в штуках (число)
+- productionDays: срок производства в днях (число)
+- deliveryDays: срок отгрузки/доставки до склада в днях (число)
+- sizes: доступные размеры (строка)
+- dimensions: габариты индивидуальной упаковки (строка, например 28×18×6 см)
+- packaging: тип упаковки/комплектация упаковки (строка)
+- documents: документы/сертификаты/протоколы, если поставщик упомянул (строка)
+- photosOrVideos: фото/видео/реальные снимки, если поставщик упомянул (строка)
 
-
-const EXTRACT_PROMPT = `
-Ты извлекаешь структурированные данные ТОЛЬКО из ответа поставщика.
-
-Задача:
-проанализируй текст ответа поставщика и верни строго JSON-объект с найденными полями.
-
-ВАЖНО:
-- Извлекай только то, что явно сказал поставщик.
-- Не используй данные из вопроса покупателя, если они есть в переписке.
-- Не додумывай отсутствующие значения.
-- Не пересчитывай цену, вес или сроки без явных данных.
-- Если поле не найдено или значение неясное — не включай это поле в JSON.
-- Если поставщик ответил "уточню", "нет данных", "не знаю", "зависит от SKU" — поле не включай.
-- Если указано несколько SKU/вариантов, сохраняй это в строке notes или в соответствующем поле как текст, не выбирай сам.
-- Верни ТОЛЬКО валидный JSON без markdown, без пояснений, без текста вокруг.
-
-Единицы и нормализация:
-- weightKg: вес ОДНОЙ единицы товара с индивидуальной упаковкой в килограммах.
-  - "350 г" → 0.35
-  - "0.8kg" → 0.8
-  - "一件约500g" → 0.5
-  - Не путай с весом транспортной коробки / carton weight / gross weight всей коробки.
-- priceCny: цена за 1 штуку в юанях.
-  - "12.5元" → 12.5
-  - "￥8.8" → 8.8
-  - Если дана цена за коробку/партию — не включай priceCny, если нельзя явно понять цену за штуку.
-- moq: минимальный заказ в штуках.
-  - "MOQ 100pcs" → 100
-  - "起订量50件" → 50
-- productionDays: срок производства в днях.
-  - "7 days" → 7
-  - "7-10 days" → "7-10"
-- deliveryDays: срок отгрузки/доставки до склада в днях.
-  - "ships in 3 days" → 3
-  - "发货3-5天" → "3-5"
-- dimensions: габариты индивидуальной упаковки, строкой с единицами.
-  - Например: "28×18×6 см"
-  - Не путай с габаритами транспортной коробки.
-- cartonDimensions: габариты транспортной коробки, если указаны отдельно.
-- cartonWeightKg: вес транспортной коробки, если указано явно.
-- cartonQty: количество штук в транспортной коробке, если указано явно.
-
-Поля JSON:
-
-{
-  "weightKg": number,
-  "composition": string,
-  "materials": string,
-  "priceCny": number,
-  "moq": number,
-  "productionDays": number | string,
-  "deliveryDays": number | string,
-  "sizes": string,
-  "dimensions": string,
-  "packaging": string,
-  "cartonDimensions": string,
-  "cartonWeightKg": number,
-  "cartonQty": number,
-  "documents": string,
-  "photosOrVideos": string,
-  "colors": string,
-  "selectedSkuConfirmed": string,
-  "sampleAvailable": boolean,
-  "samplePriceCny": number,
-  "customization": string,
-  "notes": string
-}
-
-Описание полей:
-- composition: состав ткани в процентах, если поставщик указал. Например: "92% полиэстер, 8% спандекс".
-- materials: материалы товара без процентов, если точного состава нет. Например: "полиэстер, спандекс".
-- sizes: доступные размеры или размерная сетка.
-- dimensions: габариты индивидуальной упаковки.
-- packaging: тип индивидуальной упаковки / комплектация упаковки.
-- documents: сертификаты, протоколы, тесты, декларации, если поставщик упомянул.
-- photosOrVideos: реальные фото, видео, фото упаковки, фото на модели, если поставщик упомянул.
-- colors: доступные цвета или подтверждённый цвет выбранного SKU.
-- selectedSkuConfirmed: подтверждение выбранного SKU, если поставщик явно подтвердил цвет/размер/модель.
-- sampleAvailable: true только если поставщик явно подтвердил возможность образца; false только если явно отказал.
-- samplePriceCny: цена образца в юанях, если указана.
-- customization: информация об OEM/ODM/логотипе/кастомизации, если упомянута.
-- notes: важные данные, которые не подходят в другие поля, но могут влиять на закупку.
-
-Правила качества:
-- Не возвращай пустые строки.
-- Не возвращай null.
-- Не возвращай undefined.
-- Не возвращай поля с неизвестным значением.
-- Не возвращай массивы, если поле ожидает строку.
-- Числа возвращай числами, не строками.
-- Десятичный разделитель — точка.
-- Сохраняй важные уточнения: "для выбранного SKU", "примерно", "зависит от цвета", "для партии от 100 шт".
-
-Текст ответа поставщика будет передан ниже.
-Верни только JSON.
-`;
+Если данных нет — не включай поле. Верни ТОЛЬКО JSON.`;
 
 async function extractSupplierData(text: string): Promise<ExtractedData | null> {
   for (const cfg of EXTRACT_MODELS) {
@@ -405,13 +322,13 @@ async function extractSupplierData(text: string): Promise<ExtractedData | null> 
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: cfg.model, max_tokens: 1000, temperature: 0,
+          model: cfg.model, max_tokens: 500, temperature: 0,
           messages: [
             { role: 'system', content: 'Извлеки данные из ответа поставщика. ТОЛЬКО JSON.' },
             { role: 'user', content: `${EXTRACT_PROMPT}\n\nТекст: ${text.slice(0, 2000)}` },
           ],
         }),
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(12_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as any;

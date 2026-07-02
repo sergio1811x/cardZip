@@ -1,6 +1,7 @@
 import { Markup } from 'telegraf';
 import { buildMainReportFromProfile } from './procurementProfile';
 import {
+  buildMainReport,
   build1688Detail as render1688Detail,
   buildSafeSummary as renderSafeSummary,
   buildDecisionContext,
@@ -28,7 +29,7 @@ function topLevelKeyboard(jobId: string) {
 
 
 export function buildMainMessage(product: any, jobId: string, status: any, _category?: any): { text: string; keyboard: any } {
-  const text = buildMainReportFromProfile(product, typeof status?.creditsRemaining === 'number' ? { creditsRemaining: status.creditsRemaining } : undefined);
+  const text = buildMainReportFromProfile(product, undefined);
   const keyboard = topLevelKeyboard(jobId);
   return { text, keyboard };
 }
@@ -71,7 +72,6 @@ export function buildEconomicsDetail(product: any, jobId: string): { text: strin
     lines.push('<b>Пока не рассчитано</b>');
     if (!x.cost.cargoRub) lines.push('• карго — нет веса с упаковкой');
     else lines.push(`• карго: ~${x.cost.cargoRub.toLocaleString('ru-RU')} ₽`);
-    lines.push('• продажную цену и рынок проверьте отдельно');
     if (x.weight.source === 'category_default') lines.push('• грубый ориентир веса не использую для финального расчёта');
     if (x.cost.warnings.length) lines.push('', ...x.cost.warnings.map((w) => `⚠️ ${w}`));
     lines.push('', '<b>Что сделать сейчас:</b> уточните вес у поставщика или укажите вес вручную.');
@@ -114,15 +114,14 @@ export function buildProcurementPlanDetail(product: any, jobId: string): { text:
 export function buildWbDetail(product: any, jobId: string): { text: string; keyboard: any } {
   const x = buildDecisionContext(product);
   const lines = [
-    '🔍 <b>Проверка рынка вручную</b>',
+    '📁 <b>Закупочный пакет</b>',
     '',
-    'Автоматический WB-поиск больше не является обязательной частью анализа.',
-    'Закупочный пакет готов даже без WB/Ozon-аналогов.',
+    'Этот старый раздел больше не используется. CardZip сейчас работает как простой закупочный пакет по ссылке.',
     '',
-    'Что можно сделать:',
-    '1. Вручную найдите 3–5 конкурентов на WB/Ozon.',
-    '2. Нажмите «🔍 Конкуренты вручную» или отправьте ссылки/цены.',
-    '3. Бот посчитает сценарий по указанным конкурентам.',
+    'Что сделать сейчас:',
+    '1. Откройте вопросы поставщику.',
+    '2. Скачайте ZIP-пакет.',
+    '3. Передайте ТЗ байеру и карго.',
     '',
     `Текущий статус: ${x.readiness.label}`,
   ];

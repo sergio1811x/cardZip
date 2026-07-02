@@ -51,9 +51,10 @@ export async function handleRewrite(ctx: Context) {
 
   try {
     const REWRITE_MODELS = [
-      { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite', key: 'OPENROUTER_API_KEY' },
       { base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-flash', key: 'OPENROUTER_API_KEY' },
-      { base: 'https://openrouter.ai/api/v1', model: 'stepfun/step-3.7-flash', key: 'OPENROUTER_API_KEY' },
+      { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite-preview-09-2025', key: 'OPENROUTER_API_KEY' },
+      { base: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-4-scout', key: 'OPENROUTER_API_KEY' },
+      { base: 'https://api.fireworks.ai/inference/v1', model: 'accounts/fireworks/models/deepseek-v4-flash', key: 'FIREWORKS_API_KEY' },
     ];
 
     let rewritten = '';
@@ -65,13 +66,13 @@ export async function handleRewrite(ctx: Context) {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: cfg.model, max_tokens: 6000, temperature: 0.8,
+            model: cfg.model, max_tokens: 3000, temperature: 0.8,
             messages: [
-              { role: 'system', content: 'Ты копирайтер для маркетплейса. Пиши на русском и не добавляй неподтверждённые claims.' },
+              { role: 'system', content: 'Ты копирайтер для маркетплейс. Пиши на русском.' },
               { role: 'user', content: `${prompt}\n\nИСХОДНЫЙ ТЕКСТ:\n${originalText}` },
             ],
           }),
-          signal: AbortSignal.timeout(45_000),
+          signal: AbortSignal.timeout(20_000),
         });
         if (!res.ok) continue;
         const data = await res.json() as any;

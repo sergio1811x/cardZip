@@ -107,11 +107,7 @@ export async function fetchFromRapidApi(productId: string): Promise<RawProduct16
 
     // Translate Chinese SKU names to Russian
     const skuNames = skusRaw.map(s => s.name);
-    const translatedNames = await translateSkuNamesViaLlm(skuNames, {
-      titleCn: item.title,
-      categoryName: item.catId,
-      attributes,
-    });
+    const translatedNames = await translateSkuNamesViaLlm(skuNames);
     const skus: ProductSku[] = skusRaw.map((s, i) => ({ ...s, name: translatedNames[i] ?? s.name }));
 
     // Price

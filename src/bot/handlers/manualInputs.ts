@@ -31,25 +31,13 @@ export async function handleManualWeightStart(ctx: Context): Promise<void> {
 }
 
 export async function handleManualSalePriceStart(ctx: Context): Promise<void> {
-  const state = await stateFromCallback(ctx, /^manual_price_(.+)$/);
-  if (!state) return;
-  await saveState(ctx, { ...state, type: 'sale_price' });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply(
-    '💰 <b>Посчитать по моей цене</b>\n\nВведите предполагаемую цену продажи в ₽.\n\nПример: <b>1290</b>\n\nЯ посчитаю ориентир по вашей цене. Это не рыночная аналитика и не обещание прибыли.',
-    { parse_mode: 'HTML' }
-  );
+  await ctx.reply('💸 В MVP CardZip нет расчёта по цене продажи. Используйте закупочный пакет: вопросы поставщику, ТЗ байеру, ТЗ карго и чек-лист образца.');
 }
 
 export async function handleManualCompetitorsStart(ctx: Context): Promise<void> {
-  const state = await stateFromCallback(ctx, /^manual_competitors_(.+)$/);
-  if (!state) return;
-  await saveState(ctx, { ...state, type: 'competitors' });
   await ctx.answerCbQuery().catch(() => {});
-  await ctx.reply(
-    '🔍 <b>Конкуренты вручную</b>\n\nВставьте 3–5 ссылок WB/Ozon и цены, если знаете.\n\nПример:\n1) https://www.wildberries.ru/... — 1290 ₽\n2) https://www.ozon.ru/... — 1490 ₽\n\nЕсли цену из ссылки не получится получить автоматически, я использую цены, которые вы указали в тексте.',
-    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }
-  );
+  await ctx.reply('📁 В MVP CardZip нет блока конкурентов. Я готовлю закупочный пакет по карточке 1688 и ответам поставщика.');
 }
 
 export async function getPendingManualInput(chatId: number): Promise<ManualInputState | null> {
@@ -113,14 +101,14 @@ export async function handleManualInputText(ctx: Context, text: string): Promise
     product.manualSalePriceRub = priceRub;
     result.manualSalePriceRub = priceRub;
     await saveUpdatedJob(state.jobId, result, product);
-    await ctx.reply(`✅ Цена продажи сохранена: ${priceRub.toLocaleString('ru-RU')} ₽. Это сценарная цена, не подтверждённый рынок.`);
+    await ctx.reply(`✅ Цена продажи сохранена: ${priceRub.toLocaleString('ru-RU')} ₽. Это сценарная цена, не подтверждённый закупочный контекст.`);
     await sendUpdatedMain(ctx, product, state.jobId);
     return true;
   }
 
   const prices = parseRubPrices(text);
   if (!prices.length) {
-    await ctx.reply('Не нашёл цены конкурентов. Вставьте ссылки и цены, например: “WB — 1290 ₽, Ozon — 1490 ₽”.');
+    await ctx.reply('Не нашёл цены конкурентов. Вставьте ссылки и цены, например: “карточка товара — 1290 ₽, карточка товара — 1490 ₽”.');
     return true;
   }
   const sorted = [...prices].sort((a, b) => a - b);
@@ -131,7 +119,7 @@ export async function handleManualInputText(ctx: Context, text: string): Promise
   result.manualSalePriceRub = median;
   await saveUpdatedJob(state.jobId, result, product);
   await ctx.reply(
-    `✅ Принял конкурентов: ${prices.length} цен.\nМедиана по указанным вами конкурентам: ${median.toLocaleString('ru-RU')} ₽.\n\nЭто ручной сценарий, не автоматическая рыночная аналитика.`
+    `✅ Принял конкурентов: ${prices.length} цен.\nМедиана по указанным вами конкурентам: ${median.toLocaleString('ru-RU')} ₽.\n\nЭто ручной сценарий, не автоматическая закупочная аналитика.`
   );
   await sendUpdatedMain(ctx, product, state.jobId);
   return true;

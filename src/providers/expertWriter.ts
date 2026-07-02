@@ -1,9 +1,9 @@
 import type { AnalysisSnapshot } from "../types";
 
 const WRITER_MODELS = [
-  "google/gemini-2.5-flash-lite",
-  "deepseek/deepseek-v4-flash",
-  "stepfun/step-3.7-flash",
+  "deepseek/deepseek-v4-pro",
+  "deepseek/deepseek-chat-v3.2",
+  "qwen/qwen3-235b-a22b",
 ];
 
 function cleanJson(raw: string): string {
@@ -31,29 +31,23 @@ export interface ExpertWriterResult {
   mainRisk: string;
   nextStep: string;
 }
+
 const EXPERT_WRITER_PROMPT = `CardZip Expert Writer.
 
-Роль: редактор закупочного пакета 1688.
-Улучшай только тексты на основе готового ProductProcurementProfile.
-Не определяй товар заново. Не меняй productKind, selected SKU, цену, MOQ, вес, материалы и риски.
+Роль: редактор закупочного пакета 1688. Улучшай только тексты на основе готового ProductProcurementProfile. Не определяй товар заново. Не меняй productKind, selected SKU, цену, MOQ, вес, материалы и риски.
 
-Источник правды:
-- ProductProcurementProfile
-- selectedSkuDecision
-- supplierReplyExtract, если есть
+Источник правды: ProductProcurementProfile, selectedSkuDecision и supplierReplyExtract, если есть.
 
-Это закупочный пакет, а не WB/Ozon-аналитика.
-Не пиши ROI, маржу, прибыль, окупаемость и прогноз продаж.
+CardZip — закупочный пакет по ссылке. Не пиши оценку продаж или финансовый прогноз.
 
-Задача:
-сделать тексты понятными для селлера, байера, карго и контентщика.
+Задача: сделать тексты понятными для селлера, байера, карго и контентщика.
 
 Правила:
-- не придумывай свойства, материалы, документы, вес, цену, рынок или прибыль;
+- не придумывай свойства, материалы, документы, вес, цену или комплектацию;
 - спорные claims пиши только как “заявлено, нужно подтвердить”;
 - не советуй партию, если не подтверждены SKU, вес, упаковка и образец;
 - максимум следующий шаг: запросить данные / заказать 1–2 образца;
-- не пиши: 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, debug, raw, Product Intelligence;
+- не пиши: 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, debug, raw, Product Intelligence, cross-border;
 - не добавляй свойства, которых нет в выбранном SKU;
 - проводной SKU не должен получить Bluetooth, аккумулятор или беспроводное подключение;
 - UPF50+, антибактериальность, сертификация, безопасность, влагозащита, ортопедичность — только как неподтверждённые claims;
@@ -61,27 +55,23 @@ const EXPERT_WRITER_PROMPT = `CardZip Expert Writer.
 - китайский текст не генерируй: его делает отдельный RU→CN translator.
 
 Верни строго JSON без markdown:
-
 {
-  "userCard": "короткий пользовательский отчёт без лишней воды",
-  "seoTitle": "продающее название без неподтверждённых claims",
-  "seoDescription": "2-4 предложения для WB/Ozon без 1688 и служебных слов",
-  "seoBullets": ["ровно 5 буллетов"],
-  "seoKeywords": ["8-12 ключевых фраз"],
-  "seoCharacteristics": {
-    "параметр": "значение; если не подтверждено — подтвердить"
-  },
-  "buyerBrief": "ТЗ байеру: товар, SKU, цена, что подтвердить, образец, фото, риски",
-  "supplierQuestionsRu": ["5-10 вопросов без дублей"],
-  "verdictText": "1-2 предложения под конкретный productKind",
-  "mainRisk": "главный риск закупки",
-  "nextStep": "одно конкретное действие"
+  "userCard":"короткий пользовательский отчёт без лишней воды",
+  "seoTitle":"продающее название без неподтверждённых claims",
+  "seoDescription":"2-4 предложения для карточки товара без 1688 и служебных слов",
+  "seoBullets":["ровно 5 буллетов"],
+  "seoKeywords":["8-12 ключевых фраз"],
+  "seoCharacteristics":{"параметр":"значение; если не подтверждено — подтвердить"},
+  "buyerBrief":"ТЗ байеру: товар, SKU, цена, что подтвердить, образец, фото, риски",
+  "supplierQuestionsRu":["5-10 вопросов без дублей"],
+  "verdictText":"1-2 предложения под конкретный productKind",
+  "mainRisk":"главный риск закупки",
+  "nextStep":"одно конкретное действие"
 }
 
 Требования к качеству:
 - userCard должен читаться за 30-60 секунд.
 - seoTitle не должен содержать “черновик”, “1688”, “заявлено”, “подтвердить”.
-- seoDescription может содержать осторожные формулировки.
 - seoBullets — ровно 5 пунктов.
 - supplierQuestionsRu — максимум 10 вопросов.
 - verdictText должен быть конкретным под товар, не универсальным шаблоном.
@@ -105,18 +95,6 @@ function compactSnapshot(snapshot: AnalysisSnapshot): Record<string, unknown> {
     purchasePrice: s.purchasePrice,
     weight: s.weight,
     sku: { ...s.sku, variants: s.sku?.variants?.slice?.(0, 12) ?? [] },
-    market: {
-      directAnalogsCount: s.market?.directAnalogsCount,
-      similarAnalogsCount: s.market?.similarAnalogsCount,
-      broadCategoryCount: s.market?.broadCategoryCount,
-      crossBorderCount: s.market?.crossBorderCount,
-      marketConfirmed: s.market?.marketConfirmed,
-      displayedMainPriceRub: s.market?.displayedMainPriceRub,
-      canUseForEconomics: s.market?.canUseForEconomics,
-      rejectedReason: s.market?.rejectedReason,
-      directAnalogs: s.market?.directAnalogs?.slice?.(0, 5) ?? [],
-    },
-    economics: s.economics,
     missingData: s.missingData,
     conflicts: s.conflicts,
     riskFlags: s.riskFlags,
@@ -131,8 +109,8 @@ export async function runExpertWriter(
 
   const snapshotStr = JSON.stringify(compactSnapshot(snapshot), null, 0);
   const prompt = EXPERT_WRITER_PROMPT.replace(
-    "{{ANALYSIS_SNAPSHOT}}",
-    snapshotStr.slice(0, 9000),
+    "{{PRODUCT_PROFILE_PACKAGE}}",
+    snapshotStr.slice(0, 5000),
   );
 
   for (const model of WRITER_MODELS) {
@@ -145,7 +123,7 @@ export async function runExpertWriter(
         },
         body: JSON.stringify({
           model,
-          max_tokens: Number(process.env.EXPERT_WRITER_MAX_TOKENS ?? 5600),
+          max_tokens: Number(process.env.EXPERT_WRITER_MAX_TOKENS ?? 2800),
           temperature: 0.2,
           messages: [
             {
@@ -156,7 +134,7 @@ export async function runExpertWriter(
             { role: "user", content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!res.ok) {
         console.log(`[expert-writer] ${model} HTTP ${res.status}`);

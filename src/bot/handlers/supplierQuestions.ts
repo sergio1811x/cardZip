@@ -1,21 +1,25 @@
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import { supabase } from '../../db/supabase';
-import { getJobForUser } from '../../db/queries/jobs';
 import { buildSupplierQuestionsFromProfile, ensureProductProcurementProfile } from '../../core/procurementProfile';
 
-/**
- * Robust jobId extraction. Reads straight from callbackQuery.data (which always
- * carries `supplier_questions:{jobId}` / `sq:ru:{jobId}`), instead of trusting
- * telegraf's ctx.match — the previous ctx.match-based helper was the suspected
- * cause of the "Не удалось открыть раздел" failures. Falls back to ctx.match.
- */
-function callbackJobId(ctx: Context): string | undefined {
-  const data = (ctx.callbackQuery as any)?.data as string | undefined;
-  if (data) {
-    const m = data.match(/^(?:supplier_questions|sq(?:[:_](?:ru|cn))?)[:_](.+)$/);
-    if (m?.[1]) return m[1];
+async function findJob(userId: string, jobId?: string) {
+  if (jobId) {
+    const { data } = await supabase
+      .from('jobs')
+      .select('id, result_json, procurement_status')
+      .eq('user_id', userId)
+      .eq('id', jobId)
+      .single();
+    return data;
   }
+
+  // New MVP buttons must always carry analysisId/jobId. Do not silently open
+  // the latest product from a generic callback: it can show the wrong analysis.
+  return null;
+}
+
+function callbackJobId(ctx: Context): string | undefined {
   const match = (ctx as any).match as RegExpMatchArray | undefined;
   return match?.[2] || match?.[1];
 }
@@ -44,43 +48,23 @@ export async function handleSupplierQuestions(ctx: Context) {
   }
 
   const jobId = callbackJobId(ctx);
-  const job = jobId ? await getJobForUser(userId, jobId).catch(() => null) : null;
-  if (!job || !job.result_json) {
-    console.error('[callback-analysis-not-found]', {
-      userId,
-      analysisId: jobId,
-      callbackData: (ctx.callbackQuery as any)?.data,
-      reason: !jobId ? 'no_job_id_in_callback' : !job ? 'job_not_found' : 'empty_result_json',
-    });
+  const job = await findJob(userId, jobId).catch(() => null);
+  if (!job) {
     await replyOpenSectionFallback(ctx, jobId);
     return;
   }
 
   const data = job.result_json as any;
   const product = data.product ?? data.rawProduct ?? {};
-  ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
-  // Prefer pre-built documents stored at step5 time to avoid regeneration drift
-  const preBuilt = data.preBuiltDocs;
-  let questionSet: import('../../core/procurementProfile').SupplierQuestionsProfileResult;
-  if (preBuilt?.supplierQuestionsText && preBuilt?.supplierQuestionsRu) {
-    questionSet = {
-      text: preBuilt.supplierQuestionsText,
-      ru: Array.isArray(preBuilt.supplierQuestionsRu) ? preBuilt.supplierQuestionsRu : [],
-      cn: Array.isArray(preBuilt.supplierQuestionsCn) ? preBuilt.supplierQuestionsCn : [],
-      cnValid: Array.isArray(preBuilt.supplierQuestionsCn) && preBuilt.supplierQuestionsCn.length > 0,
-      label: '💬 Вопросы поставщику',
-      errors: [],
-    };
-  } else {
-    questionSet = buildSupplierQuestionsFromProfile(product);
-  }
+  ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
+  const questionSet = buildSupplierQuestionsFromProfile(product);
   const firstRow = questionSet.cnValid
     ? [Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`), Markup.button.callback('📋 Скопировать CN', `sq_cn:${job.id}`)]
     : [Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`)];
 
   await ctx.reply(
     `${questionSet.cnValid ? '💬 <b>Вопросы поставщику RU/CN</b>' : '💬 <b>Вопросы поставщику RU</b>'}\n\n` +
-    'Скопируйте текст и отправьте поставщику.\n\n' +
+    'Скопируйте текст и отправьте поставщику в чат 1688.\n\n' +
     (questionSet.cnValid ? 'Китайская версия прошла проверку.\n\n' : 'Китайская версия не сформирована безопасно — используйте русский текст или передайте байеру.\n\n') +
     'После ответа поставщика можно обновить закупочный пакет: я попробую извлечь вес, габариты, цену, MOQ и обновить ТЗ.\n\n' +
     '<b>Что делать сейчас:</b> откройте текст и отправьте его поставщику.',
@@ -105,40 +89,23 @@ export async function handleSupplierQuestionsLang(ctx: Context) {
 
   const match = (ctx as any).match as RegExpMatchArray | undefined;
   const lang = match?.[1] as 'ru' | 'cn' | undefined;
-  const jobId = match?.[2] || callbackJobId(ctx);
+  const jobId = match?.[2];
   if (!lang) return;
 
   try {
-    const job = jobId ? await getJobForUser(userId, jobId).catch(() => null) : null;
+    const job = await findJob(userId, jobId);
     if (!job?.result_json) {
-      console.error('[callback-analysis-not-found]', {
-        userId, analysisId: jobId, callbackData: (ctx.callbackQuery as any)?.data, reason: 'sq_lang_lookup_failed',
-      });
       await replyOpenSectionFallback(ctx, jobId);
       return;
     }
 
     const data = job.result_json as any;
     const product = data.product ?? data.rawProduct ?? {};
-    const profile = ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
-    // Prefer pre-built documents stored at step5 time
-    const preBuilt2 = data.preBuiltDocs;
-    let questionSet2: import('../../core/procurementProfile').SupplierQuestionsProfileResult;
-    if (preBuilt2?.supplierQuestionsText && preBuilt2?.supplierQuestionsRu) {
-      questionSet2 = {
-        text: preBuilt2.supplierQuestionsText,
-        ru: Array.isArray(preBuilt2.supplierQuestionsRu) ? preBuilt2.supplierQuestionsRu : [],
-        cn: Array.isArray(preBuilt2.supplierQuestionsCn) ? preBuilt2.supplierQuestionsCn : [],
-        cnValid: Array.isArray(preBuilt2.supplierQuestionsCn) && preBuilt2.supplierQuestionsCn.length > 0,
-        label: '💬 Вопросы поставщику',
-        errors: [],
-      };
-    } else {
-      questionSet2 = buildSupplierQuestionsFromProfile(product);
-    }
-    const questions = (lang === 'cn' ? questionSet2.cn : questionSet2.ru).slice(0, 10);
+    const profile = ensureProductProcurementProfile(product, { sourceUrl: data.input_url });
+    const questionSet = buildSupplierQuestionsFromProfile(product);
+    const questions = (lang === 'cn' ? questionSet.cn : questionSet.ru).slice(0, 10);
 
-    if (lang === 'cn' && !questionSet2.cnValid) {
+    if (lang === 'cn' && !questionSet.cnValid) {
       await ctx.reply('⚠️ Китайская версия не сформирована — используйте русскую версию или переведите через байера.', {
         ...Markup.inlineKeyboard([[Markup.button.callback('📋 Скопировать RU', `sq_ru:${job.id}`)], [Markup.button.callback('⬅️ Назад', `supplier_questions:${job.id}`)]])
       });

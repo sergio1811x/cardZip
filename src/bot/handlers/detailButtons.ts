@@ -1,20 +1,25 @@
 import type { Context } from 'telegraf';
 import { Input, Markup } from 'telegraf';
 import AdmZip from 'adm-zip';
-import { getJobForUser } from '../../db/queries/jobs';
+import { supabase } from '../../db/supabase';
 import { buildEconomicsDetail, buildWbDetail, build1688Detail, buildProcurementPlanDetail, buildMainMessage } from '../../core/messageBuilder';
 import { buildInfographicBrief, buildRiskChecklist, buildSampleRecommendation, buildDecisionContext, validateGeneratedText } from '../../core/decisionLayer';
-import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateZip, ensureProductProcurementProfile } from '../../core/procurementProfile';
+import { buildSupplierQuestionsFromProfile, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateProcurementResult, ensureProductProcurementProfile } from '../../core/procurementProfile';
 import { zipBuilder } from '../../core/zipBuilder';
-import { buildProfileDocuments, resolveProductFromAnalysisResult } from '../../core/userFacingAnalysis';
 import type { ProductWithContent } from '../../types';
 
 async function getJobData(ctx: Context, jobId: string): Promise<any | null> {
   const userId = (ctx as any).dbUserId as string | undefined;
   if (!userId) return null;
-  // Single canonical job loader shared with every other handler (supplierQuestions,
-  // last, supplierConfirm...). Keeps ZIP, callbacks and /last reading the exact same row.
-  return getJobForUser(userId, jobId);
+
+  const { data: job } = await supabase
+    .from('jobs')
+    .select('result_json, input_url')
+    .eq('id', jobId)
+    .eq('user_id', userId)
+    .single();
+
+  return job ?? null;
 }
 
 function detailKeyboard(jobId: string) {
@@ -47,27 +52,19 @@ function safeSectionErrorKeyboard(jobId: string) {
 }
 
 async function replySectionError(ctx: Context, jobId: string, action: string, error?: unknown) {
-  const notFound = /:not_found$/.test(action);
-  console.error(notFound ? '[callback-analysis-not-found]' : '[ui-handler-error]', {
-    userId: (ctx as any).dbUserId,
-    analysisId: jobId,
-    callbackData: (ctx.callbackQuery as any)?.data,
-    availableSessionKeys: Object.keys((ctx as any).session ?? {}),
+  console.error('[ui-handler-error]', {
     action,
+    userId: (ctx as any).dbUserId,
+    productId: jobId,
+    state: (ctx as any).session?.procurementStatus,
     error,
   });
-  const text = notFound
-    ? [
-      '⚠️ <b>Не удалось открыть раздел</b>',
-      '',
-      'Анализ не найден в хранилище.',
-      'Попробуйте открыть последний отчёт или начните новый товар.',
-    ].join('\n')
-    : [
-      '⚠️ <b>Не удалось открыть раздел.</b>',
-      '',
-      'Попробуйте вернуться к отчёту или открыть пакет ещё раз.',
-    ].join('\n');
+  const text = [
+    '⚠️ <b>Не удалось открыть раздел.</b>',
+    '',
+    'Данные анализа сохранены.',
+    'Попробуйте вернуться к отчёту или открыть пакет ещё раз.',
+  ].join('\n');
   await ctx.reply(text, { parse_mode: 'HTML', ...safeSectionErrorKeyboard(jobId) }).catch(() => {});
 }
 
@@ -96,7 +93,7 @@ function cleanDoc(product: any, text: string, reportType: 'seo' | 'buyerBrief' |
     generatedText: String(text ?? ''),
     reportType,
     categoryType: x.categoryType,
-    marketDecision: x.market,
+    marketDecision: undefined,
     weightDecision: x.weight,
   });
   return checked.fixedText || String(text ?? '').trim();
@@ -119,41 +116,43 @@ function buildSupplierQuestionsText(product?: ProductWithContent): string {
 
 function buildReadmeText(product: any, hasPhotos: boolean): string {
   const base = buildReadmeFromProfile(product);
-  return hasPhotos ? base : `${base}\n\nФото не удалось скачать. Используйте фото из карточки товара вручную.\n`;
-}
-
-function docMeta(filename: string): { title: string; description: string } {
-  if (filename === '00_Инструкция.txt') return { title: 'ℹ️ 00_Инструкция.txt', description: 'Что внутри пакета и порядок работы.' };
-  if (filename === '01_Вопросы_поставщику.txt') return { title: '💬 Вопросы поставщику — 01_Вопросы_поставщику.txt', description: 'Текст для поставщика: цена, SKU, вес, упаковка, фото.' };
-  if (filename === '02_ТЗ_байеру.md') return { title: '📄 ТЗ байеру — 02_ТЗ_байеру.md', description: 'Что закупаем, какой SKU выбран, что проверить перед заказом.' };
-  if (filename === '03_ТЗ_карго.md') return { title: '🚚 ТЗ карго — 03_ТЗ_карго.md', description: 'Что запросить для расчёта доставки: вес, габариты, короб, ограничения.' };
-  if (filename === '04_Чеклист_образца.md') return { title: '🧪 Чек-лист образца — 04_Чеклист_образца.md', description: 'Что проверить на образце перед партией.' };
-  if (filename === '05_SEO_черновик.md') return { title: '📝 SEO-черновик — 05_SEO_черновик.md', description: 'Название, описание, характеристики и идеи инфографики.' };
-  return { title: filename, description: 'Документ закупочного пакета.' };
+  return hasPhotos ? base : `${base}\n\nФото не удалось скачать. Используйте фото из карточки 1688 вручную.\n`;
 }
 
 function buildMaterials(job: any): { product?: ProductWithContent; prefix: string; docs: Array<{ filename: string; text: string; title: string; description: string }>; imageUrls: string[] } {
   const result = job.result_json as any;
-  const product = resolveProductFromAnalysisResult(result, job.input_url) as ProductWithContent | undefined;
-  const offerId = String((product as any)?.productId ?? result?.offerId ?? job.id ?? Date.now()).replace(/[^a-zA-Z0-9_-]/g, '').slice(-12) || Date.now().toString().slice(-8);
+  const product = result?.product as ProductWithContent | undefined;
+  const generatedFiles = result?.generatedFiles ?? {};
+  const offerId = String(product?.productId ?? result?.offerId ?? job.id ?? Date.now()).replace(/[^a-zA-Z0-9_-]/g, '').slice(-12) || Date.now().toString().slice(-8);
   const prefix = `cardzip_${offerId}_${safePrefix(product, offerId)}`.replace(/_+/g, '_').replace(/_$/g, '');
   const imageUrls = (result?.imageUrls ?? (product as any)?.imageUrls ?? product?.images ?? []) as string[];
 
   if (product) ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
-  const built = product
-    ? buildProfileDocuments(product, {
-      sourceUrl: job.input_url,
-      supplierQuestionsCn: result?.generatedFiles?.supplierQuestionsCn,
-    })
-    : null;
-  if (built?.warnings.length) console.warn('[materials-validator]', built.warnings.join('; '));
+  const supplierText = product ? buildSupplierQuestionsText(product) : (generatedFiles?.supplierQuestions ?? generatedFiles?.supplierText ?? '');
+  const buyerText = product ? buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.briefText ?? '');
+  const cargoText = product ? buildCargoBriefFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.cargoText ?? '');
+  const sampleText = product ? buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.sampleChecklistText ?? generatedFiles?.sampleRecommendationText ?? generatedFiles?.riskChecklistText ?? '');
+  const seoText = product ? buildSeoDraftFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.seoText ?? '');
+  const readmeText = product ? buildReadmeText(product, imageUrls.length > 0) : 'CardZip — закупочный пакет';
 
-  const docs = (built?.docs ?? [])
-    .filter(d => d.text && d.text.trim().length > 0)
-    .map((d) => ({ ...d, ...docMeta(d.filename) }));
+  let docs = [
+    { filename: '01_Вопросы_поставщику.txt', text: String(supplierText), title: '💬 Вопросы поставщику — 01_Вопросы_поставщику.txt', description: 'Текст для чата 1688: цена, SKU, вес, упаковка, фото.' },
+    { filename: '02_ТЗ_байеру.md', text: String(buyerText), title: '📄 ТЗ байеру — 02_ТЗ_байеру.md', description: 'Что закупаем, какой SKU выбран, что проверить перед заказом.' },
+    { filename: '03_ТЗ_карго.md', text: String(cargoText), title: '🚚 ТЗ карго — 03_ТЗ_карго.md', description: 'Что запросить для расчёта доставки: вес, габариты, короб, ограничения.' },
+    { filename: '04_Чеклист_образца.md', text: String(sampleText), title: '🧪 Чек-лист образца — 04_Чеклист_образца.md', description: 'Что проверить на образце перед партией.' },
+    { filename: '05_SEO_черновик.md', text: String(seoText), title: '📝 SEO-черновик — 05_SEO_черновик.md', description: 'Название, описание, характеристики и идеи инфографики.' },
+    { filename: '00_Инструкция.txt', text: readmeText, title: 'ℹ️ 00_Инструкция.txt', description: 'Что внутри пакета и порядок работы.' },
+  ].filter(d => d.text && d.text.trim().length > 0);
+
+  if (product) {
+    const checked = validateDocuments(docs, ensureProductProcurementProfile(product, { sourceUrl: job.input_url }));
+    if (checked.errors.length) console.warn('[materials-validator]', checked.errors.join('; '));
+    docs = checked.fixedDocs.map((fixed) => ({ ...docs.find((d) => d.filename === fixed.filename)!, text: fixed.text }));
+  }
 
   return { product, prefix, docs, imageUrls };
 }
+
 
 async function sendDocs(ctx: Context, chatId: number, docs: Array<{ filename: string; text: string }>) {
   for (const doc of docs) {
@@ -221,7 +220,10 @@ export async function handleProductDetail(ctx: Context): Promise<void> {
 
   await ctx.answerCbQuery();
   const { text, keyboard } = build1688Detail(product, jobId);
-  await ctx.reply(text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...keyboard });
+  const profile = ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
+  const checked = validateProcurementResult({ productDetails: text, profile });
+  if (checked.errors.length) console.warn('[product-details-validator]', checked.errors.join('; '));
+  await ctx.reply(checked.fixed.productDetails ?? text, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...keyboard });
 }
 
 export async function handleRiskDetail(ctx: Context): Promise<void> {
@@ -285,7 +287,7 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
     '',
     '💬 <b>Вопросы поставщику</b>',
     '01_Вопросы_поставщику.txt',
-    'Текст для поставщика: цена, SKU, вес, упаковка, фото.',
+    'Текст для чата 1688: цена, SKU, вес, упаковка, фото.',
     '',
     '📄 <b>ТЗ байеру</b>',
     '02_ТЗ_байеру.md',
@@ -305,11 +307,11 @@ export async function handleMaterialsResend(ctx: Context): Promise<void> {
     '',
     '📷 <b>Фото товара</b>',
     '06_Фото_товара.zip',
-    imageUrls.length ? 'Фото из карточки товара.' : 'Фото не удалось скачать автоматически — используйте карточку товара вручную.',
+    imageUrls.length ? 'Фото из карточки 1688.' : 'Фото не удалось скачать автоматически — используйте карточку 1688 вручную.',
     '',
     '<b>Что сделать сейчас:</b>',
     '1. Откройте «Вопросы поставщику».',
-    '2. Отправьте текст поставщику.',
+    '2. Отправьте текст в чат 1688.',
     '3. После ответа используйте ТЗ байеру и карго.',
   ].join('\n');
   await ctx.reply(preview, {
@@ -334,7 +336,7 @@ export async function handleMaterialsInside(ctx: Context): Promise<void> {
     '',
     ...docs.map(d => `${d.title}\n${d.description}`),
     '',
-    imageUrls.length ? '📷 06_Фото_товара.zip\nФото товара будут внутри ZIP.' : '📷 06_Фото_товара.zip\nФото не удалось получить автоматически. Используйте фото из карточки товара вручную.',
+    imageUrls.length ? '📷 06_Фото_товара.zip\nФото товара с 1688 будут внутри ZIP.' : '📷 06_Фото_товара.zip\nФото не удалось получить автоматически. Используйте фото из карточки 1688 вручную.',
     '',
     '<b>Что делать сейчас:</b>',
     'отправьте 01_Вопросы_поставщику.txt поставщику, затем используйте 02_ТЗ_байеру.md и 03_ТЗ_карго.md для команды.',
@@ -389,17 +391,12 @@ export async function handleMaterialsZip(ctx: Context): Promise<void> {
   const { docs, prefix, imageUrls } = buildMaterials(job);
   const zip = new AdmZip();
   for (const doc of docs) zip.addFile(doc.filename, Buffer.from(doc.text, 'utf-8'));
-  let hasPhotosEntry = false;
   if (imageUrls?.length) {
     const imgZip = await zipBuilder.buildFromUrls(imageUrls, { maxImages: 15, maxSizeBytes: 20 * 1024 * 1024 }).catch(() => null);
-    if (imgZip) { zip.addFile('06_Фото_товара.zip', imgZip); hasPhotosEntry = true; }
+    if (imgZip) zip.addFile('06_Фото_товара.zip', imgZip);
+  } else {
+    zip.addFile('06_Фото_товара.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки 1688 вручную.\n', 'utf-8'));
   }
-  if (!hasPhotosEntry) {
-    zip.addFile('06_Фото_товара.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки товара вручную.\n', 'utf-8'));
-    hasPhotosEntry = true;
-  }
-  const zipCheck = validateZip(docs, hasPhotosEntry);
-  if (!zipCheck.ok) console.warn('[zip-validator]', zipCheck.errors.join('; '));
   await ctx.telegram.sendDocument(ctx.chat!.id, Input.fromBuffer(zip.toBuffer(), `${prefix}.zip`)).catch(() => {});
   await ctx.reply('✅ ZIP отправлен. Начните с 01_Вопросы_поставщику.txt: отправьте вопросы поставщику, затем передайте ТЗ байеру и карго.', materialsKeyboard(jobId)).catch(() => {});
 }

@@ -5,7 +5,7 @@ import { handleStart } from './handlers/start';
 import { handleLink } from './handlers/link';
 import { handleUpgrade, handlePayTest, handlePayPack10, handlePayPack30, handlePayWeek, handleSuccessPayment } from './handlers/upgrade';
 import { handleLast } from './handlers/last';
-import { handleAdmin, handleUpdateWbCategories, handleAdminWbDateInput, getAdminWbDatePending } from './handlers/admin';
+import { handleAdmin, handleUpdateLegacyCategories, handleAdminLegacyDateInput, getAdminLegacyDatePending } from './handlers/admin';
 import { isAppError } from '../lib/errors';
 import { checkCallbackLimit, checkGlobalLimit } from './middleware/rateLimit';
 import { handleSupplierQuestions, handleSupplierQuestionsLang } from './handlers/supplierQuestions';
@@ -13,7 +13,7 @@ import { handleTariffsMenu, handleEditTariff, handleResetTariffs, handleTariffIn
 import { handleRewrite } from './handlers/rewrite';
 import { handleQuickTariff } from './handlers/quickTariff';
 import { handleSearch1688 } from './handlers/search1688';
-import { handleWbLeaders } from './handlers/wbLeaders';
+import { handleLegacyLeaders } from './handlers/wbLeaders';
 import { handleSkuSelect } from './handlers/skuSelect';
 import { handleSupplierConfirmStart, handleSupplierConfirmText, getPendingConfirm } from './handlers/supplierConfirm';
 import { handleMyAnalyses, handleAnalysisDetail } from './handlers/myAnalyses';
@@ -101,7 +101,7 @@ bot.action('example_result', async (ctx) => {
 ` +
       `• чек-лист образца
 ` +
-      `• SEO-черновик для маркетплейса и идеи инфографики
+      `• SEO-черновик и идеи инфографики
 
 ` +
       `Отправьте ссылку 1688 — соберу такой пакет по вашему товару.`,
@@ -118,19 +118,19 @@ bot.action('how_it_works', async (ctx) => {
 ` +
       `2. CardZip разбирает товар, SKU, цену, MOQ и поставщика.
 ` +
-      `3. Я готовлю закупочный пакет: вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист образца, SEO-черновик и фото.
+      `3. Я готовлю закупочный пакет: вопросы поставщику, ТЗ байеру, ТЗ карго, чек-лист образца, SEO и фото.
 ` +
       `4. После ответа поставщика можно обновить пакет по весу, цене, MOQ и упаковке.
 
 ` +
-      `Я не обещаю прибыльность и не заменяю ручную проверку рынка — задача CardZip подготовить товар к закупке без китайского хаоса.`,
+      `Я не обещаю финансовый результат и не проверяю закупочный контекст — задача CardZip подготовить товар к закупке без китайского хаоса.`,
     { parse_mode: 'HTML' },
   );
 });
 
 bot.action('new_search', async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.reply('Отправьте ссылку на товар с 1688 / Taobao / Tmall 👇');
+  await ctx.reply('Отправь ссылку на товар с 1688.com 👇');
 });
 bot.action('last', async (ctx) => {
   await ctx.answerCbQuery();
@@ -149,7 +149,7 @@ bot.action(/^analysis_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   return handleAnalysisDetail(ctx);
 });
-bot.action('admin_update_wb_cats', handleUpdateWbCategories);
+bot.action('admin_update_legacy_cats', handleUpdateLegacyCategories);
 bot.action('supplier_questions', async (ctx) => {
   await ctx.answerCbQuery();
   return handleSupplierQuestions(ctx);
@@ -183,7 +183,7 @@ bot.action('reset_tariffs', async (ctx) => {
   return handleResetTariffs(ctx);
 });
 
-// ─── Детальные кнопки (себестоимость, данные товара, материалы) ──────────────
+// ─── Детальные кнопки (экономика, маркетплейс, материалы) ────────────────────────────
 bot.action(/^product_details?[:_](.+)$/, handleProductDetail);
 bot.action(/^proc_plan_(.+)$/, handleProcurementPlan);
 bot.action(/^econ_detail_(.+)$/, handleEconDetail);
@@ -198,7 +198,7 @@ bot.action(/^risk_detail_(.+)$/, handleRiskDetail);
 bot.action(/^sample_detail_(.+)$/, handleSampleDetail);
 bot.action(/^back_main[:_](.+)$/, handleBackToMain);
 
-// ─── Ручные вводы: вес, сценарная цена, конкуренты вручную ─────────────────
+// ─── Ручные вводы: вес и старые совместимые callback-и ───────────────────────────
 bot.action(/^weight_input:(.+)$/, handleManualWeightStart);
 bot.action(/^manual_price_(.+)$/, handleManualSalePriceStart);
 bot.action(/^manual_competitors_(.+)$/, handleManualCompetitorsStart);
@@ -223,9 +223,9 @@ bot.action(/^sku_(all|\d+)_(.+)$/, async (ctx) => {
   return handleSkuSelect(ctx);
 });
 
-// ─── Лидеры WB ──────────────────────────────────────────────────────────────
+// ─── Старый раздел недоступен ──────────────────────────────────────────────────────────────
 bot.action(/^leaders_(.+)$/, async (ctx) => {
-  return handleWbLeaders(ctx);
+  return handleLegacyLeaders(ctx);
 });
 
 // ─── Найти на 1688 ──────────────────────────────────────────────────────────
@@ -250,11 +250,11 @@ bot.on('text', async (ctx) => {
   const userId = (ctx as any).dbUserId as string | undefined;
   const chatId = ctx.chat?.id;
 
-  // Проверяем pending states: admin wb date → подтверждение поставщика → тариф
+  // Проверяем pending states: admin legacy date → подтверждение поставщика → тариф
   if (chatId) {
-    const wbDatePending = await getAdminWbDatePending(chatId);
-    if (wbDatePending) {
-      const handled = await handleAdminWbDateInput(ctx, text);
+    const legacyDatePending = await getAdminLegacyDatePending(chatId);
+    if (legacyDatePending) {
+      const handled = await handleAdminLegacyDateInput(ctx, text);
       if (handled) return;
     }
     const manualPending = await getPendingManualInput(chatId);

@@ -2,8 +2,8 @@ import type { AnalysisSnapshot, QaResult } from '../types';
 
 const FIX_MODELS = [
   'google/gemini-2.5-flash-lite',
-  'deepseek/deepseek-v4-flash',
-  'stepfun/step-3.7-flash',
+  'zhipu-ai/glm-4.5-air',
+  'qwen/qwen3-235b-a22b',
 ];
 
 function cleanJson(raw: string): string {
@@ -12,11 +12,9 @@ function cleanJson(raw: string): string {
 
 const AUTO_FIX_PROMPT = `CardZip Auto-Fix.
 
-Роль: редактор качества. Исправь только пользовательские тексты по результатам QA.
-Не анализируй товар заново. Не меняй productKind, SKU, цену, вес, материалы и выводы, если этого нет в snapshot.
+Роль: редактор качества. Исправь только пользовательские тексты по результатам QA. Не анализируй товар заново. Не меняй productKind, SKU, цену, вес, материалы и выводы, если этого нет в snapshot.
 
-Цель:
-сделать тексты безопасными, чистыми и пригодными для пользователя.
+Цель: сделать тексты безопасными, чистыми и пригодными для пользователя.
 
 Исправь:
 - debug, raw-коды, NaN, undefined, null, пустые значения;
@@ -26,20 +24,18 @@ const AUTO_FIX_PROMPT = `CardZip Auto-Fix.
 - смешение языков в русских блоках;
 - латиницу внутри русских слов: поставщpику → поставщику;
 - dangerous claims как факт: медицинский, ортопедический, лечебный, антибактериальный, сертифицированный, гипоаллергенный, безопасный для детей, профессиональный, оригинальный бренд, 100% водонепроницаемый, UPF50+, дезинфекция, стерилизация;
-- ROI, маржу, прибыль и окупаемость, если snapshot.economics.canShowRoi !== true;
-- призыв “закупать партию”, если не подтверждены SKU, вес, упаковка или образец.
+- призыв “закупать партию”, если не подтверждены SKU, вес, упаковка или образец;
+- “из карточки 1688”, cross-border и технические labels в пользовательском тексте.
 
 Как исправлять:
 - claim как факт → “заявлено, нужно подтвердить”;
 - “закупать партию” → “запросить данные / заказать 1–2 образца”;
 - повторяющиеся пункты объединяй в один;
 - сохраняй полезные факты из snapshot;
-- не стерилизуй текст до пустого шаблона;
 - не добавляй новые факты, цифры, материалы, сертификаты или свойства;
 - если блок невозможно исправить безопасно — удали проблемный блок и добавь причину в remainingRisks.
 
 Верни строго JSON без markdown:
-
 {
   "fixed": true,
   "summary": "коротко, что исправлено",
@@ -63,6 +59,7 @@ const AUTO_FIX_PROMPT = `CardZip Auto-Fix.
 DATA:
 {{AUTO_FIX_PACKAGE}}
 `;
+
 export async function runAutoFix(
   snapshot: AnalysisSnapshot,
   artifacts: Record<string, unknown>,
@@ -82,8 +79,6 @@ export async function runAutoFix(
     snapshot: {
       purchasePrice: snapshot.purchasePrice,
       weight: snapshot.weight,
-      market: snapshot.market,
-      economics: snapshot.economics,
       riskFlags: snapshot.riskFlags,
     },
   }, null, 0).slice(0, 5000);
@@ -97,14 +92,14 @@ export async function runAutoFix(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 3000,
+          max_tokens: 1500,
           temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — автокорректор CardZip. Верни СТРОГО JSON с исправленными полями.' },
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(45_000),
+        signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };

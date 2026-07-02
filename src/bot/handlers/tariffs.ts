@@ -5,9 +5,10 @@ import { redis } from '../../lib/redis';
 import type { UserTariffs } from '../../types';
 
 const TARIFF_FIELDS: Array<{ key: keyof UserTariffs; label: string; unit: string; hint: string }> = [
-  { key: 'cargoPerKgUsd', label: 'Карго', unit: '$/кг', hint: 'Стоимость доставки из Китая за 1 кг. Обычно $3–6, но точный тариф уточняется у карго.' },
-  { key: 'fulfillmentRub', label: 'Обработка/упаковка', unit: '₽/шт', hint: 'Ориентировочные расходы на обработку, упаковку и подготовку 1 единицы товара.' },
-  { key: 'taxPercent', label: 'Налог', unit: '%', hint: 'Ставка налога для предварительного cost-only расчёта. Введите число без знака %.' },
+  { key: 'cargoPerKgUsd', label: 'Карго', unit: '$/кг', hint: 'Стоимость доставки из Китая за 1 кг (в долларах). Обычно $3–6.' },
+  { key: 'fulfillmentRub', label: 'Фулфилмент', unit: '₽/шт', hint: 'Упаковка + приёмка на складе за 1 единицу (в рублях). Обычно 50–150₽.' },
+  { key: 'taxPercent', label: 'Налог', unit: '%', hint: 'Ставка налога (УСН 6% или 7%). Введите число без знака %.' },
+
 ];
 
 function pendingKey(chatId: number): string {
@@ -30,17 +31,16 @@ export async function handleTariffsMenu(ctx: Context) {
   const lines = [
     '⚙️ <b>Параметры предварительной себестоимости</b>',
     '',
-    'Эти значения используются только для закупочного cost-only расчёта: закупка, доставка, упаковка и налог.',
-    'CardZip не рассчитывает прибыльность и не обещает рыночную цену.',
+    'Эти значения бот использует для предварительной себестоимости и карго.',
     '',
     `🚚 Карго из Китая: ${val('cargoPerKgUsd', '~4', '$/кг')}`,
-    'Ориентир доставки товара из Китая до РФ.',
+    'Стоимость доставки товара из Китая до РФ.',
     '',
-    `📦 Обработка/упаковка: ${val('fulfillmentRub', '80', '₽/шт')}`,
-    'Ориентировочные расходы на подготовку 1 единицы товара.',
+    `📦 Фулфилмент: ${val('fulfillmentRub', '80', '₽/шт')}`,
+    'Подготовка и обработка 1 товара перед отправкой товара на склад/фулфилмент.',
     '',
     `🏦 Налог: ${val('taxPercent', '7', '%')}`,
-    'Налог для предварительного расчёта себестоимости.',
+    'Налоговый процент для вашей внутренней себестоимости.',
     '',
     'Нажмите на параметр, чтобы изменить.',
   ];
@@ -53,11 +53,12 @@ export async function handleTariffsMenu(ctx: Context) {
 
   const buttons = [
     [btn('cargoPerKgUsd', '🚚', 'Карго', '$4', '/кг')],
-    [btn('fulfillmentRub', '📦', 'Обработка', '80', '₽/шт')],
+    [btn('fulfillmentRub', '📦', 'Фулфилмент', '80', '₽/шт')],
     [btn('taxPercent', '🏦', 'Налог', '7', '%')],
     [Markup.button.callback('🔄 Сбросить на авто', 'reset_tariffs')],
   ];
 
+  // Если вызвано из callback — редактируем текущее сообщение, не создаём новое
   if (ctx.callbackQuery) {
     await ctx.editMessageText(lines.join('\n'), {
       parse_mode: 'HTML',
@@ -80,18 +81,17 @@ export async function handleEditTariff(ctx: Context) {
   if (!fieldKey) return;
 
   const field = TARIFF_FIELDS.find((f) => f.key === fieldKey);
-  if (!field) {
-    await ctx.reply('Этот параметр больше не редактируется в MVP. Используйте карго, обработку и налог.');
-    return;
-  }
+  if (!field) return;
 
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
+  // Сохраняем в Redis что ожидаем ввод
   if (redis) {
     await redis.set(pendingKey(chatId), JSON.stringify({ field: fieldKey, userId }), { ex: 120 });
   }
 
+  // Редактируем текущее сообщение с тарифами → prompt ввода
   if (ctx.callbackQuery) {
     await ctx.editMessageText(
       `📝 <b>${field.label}</b>\n${field.hint}\n\nВведите новое значение (${field.unit}):`,
@@ -123,13 +123,6 @@ export async function handleTariffInput(ctx: Context, text: string): Promise<boo
   const pending = await getPendingEdit(chatId);
   if (!pending) return false;
 
-  const field = TARIFF_FIELDS.find((f) => f.key === pending.field);
-  if (!field) {
-    if (redis) await redis.del(pendingKey(chatId));
-    await ctx.reply('Этот параметр больше не редактируется в MVP.');
-    return true;
-  }
-
   const value = parseFloat(text.replace(',', '.').replace(/[^0-9.]/g, ''));
   if (isNaN(value) || value <= 0 || value > 1000) {
     await ctx.reply('❌ Введите корректное число. Попробуйте ещё раз.');
@@ -140,10 +133,13 @@ export async function handleTariffInput(ctx: Context, text: string): Promise<boo
   tariffs[pending.field] = value;
   await saveUserTariffs(pending.userId, tariffs);
 
+  // Очищаем pending
   if (redis) await redis.del(pendingKey(chatId));
 
+  const field = TARIFF_FIELDS.find((f) => f.key === pending.field);
+
   await ctx.reply(
-    `✅ ${field.label} установлен: <b>${value} ${field.unit}</b>\n\nНовое значение применится к следующим предварительным расчётам себестоимости.`,
+    `✅ ${field?.label ?? String(pending.field)} установлен: <b>${value} ${field?.unit ?? ''}</b>\n\nНовые тарифы применятся к следующим расчётам.`,
     { parse_mode: 'HTML' }
   );
 
@@ -157,8 +153,9 @@ export async function handleResetTariffs(ctx: Context) {
   await saveUserTariffs(userId, {});
 
   if (ctx.callbackQuery) {
+    // Показываем обновлённое меню тарифов вместо отдельного сообщения
     await handleTariffsMenu(ctx);
   } else {
-    await ctx.reply('🔄 Все параметры себестоимости сброшены на автоматические.');
+    await ctx.reply('🔄 Все тарифы сброшены на автоматические.');
   }
 }

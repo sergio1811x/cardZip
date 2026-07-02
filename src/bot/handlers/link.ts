@@ -1,27 +1,11 @@
 import type { Context } from 'telegraf';
 import type { Message } from 'telegraf/typings/core/types/typegram';
-import { productImporter } from '../../providers/productImporter';
-import { aiContentGenerator } from '../../providers/aiContentGenerator';
-import { marketProvider } from '../../providers/marketProvider';
-import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from '../../core/economicsCalc';
-import { zipBuilder } from '../../core/zipBuilder';
-import { formatSeoText } from '../../core/seoFormatter';
-import { buildMainMessage } from '../../core/messageBuilder';
-import { buildConclusion } from '../../core/verdict';
-import { buildRiskFlags } from '../../core/riskFlags';
-import { filterWbData } from '../../core/wbFilter';
-import { normalizeCnText } from '../../core/cnNormalize';
-import { buildCacheKey } from '../../lib/cache';
-import { findProductByKey, upsertProduct } from '../../db/queries/products';
 import { getStatus } from '../../services/subscriptionService';
 import { track } from '../../services/analyticsService';
 import { createJob } from '../../db/queries/jobs';
 import { supabase } from '../../db/supabase';
 import { redis } from '../../lib/redis';
 import { triggerPipelineStep } from '../../lib/pipelineStep';
-import { AppError, isAppError } from '../../lib/errors';
-import { Input } from 'telegraf';
-import type { ProductWithContent, WbFilterKeywords, AiContentResult } from '../../types';
 
 // ─── Прогресс-сообщения ──────────────────────────────────────────────────────
 
@@ -42,7 +26,7 @@ const STEP_MESSAGES: Record<string, string[]> = {
     '🔄 Проверяем риски и claims...',
     '🔄 Готовим вопросы поставщику...',
   ],
-  wb: [
+  package: [
     '🔄 Считаем закупочную готовность...',
     '🔄 Разбираем цену и SKU...',
     '🔄 Формируем ТЗ байеру...',
@@ -97,8 +81,6 @@ function isNetworkError(e: unknown): boolean {
   return false;
 }
 
-const DEFAULT_FILTER_KEYWORDS: WbFilterKeywords = { required: [], optional: [], exclude: [] };
-
 export async function handleLink(ctx: Context, url: string): Promise<void> {
   const userId = (ctx as any).dbUserId as string;
   const chatId = ctx.chat?.id;
@@ -129,7 +111,7 @@ export async function handleLink(ctx: Context, url: string): Promise<void> {
     }
   }
 
-  const progressMsg = await ctx.reply('🔍 <b>Анализирую товар...</b>\n\nЧто делаю:\n1. Получаю данные товара\n2. Разбираю SKU и цену\n3. Определяю риски закупки\n4. Готовлю вопросы поставщику\n5. Формирую файлы для байера, карго и карточки\n\n⏱ Обычно 40–70 секунд', { parse_mode: 'HTML' });
+  const progressMsg = await ctx.reply('🔍 <b>Анализирую товар с 1688...</b>\n\nЧто делаю:\n1. Получаю данные товара\n2. Разбираю SKU и цену\n3. Определяю риски закупки\n4. Готовлю вопросы поставщику\n5. Формирую файлы для байера, карго и карточки\n\n⏱ Обычно 40–70 секунд', { parse_mode: 'HTML' });
   const messageId = (progressMsg as Message.TextMessage).message_id;
 
   let job: any = null;

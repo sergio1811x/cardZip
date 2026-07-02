@@ -7,7 +7,6 @@ import { track } from '../src/services/analyticsService';
 import { createStepProgress } from '../src/core/progress';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
-import { getJobById } from '../src/lib/supabaseRetry';
 import { runExpertWriter } from '../src/providers/expertWriter';
 import { buildDecisionContext } from '../src/core/decisionLayer';
 import { ensureProductProcurementProfile } from '../src/core/procurementProfile';
@@ -83,26 +82,26 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
       displayedMainPriceRub: null,
       displayedMainPriceType: 'unknown',
       canUseForEconomics: false,
-      rejectedReason: 'Автоматический WB/Ozon-поиск не является обязательной частью MVP. Рынок проверяется вручную или через модуль конкурентов.',
+      rejectedReason: 'Не используется в закупочном пакете.',
       directAnalogs: [],
     },
     economics: {
       status: decision.cost.status,
       purchasePriceCny,
       costRub: positive(decision.cost.totalCostRub ?? decision.cost.costWithoutCargoRub),
-      sellPriceRub: decision.cost.manualSalePriceRub ?? null,
-      marginRub: decision.cost.canShowRoi ? positive(decision.cost.scenarioProfitRub) : null,
-      roiPercent: decision.cost.canShowRoi ? positive(decision.cost.scenarioRoiPercent) : null,
+      sellPriceRub: null,
+      marginRub: null,
+      roiPercent: null,
       assumptions: decision.cost.warnings ?? [],
       missing: [
         ...(!purchasePriceCny ? ['цена выбранного SKU'] : []),
         ...(!weightKg ? ['вес с упаковкой'] : []),
         ...(decision.price.needsSkuConfirmation ? ['выбранный SKU и цена'] : []),
-        'ручная проверка рынка/конкурентов',
+        'ответ поставщика по недостающим данным',
       ],
-      canShowRoi: decision.cost.canShowRoi,
-      canShowMargin: decision.cost.canShowRoi,
-      warning: decision.cost.canShowRoi ? 'Сценарий рассчитан по цене, введённой пользователем.' : 'Продажную цену и рынок пользователь проверяет отдельно.',
+      canShowRoi: false,
+      canShowMargin: false,
+      warning: 'Себестоимость является предварительной и зависит от веса, упаковки и условий доставки.',
     },
     readiness: decision.readiness,
     missingData: decision.readiness.missingData,
@@ -120,7 +119,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (!await acquireStepLock('step4', jobId)) return res.status(200).json({ ok: true, skip: true });
 
-    const { data: job } = await getJobById(jobId);
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
     if (!job || job.status !== 'done' || job.sent_to_telegram) return res.status(200).json({ ok: true, skip: true });
 
     await extendProcessingLock(job.user_id);
@@ -139,8 +138,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     progress?.step('writer');
     // Runs by default for paid MVP, but uses compact prompt/input.
     // It enriches SEO/files; deterministic Decision Layer remains source of truth.
-    const writerMode = String(process.env.CARDZIP_EXPERT_WRITER_MODE ?? 'always').toLowerCase();
-    const shouldRunWriter = writerMode !== 'off' && (writerMode === 'always' || (writerMode === 'confirmed_market' && snapshot.market.marketConfirmed));
+    const writerMode = String(process.env.CARDZIP_EXPERT_WRITER_MODE ?? 'off').toLowerCase();
+    const shouldRunWriter = writerMode !== 'off' && writerMode === 'always';
     const writerResult = shouldRunWriter ? await runExpertWriter(snapshot).catch(() => null) : null;
     if (writerResult) {
       // Update seoContent from writer only with fields that validators can still repair.

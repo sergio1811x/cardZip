@@ -6,7 +6,7 @@ const DEFAULT_MAX_BYTES = 20 * 1024 * 1024; // 20 MB
 
 async function downloadImage(url: string): Promise<Buffer | null> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
     if (!res.ok) return null;
     const buffer = await res.arrayBuffer();
     return Buffer.from(buffer);

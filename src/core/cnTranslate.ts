@@ -1,36 +1,48 @@
-// ─── CN→RU LLM translation for SKU names, colors, sizes ─────────────────────
-// SKU labels on 1688/Taobao/Tmall are open-ended: colors, sizes, packs, models,
-// bundles, materials, versions, voltages, localized abbreviations, seller slang.
-// A fixed local dictionary gives false confidence on arbitrary goods, so this
-// module uses LLM translation only and falls back to the original labels.
+// ─── CN→RU translation for SKU names, colors, sizes ────────────────────────
 
-export interface SkuTranslationContext {
-  titleCn?: string;
-  titleRu?: string;
-  categoryName?: string;
-  attributes?: Array<{ name?: string; value?: string }>;
-}
+const CN_COLORS: Record<string, string> = {
+  '黑色': 'чёрный', '白色': 'белый', '红色': 'красный', '蓝色': 'синий',
+  '绿色': 'зелёный', '黄色': 'жёлтый', '粉色': 'розовый', '紫色': 'фиолетовый',
+  '灰色': 'серый', '棕色': 'коричневый', '橙色': 'оранжевый', '米色': 'бежевый',
+  '卡其色': 'хаки', '驼色': 'верблюжий', '藏青色': 'тёмно-синий', '酒红色': 'бордовый',
+  '咖啡色': 'кофейный', '杏色': 'абрикосовый', '深蓝': 'тёмно-синий',
+  '浅蓝': 'голубой', '深灰': 'тёмно-серый', '浅灰': 'светло-серый',
+  '黑': 'чёрный', '白': 'белый', '红': 'красный', '蓝': 'синий',
+  '绿': 'зелёный', '粉': 'розовый', '灰': 'серый', '黄': 'жёлтый',
+  '紫': 'фиолетовый', '橙': 'оранжевый', '棕': 'коричневый',
+  '红绿': 'красно-зелёный', '红蓝': 'красно-синий', '红绿蓝': 'красно-зелёно-синий',
+  '透明': 'прозрачный', '银色': 'серебристый', '金色': 'золотистый',
+  '天蓝': 'небесно-голубой', '玫红': 'фуксия', '军绿': 'хаки',
+  '花色': 'цветной', '迷彩': 'камуфляж', '条纹': 'полосатый',
+  '彩色': 'разноцветный', '混色': 'микс',
+};
+
+const CN_SIZES: Record<string, string> = {
+  '均码': 'one size', '大码': 'XL+', '小码': 'S',
+  '加大': 'XXL', '特大': 'XXXL',
+};
 
 export function translateSkuName(cn: string): string {
-  return String(cn ?? '').trim();
+  if (!cn) return cn;
+  // Direct match
+  if (CN_COLORS[cn]) return CN_COLORS[cn];
+  if (CN_SIZES[cn]) return CN_SIZES[cn];
+
+  // Composite: try translating each part separated by /
+  let result = cn;
+  for (const [key, val] of Object.entries(CN_COLORS)) {
+    if (result.includes(key)) result = result.replace(key, val);
+  }
+  for (const [key, val] of Object.entries(CN_SIZES)) {
+    if (result.includes(key)) result = result.replace(key, val);
+  }
+  return result;
 }
 
 export function hasChinese(text: string): boolean {
   return /[一-鿿]/.test(text);
 }
 
-const DEFAULT_SKU_TRANSLATOR_MODELS = [
-  'openai/gpt-5-mini',
-  'google/gemini-2.5-flash-lite',
-  'stepfun/step-3.7-flash',
-];
-
-function getEnvList(name: string, fallback: string[]): string[] {
-  const raw = process.env[name];
-  if (!raw) return fallback;
-  const parsed = raw.split(',').map((v) => v.trim()).filter(Boolean);
-  return parsed.length ? parsed : fallback;
-}
 
 function tryParseStringArray(raw: string): string[] | null {
   const cleaned = String(raw ?? '')
@@ -52,118 +64,51 @@ function tryParseStringArray(raw: string): string[] | null {
   return null;
 }
 
-function compactWhitespace(value: string): string {
-  return String(value ?? '').replace(/\s+/g, ' ').trim();
-}
+export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]> {
+  const chineseNames = names.filter(hasChinese);
+  if (chineseNames.length === 0) return names;
 
-function cleanSkuLabel(value: string): string {
-  return compactWhitespace(value)
-    .replace(/^[-–—:：\s]+/, '')
-    .replace(/[。；;]+$/g, '')
-    .trim();
-}
+  // First try local dictionary
+  const localTranslated = names.map(translateSkuName);
+  const stillChinese = localTranslated.filter(hasChinese);
+  if (stillChinese.length === 0) return localTranslated;
 
-function sanitizeTranslation(input: string, output: string): string {
-  const cleaned = cleanSkuLabel(output);
-  if (!cleaned) return cleanSkuLabel(input);
-  if (cleaned.length > 120) return cleanSkuLabel(input);
-  if (/^(undefined|null|nan)$/i.test(cleaned)) return cleanSkuLabel(input);
-  return cleaned;
-}
-
-function summarizeContext(context?: SkuTranslationContext): string {
-  if (!context) return 'Контекст товара: не указан.';
-
-  const attrs = (context.attributes ?? [])
-    .filter((a) => a?.name || a?.value)
-    .slice(0, 16)
-    .map((a) => `${compactWhitespace(String(a.name ?? ''))}: ${compactWhitespace(String(a.value ?? ''))}`)
-    .filter((line) => line.replace(':', '').trim())
-    .join('; ');
-
-  return [
-    `Название CN: ${compactWhitespace(context.titleCn ?? '') || 'не указано'}`,
-    `Название RU: ${compactWhitespace(context.titleRu ?? '') || 'не указано'}`,
-    `Категория: ${compactWhitespace(context.categoryName ?? '') || 'не указана'}`,
-    attrs ? `Характеристики: ${attrs}` : '',
-  ].filter(Boolean).join('\n');
-}
-
-export async function translateSkuNamesViaLlm(names: string[], context?: SkuTranslationContext): Promise<string[]> {
-  const inputNames = names.map((name) => String(name ?? '').trim());
-  if (inputNames.length === 0) return [];
-  if (!inputNames.some(hasChinese)) return inputNames.map(cleanSkuLabel);
-
+  // LLM fallback for remaining Chinese names
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) return inputNames.map(cleanSkuLabel);
+  if (!apiKey) return localTranslated;
 
-  const models = getEnvList('CARDZIP_SKU_TRANSLATOR_MODELS', DEFAULT_SKU_TRANSLATOR_MODELS);
-  const prompt = [
-    'Переведи SKU-варианты товара с китайского на русский для закупочного отчёта и Telegram-кнопок.',
-    'Это не обычный художественный перевод. Это перевод коротких коммерческих SKU-меток произвольного товара.',
-    'Сначала определи товарную нишу по контексту, потом переводи значения SKU именно в терминологии этой ниши.',
-    '',
-    summarizeContext(context),
-    '',
-    'Входные SKU:',
-    JSON.stringify(inputNames),
-    '',
-    'Жёсткий контракт ответа:',
-    '- верни только JSON-массив строк без markdown и пояснений;',
-    '- количество элементов и порядок должны совпадать с входом 1:1;',
-    '- не добавляй новые SKU, не объединяй и не удаляй элементы;',
-    '- не добавляй свойства, которых нет во входном SKU или контексте товара;',
-    '- не повторяй общее название товара в каждом SKU, если SKU и так понятен из контекста;',
-    '',
-    'Как переводить:',
-    '- не переводи буквально, если в этой товарной нише есть короткий профессиональный термин;',
-    '- сохраняй без изменений латинские/цифровые артикулы, коды моделей, серийные обозначения, объёмы, размеры, комплектации, стандарты и аббревиатуры;',
-    '- если китайское слово в SKU означает тип подключения, версию, уровень, цвет, размер, комплектацию, материал или модель — передай именно эту роль коротко по-русски;',
-    '- если термин может быть отраслевым обозначением, не превращай его в длинную буквальную кальку; используй принятый короткий термин для этой ниши;',
-    '- если значение непонятно даже с контекстом, переведи осторожно и добавь “— уточнить”, не выдумывай смысл;',
-    '- итоговая строка должна быть короткой и пригодной для кнопки Telegram, желательно до 45 символов.',
-  ].join('\n');
+  try {
+    const prompt = `Переведи названия SKU-вариантов товара с китайского на русский. Это цвета, размеры или комбинации. Верни JSON массив строк, по одной на каждый вход. Только JSON, без markdown.\n\nВход: ${JSON.stringify(stillChinese)}`;
 
-  for (const model of models) {
-    try {
-      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          max_tokens: 1800,
-          temperature: 0,
-          messages: [
-            {
-              role: 'system',
-              content: [
-                'Ты профессиональный переводчик китайских SKU для закупок.',
-                'Работай как товарный эксперт: сначала определяй нишу и смысл SKU, затем давай короткую русскую метку.',
-                'Сохраняй артикулы, коды моделей, аббревиатуры и числовые обозначения. Не добавляй новых фактов.',
-                'Ответ строго JSON-массив строк той же длины.',
-              ].join(' '),
-            },
-            { role: 'user', content: prompt },
-          ],
-        }),
-        signal: AbortSignal.timeout(30_000),
-      });
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-lite-preview-09-2025',
+        max_tokens: 300,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(8_000),
+    });
 
-      if (!res.ok) {
-        console.log(`[cnTranslate] ${model} HTTP ${res.status}`);
-        continue;
+    if (!res.ok) return localTranslated;
+    const data = await res.json() as any;
+    const raw = data.choices?.[0]?.message?.content ?? '';
+    const translated = tryParseStringArray(raw);
+
+    if (!translated || translated.length !== stillChinese.length) return localTranslated;
+
+    // Merge LLM translations back
+    let llmIdx = 0;
+    return localTranslated.map(name => {
+      if (hasChinese(name) && llmIdx < translated.length) {
+        return translated[llmIdx++];
       }
-      const data = await res.json() as any;
-      const raw = data.choices?.[0]?.message?.content ?? '';
-      const translated = tryParseStringArray(raw);
-      if (!translated || translated.length !== inputNames.length) continue;
-
-      return translated.map((value, index) => sanitizeTranslation(inputNames[index] ?? '', value));
-    } catch (e) {
-      console.log(`[cnTranslate] ${model} skipped:`, (e as Error).message);
-      continue;
-    }
+      return name;
+    });
+  } catch (e) {
+    console.log('[cnTranslate] LLM fallback skipped:', (e as Error).message);
+    return localTranslated;
   }
-
-  return inputNames.map(cleanSkuLabel);
 }

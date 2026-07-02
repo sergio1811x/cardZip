@@ -2,21 +2,19 @@ import type { AnalysisSnapshot, QaResult, GeneratedArtifacts } from '../types';
 
 const QA_MODELS = [
   'deepseek/deepseek-v4-pro',
-  'qwen/qwen3.7-plus',
-  'minimax/minimax-m2.7',
+  'deepseek/deepseek-chat-v3.2',
+  'qwen/qwen3-235b-a22b',
 ];
 
 function cleanJson(raw: string): string {
   return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 }
+
 const QA_GATE_PROMPT = `CardZip QA Gate.
 
-Роль: контроль качества закупочного пакета.
-Проверяй пользовательские тексты, но не анализируй товар заново.
+Роль: контроль качества закупочного пакета. Проверяй пользовательские тексты, но не анализируй товар заново.
 
-Цель:
-пропускать полезный закупочный пакет, если его можно безопасно показать.
-Не блокируй из-за отсутствия веса, сертификатов, полного ответа поставщика или неподтверждённых свойств.
+Цель: пропускать полезный закупочный пакет, если его можно безопасно показать. Не блокируй из-за отсутствия веса, сертификатов, полного ответа поставщика или неподтверждённых свойств.
 
 Решения:
 - PASS: можно показывать пользователю.
@@ -30,14 +28,6 @@ BLOCK разрешён только если:
 - в тексте массово raw/debug/NaN/undefined/null и repair не сможет восстановить смысл;
 - документы относятся к явно чужой категории и могут ввести пользователя в заблуждение.
 
-Не блокируй:
-- нет веса;
-- нет сертификатов;
-- цена или SKU требуют подтверждения;
-- есть вопросы про сертификаты;
-- есть осторожные формулировки “заявлено”, “проверить”, “подтвердить”;
-- товар подходит только для запроса данных или образца.
-
 Проверь:
 1. Main report короткий, понятный, без debug и дублей.
 2. Есть товар, цена/SKU или честная причина отсутствия.
@@ -49,19 +39,13 @@ BLOCK разрешён только если:
 8. Buyer/cargo/sample документы пригодны человеку.
 9. Supplier questions без дублей, максимум 10 вопросов.
 10. Claims не выданы как факт без “заявлено/проверить/подтвердить”.
-11. Нет чужой категории:
-   - обуви не нужны мощность, аккумулятор, рукав;
-   - одежде не нужны подошва, тип вилки, напряжение;
-   - зонту не нужны размерная сетка обуви, стелька;
-   - пассивной ловушке не нужны лампа/220V, если их нет в данных;
-   - USB-товару не нужны стелька/рукав.
-12. Нет 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, file://, raw SKU.
+11. Нет чужой категории: одежде не нужны подошва/вилка/напряжение; обуви не нужны мощность/аккумулятор/рукав; зонту не нужна стелька; кухонному стеллажу не нужны мощность/UPF/аккумулятор.
+12. Нет “из карточки 1688”, cross-border, для cross-border торговли, raw SKU, 0 ¥, 0 ₽, 0 кг, NaN, undefined, null, file://.
 13. Нет советов “точно брать партию”.
-14. Нет латиницы внутри русских слов: поставщpику, матеpиал и т.п.
+14. Нет латиницы внутри русских слов: поставщpику, матеpиал.
 15. CN-блок либо валидный, либо скрыт.
 
 Верни строго JSON без markdown:
-
 {
   "decision": "PASS|FIX_REQUIRED|BLOCK",
   "canShowToUser": true,
@@ -71,21 +55,9 @@ BLOCK разрешён только если:
   "criticalIssues": [],
   "warnings": [],
   "requiredEdits": [
-    {
-      "artifact": "UserCard|SeoText|BuyerBrief|CargoBrief|SampleChecklist|SupplierQuestions|Readme",
-      "operation": "replace|remove|rewrite",
-      "find": "...",
-      "replaceWith": "...",
-      "reason": "..."
-    }
+    {"artifact":"UserCard|SeoText|BuyerBrief|CargoBrief|SampleChecklist|SupplierQuestions|Readme","operation":"replace|remove|rewrite","find":"...","replaceWith":"...","reason":"..."}
   ],
-  "safeUserSummary": {
-    "status": "готово|требует правки|рабочая гипотеза|нельзя показать",
-    "verdict": "...",
-    "mainRisk": "...",
-    "nextStep": "...",
-    "doNotDo": "..."
-  }
+  "safeUserSummary": {"status":"готово|требует правки|рабочая гипотеза|нельзя показать","verdict":"...","mainRisk":"...","nextStep":"...","doNotDo":"..."}
 }
 
 Правила ответа:
@@ -93,7 +65,6 @@ BLOCK разрешён только если:
 - Если decision=PASS, requiredEdits должен быть [].
 - Если decision=FIX_REQUIRED, canShowToUser обычно true после repair.
 - Если decision=BLOCK, canShowToUser=false и criticalIssues должен объяснять реальную опасность.
-- Не блокируй осторожные закупочные пакеты.
 - Лучше FIX_REQUIRED, чем BLOCK, если текст можно безопасно поправить.
 
 DATA:
@@ -110,16 +81,6 @@ function compactQaPackage(snapshot: AnalysisSnapshot, artifacts: Record<string, 
       purchasePrice: s.purchasePrice,
       weight: s.weight,
       sku: { ...s.sku, variants: s.sku?.variants?.slice?.(0, 8) ?? [] },
-      market: {
-        directAnalogsCount: s.market?.directAnalogsCount,
-        similarAnalogsCount: s.market?.similarAnalogsCount,
-        broadCategoryCount: s.market?.broadCategoryCount,
-        crossBorderCount: s.market?.crossBorderCount,
-        marketConfirmed: s.market?.marketConfirmed,
-        canUseForEconomics: s.market?.canUseForEconomics,
-        displayedMainPriceRub: s.market?.displayedMainPriceRub,
-      },
-      economics: s.economics,
       missingData: s.missingData,
       conflicts: s.conflicts,
       riskFlags: s.riskFlags,
@@ -147,14 +108,14 @@ export async function runQaGate(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 2400,
+          max_tokens: 1200,
           temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — QA-ревьюер CardZip. Верни СТРОГО JSON.' },
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(25_000),
       });
       if (!res.ok) {
         console.log(`[qa-gate] ${model} HTTP ${res.status}`);

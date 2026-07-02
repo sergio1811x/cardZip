@@ -1,6 +1,12 @@
 import type { ProductContext } from "../types";
+import { cleanRawAttributes } from "../core/rawAttributeCleaner";
+import { selectBestProductTitle } from "../core/titleSelection";
 
-type ProductIntelligenceImageInput = { url: string; role?: string; note?: string };
+type ProductIntelligenceImageInput = {
+  url: string;
+  role?: string;
+  note?: string;
+};
 
 type RawProductForCanonicalizer = {
   offerId: string;
@@ -9,8 +15,21 @@ type RawProductForCanonicalizer = {
   titleEn?: string;
   categoryName?: string;
   attributes?: Array<{ name: string; value: string }>;
-  skus?: Array<{ id?: string; skuId?: string; name: string; price?: number; stock?: number; image?: string }>;
-  normalizedSkuTable?: Array<{ id?: string; label: string; priceYuan?: number; stock?: number; image?: string }>;
+  skus?: Array<{
+    id?: string;
+    skuId?: string;
+    name: string;
+    price?: number;
+    stock?: number;
+    image?: string;
+  }>;
+  normalizedSkuTable?: Array<{
+    id?: string;
+    label: string;
+    priceYuan?: number;
+    stock?: number;
+    image?: string;
+  }>;
   selectedSkuId?: string;
   selectedSkuName?: string;
   selectedSkuPriceYuan?: number;
@@ -48,7 +67,7 @@ type CanonicalizerModelResult = Partial<ProductContext> & {
   price?: Partial<ProductContext["price"]>;
   conflicts?: unknown;
   missingCritical?: unknown;
-  wbSearch?: Partial<ProductContext["wbSearch"]>;
+  searchHints?: Partial<ProductContext["wbSearch"]>;
   seoPolicy?: Partial<ProductContext["seoPolicy"]>;
   supplierQuestions?: Partial<ProductContext["supplierQuestions"]>;
   riskTags?: unknown;
@@ -56,25 +75,26 @@ type CanonicalizerModelResult = Partial<ProductContext> & {
   procurementProfile?: Record<string, unknown>;
   productProcurementProfile?: Record<string, unknown>;
   productKindClassifier?: Record<string, unknown>;
+  classifier?: Record<string, unknown>;
 };
 
-const DEFAULT_MULTIMODAL_MODELS = [
-  "openai/gpt-5-mini",
+const DEFAULT_VISION_MODELS = [
   "google/gemini-2.5-flash-lite",
-  "stepfun/step-3.7-flash",
+  "google/gemini-2.5-flash",
 ];
 
 const DEFAULT_TEXT_MODELS = [
-  "deepseek/deepseek-v4-pro",
-  "qwen/qwen3.7-plus",
-  "minimax/minimax-m2.7",
+  "deepseek/deepseek-chat-v3.1",
+  "qwen/qwen3-32b",
+  "google/gemini-2.5-flash-lite",
+  "z-ai/glm-4.5-air",
 ];
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_TIMEOUT_MS = 80_000;
-const DEFAULT_IMAGE_TIMEOUT_MS = 20_000;
+const DEFAULT_TIMEOUT_MS = 25_000;
+const DEFAULT_IMAGE_TIMEOUT_MS = 7_000;
 const DEFAULT_MAX_IMAGE_BYTES = 1_200_000;
-const DEFAULT_MAX_TOKENS = 8000;
+const DEFAULT_MAX_TOKENS = 3500;
 const DEFAULT_TEMPERATURE = 0.15;
 
 const CATEGORY_TYPES = [
@@ -107,9 +127,9 @@ function getEnvList(name: string, fallback: string[]): string[] {
   return parsed.length ? parsed : fallback;
 }
 
-const MULTIMODAL_MODELS = getEnvList(
-  "PRODUCT_CANONICALIZER_MULTIMODAL_MODELS",
-  DEFAULT_MULTIMODAL_MODELS,
+const VISION_MODELS = getEnvList(
+  "PRODUCT_CANONICALIZER_VISION_MODELS",
+  DEFAULT_VISION_MODELS,
 );
 const TEXT_MODELS = getEnvList(
   "PRODUCT_CANONICALIZER_TEXT_MODELS",
@@ -123,13 +143,6 @@ function getNumberEnv(name: string, fallback: number): number {
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-
-function record(value: unknown): Record<string, any> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, any>)
-    : {};
 }
 
 function safeString(value: unknown, fallback = ""): string {
@@ -308,6 +321,35 @@ function parseJsonResult(raw: string): CanonicalizerModelResult | null {
   }
 }
 
+function hasCanonicalizerPayload(
+  value: CanonicalizerModelResult | null | undefined,
+): value is CanonicalizerModelResult {
+  if (!value || typeof value !== "object") return false;
+  const profile = (value.procurementProfile ??
+    value.productProcurementProfile) as any;
+  return Boolean(
+    value.identity ||
+    (profile && typeof profile === "object" && profile.identity),
+  );
+}
+
+function profileDraftOf(result: CanonicalizerModelResult): Record<string, any> {
+  const profile = (result.procurementProfile ??
+    result.productProcurementProfile) as any;
+  return profile && typeof profile === "object" && !Array.isArray(profile)
+    ? profile
+    : {};
+}
+
+function cleanCanonicalizerTitle(value: unknown): string {
+  return safeRu(value)
+    .replace(/cross[\s-]?border/gi, "")
+    .replace(/для\s+торговли\s+функции/gi, "")
+    .replace(/\b(?:товар|функции|undefined|null|nan)\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function getRawPriceStats(raw: RawProductForCanonicalizer): {
   visiblePriceCny: number | null;
   minPriceCny: number | null;
@@ -366,30 +408,36 @@ function buildFallbackContext(raw: RawProductForCanonicalizer): ProductContext {
     .map((sku) => safeString(sku.name))
     .filter(Boolean);
 
+  const cleaned = cleanRawAttributes((raw.attributes as any[]) ?? []);
+  const titleSelection = selectBestProductTitle({
+    intelligenceTitle: raw.titleRu || raw.titleEn,
+    translatedTitle: raw.titleRu || raw.titleEn,
+    rawTitleCn: raw.titleCn,
+    productKind: raw.categoryName,
+    candidates: cleaned.rejectedTitleCandidates.map((x) => x.value),
+  });
+  const safeTitle = titleSelection.titleForReport || "Товар с 1688";
   return {
     offerId: raw.offerId,
     identity: {
-      productType: raw.titleRu || raw.titleEn || raw.titleCn,
-      coreObject: raw.titleRu || raw.titleEn || raw.titleCn,
+      productType: safeTitle,
+      coreObject: safeTitle,
       categoryType: "other",
-      domainKind: "unknown_product",
       useCases: [],
       notThis: [],
       audience: "",
       season: "не применимо",
-      gender: "унисекс",
+      gender: "неизвестно",
     },
     titles: {
-      titleCn: raw.titleCn,
-      cleanRu: raw.titleRu ?? raw.titleEn ?? "",
-      shortRu: raw.titleRu ?? raw.titleEn ?? "",
-      wbTitleDraft: raw.titleRu ?? raw.titleEn ?? "",
+      titleCn: cleanCanonicalizerTitle(raw.titleCn),
+      cleanRu: safeTitle,
+      shortRu: safeTitle,
+      titleForSeo: safeTitle,
     },
     facts: normalizeFacts(
       Object.fromEntries(
-        (raw.attributes ?? [])
-          .slice(0, 20)
-          .map((attr) => [attr.name, attr.value]),
+        cleaned.userFacing.slice(0, 20).map((attr) => [attr.label, attr.value]),
       ),
     ),
     sku: {
@@ -482,11 +530,22 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
   if (raw.titleRu) lines.push(`Название RU: ${raw.titleRu}`);
   if (raw.titleEn) lines.push(`Название EN: ${raw.titleEn}`);
   if (raw.categoryName) lines.push(`Категория: ${raw.categoryName}`);
-  if (raw.selectedSkuName) lines.push(`Выбранный SKU: ${raw.selectedSkuName}${isPositiveNumber(raw.selectedSkuPriceYuan) ? ` — ${raw.selectedSkuPriceYuan} ¥` : ''}`);
-  if (raw.selectedSkuId) lines.push(`selectedSkuId из URL/API: ${raw.selectedSkuId}`);
+  if (raw.selectedSkuName)
+    lines.push(
+      `Выбранный SKU: ${raw.selectedSkuName}${isPositiveNumber(raw.selectedSkuPriceYuan) ? ` — ${raw.selectedSkuPriceYuan} ¥` : ""}`,
+    );
+  if (raw.selectedSkuId)
+    lines.push(`selectedSkuId из URL/API: ${raw.selectedSkuId}`);
   if (isPositiveNumber(raw.moq)) lines.push(`MOQ: ${raw.moq} шт`);
-  if (raw.supplierType || raw.supplierName || raw.supplierRating || raw.orders) {
-    lines.push(`Поставщик: type=${raw.supplierType ?? 'unknown'}; name=${raw.supplierName ?? '—'}; rating=${raw.supplierRating ?? '—'}; orders=${raw.orders ?? raw.sold ?? '—'}`);
+  if (
+    raw.supplierType ||
+    raw.supplierName ||
+    raw.supplierRating ||
+    raw.orders
+  ) {
+    lines.push(
+      `Поставщик: type=${raw.supplierType ?? "unknown"}; name=${raw.supplierName ?? "—"}; rating=${raw.supplierRating ?? "—"}; orders=${raw.orders ?? raw.sold ?? "—"}`,
+    );
   }
 
   if (isPositiveNumber(raw.price)) lines.push(`Цена: ${raw.price} ¥`);
@@ -506,26 +565,55 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
   else lines.push("Вес товара: не указан");
 
   if (typeof raw.sold === "number") lines.push(`Продажи/заказы: ${raw.sold}`);
-  if (typeof raw.stock === "number") lines.push(`Остаток: ${raw.stock}`);
+  if (typeof raw.stock === "number" && raw.stock > 0 && raw.stock < 1_000_000)
+    lines.push(`Остаток: ${raw.stock}`);
 
   if (raw.attributes?.length) {
-    lines.push("Атрибуты поставщика:");
-    raw.attributes.slice(0, 30).forEach((attr) => {
-      lines.push(`- ${attr.name}: ${attr.value}`);
+    const cleaned = cleanRawAttributes(raw.attributes as any[], {
+      fashionLike: /одежд|обув|clothing|footwear|鞋|衣/i.test(
+        `${raw.titleCn} ${raw.titleRu ?? ""} ${raw.categoryName ?? ""}`,
+      ),
     });
+    if (cleaned.userFacing.length) {
+      lines.push("Cleaned useful attributes:");
+      cleaned.userFacing.slice(0, 24).forEach((attr) => {
+        lines.push(`- ${attr.label}: ${attr.value} (${attr.confidence})`);
+      });
+    }
+    if (cleaned.evidenceOnly.length) {
+      lines.push("Evidence-only raw labels, DO NOT copy to user-facing text:");
+      cleaned.evidenceOnly.slice(0, 12).forEach((attr) => {
+        lines.push(`- ${attr.key}: ${attr.value}`);
+      });
+    }
+    if (cleaned.rejectedTitleCandidates.length) {
+      lines.push("Rejected title candidates:");
+      cleaned.rejectedTitleCandidates.slice(0, 10).forEach((item) => {
+        lines.push(`- ${item.value} (${item.reason})`);
+      });
+    }
   }
 
   if (raw.imageUrls?.length) {
-    lines.push('Фото для Product Intelligence:');
-    raw.imageUrls.slice(0, 3).forEach((img) => lines.push(`- ${img.role ?? 'image'}: ${img.url}`));
+    lines.push("Фото для Product Intelligence:");
+    raw.imageUrls
+      .slice(0, 3)
+      .forEach((img) => lines.push(`- ${img.role ?? "image"}: ${img.url}`));
   }
 
   if (raw.normalizedSkuTable?.length) {
     lines.push(`Normalized SKU table (${raw.normalizedSkuTable.length}):`);
     raw.normalizedSkuTable.slice(0, 20).forEach((sku) => {
-      const price = isPositiveNumber(sku.priceYuan) ? `${sku.priceYuan} ¥` : 'цена не указана';
-      const stock = typeof sku.stock === 'number' ? `остаток: ${sku.stock}` : 'остаток неизвестен';
-      lines.push(`- ${sku.label} — ${price}, ${stock}${sku.id ? `, id=${sku.id}` : ''}`);
+      const price = isPositiveNumber(sku.priceYuan)
+        ? `${sku.priceYuan} ¥`
+        : "цена не указана";
+      const stock =
+        typeof sku.stock === "number" && sku.stock > 0 && sku.stock < 1_000_000
+          ? `остаток: ${sku.stock}`
+          : "остаток не выводить";
+      lines.push(
+        `- ${sku.label} — ${price}, ${stock}${sku.id ? `, id=${sku.id}` : ""}`,
+      );
     });
   }
 
@@ -536,9 +624,9 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
         ? `${sku.price} ¥`
         : "цена не указана";
       const stock =
-        typeof sku.stock === "number"
+        typeof sku.stock === "number" && sku.stock > 0 && sku.stock < 1_000_000
           ? `остаток: ${sku.stock}`
-          : "остаток неизвестен";
+          : "остаток не выводить";
       lines.push(`- ${sku.name} — ${price}, ${stock}`);
     });
   }
@@ -549,21 +637,14 @@ function buildInfo(raw: RawProductForCanonicalizer): string {
 const CANONICALIZER_PROMPT = `CardZip Product Canonicalizer.
 
 Роль: старший закупщик 1688/Taobao/Tmall.
-Цель: по фото, названию, характеристикам, SKU, цене, MOQ и поставщику определить реальный товар и собрать единый ProductProcurementProfile для закупочного пакета.
+Цель: по фото, названию, очищенным характеристикам, SKU, цене, MOQ и поставщику определить реальный товар и собрать единый ProductProcurementProfile для закупочного пакета.
 
-CardZip — это закупочный пакет по ссылке, а не анализ рынка и не калькулятор прибыли.
+CardZip — это закупочный пакет по ссылке: разбор товара, вопросы поставщику, ТЗ байеру/карго, чек-лист образца, SEO-черновик и фото.
 
-Фото используй только для визуально очевидного:
-тип товара, форма, конструкция, материал/текстура, комплектация, упаковка, видимые маркировки.
-Не извлекай с фото цену, вес, MOQ, остатки или SKU.
-
-Цена, MOQ, supplier, selected SKU и SKU-таблица берутся только из provider/API данных.
+Фото используй только для визуально очевидного: тип товара, форма, конструкция, материал/текстура, комплектация, упаковка, видимые маркировки. Не извлекай с фото цену, вес, MOQ, остатки или SKU. Цена, MOQ, supplier, selected SKU и SKU-таблица берутся только из provider/API данных.
 
 Верни СТРОГО JSON без markdown:
-
 {
-  "profileVersion": "2.1",
-
   "classifier": {
     "visionKind": "видимый тип товара или null",
     "textKind": "тип по названию/SKU/атрибутам или null",
@@ -576,122 +657,83 @@ CardZip — это закупочный пакет по ссылке, а не а
     "disagreement": false,
     "reason": "почему выбран этот тип"
   },
-
-  "identity": {
-    "productKind": "свободный домен товара, не enum",
-    "categoryType": "общая категория",
-    "subCategoryType": "подкатегория",
-    "titleForReport": "3-6 слов для отчёта",
-    "titleForSeo": "название для карточки товара без неподтверждённых claims",
-    "shortTitle": "2-4 слова",
-    "coreObject": "базовый объект без маркетинга",
-    "formFactor": "форма/конструкция",
-    "audience": "мужской|женский|унисекс|детский|неизвестно",
-    "gender": "мужской|женский|унисекс|детский|неизвестно",
-    "season": "лето|зима|демисезон|всесезон|не применимо|неизвестно",
-    "useCases": ["реальные сценарии применения"],
-    "materials": ["материалы только из данных или фото, если визуально очевидно"],
-    "visibleFeatures": ["только то, что видно на фото"],
-    "claimedFeatures": ["заявленные свойства, которые нужно подтвердить"],
-    "unconfirmedFeatures": ["что нельзя писать как факт"],
-    "notThis": ["с чем можно перепутать, но это не оно"]
-  },
-
-  "sku": {
-    "hasMultipleSku": true,
-    "skuCount": 0,
-    "skuSummary": "кратко: цвет × размер / модель / параметр",
-    "selectedSkuText": "выбранный SKU или null",
-    "selectedSkuReliable": true,
-    "colors": ["цвета"],
-    "sizes": ["размеры"],
-    "models": ["модели/версии"],
-    "packageTypes": ["варианты упаковки"],
-    "packCounts": ["количество в наборе"],
-    "knownOptions": ["понятные варианты SKU в терминах домена"],
-    "skuWarnings": ["что непонятно или требует подтверждения"],
-    "normalizedExamples": ["2-5 понятных примеров SKU"]
-  },
-
-  "pricing": {
-    "displayPriceText": "цена для отчёта",
-    "selectedPriceCny": null,
-    "minPriceCny": null,
-    "maxPriceCny": null,
-    "priceSource": "selected_sku|sku_range|visible_price|tier_price|unknown",
-    "priceReliable": true,
-    "priceWarnings": ["что нужно подтвердить"]
-  },
-
-  "supplier": {
-    "displayType": "продавец|проверенный продавец|фабрика|не указан",
-    "rating": null,
-    "orders": null,
-    "name": ""
-  },
-
-  "procurement": {
-    "status": "нужны данные поставщика|можно запрашивать образец|готов к заказу образца|данных мало",
-    "verdict": "конкретный вывод закупщика под этот товар",
-    "nextAction": "одно действие сейчас",
-    "mustAskSupplier": ["5-10 конкретных вопросов поставщику без дублей"],
-    "mustCheckBeforeSample": ["что проверить до заказа образца"],
-    "mustCheckOnSample": ["8-12 проверок образца именно для этого товара"],
-    "redFlags": ["реальные закупочные риски"]
-  },
-
-  "cargo": {
-    "mustAsk": ["6-10 вопросов по весу, габаритам, коробу, упаковке и ограничениям"],
-    "likelySensitiveCargoIssues": ["батарея/жидкость/магнит/стекло/острые части/электроника/нет"]
-  },
-
-  "content": {
-    "seoAllowedClaims": ["что можно безопасно писать"],
-    "seoForbiddenClaims": ["что нельзя писать без подтверждения/теста/документов"],
-    "titleWarnings": ["что не добавлять в title"],
-    "infographicIdeas": ["5-7 идей слайдов под этот товар"]
-  },
-
-  "dataQuality": {
-    "missingCriticalFields": ["чего не хватает"],
-    "contradictions": ["противоречия"],
-    "confidence": "high|medium|low",
-    "score": 1,
-    "reason": "почему такая оценка"
+  "procurementProfile": {
+    "identity": {
+      "productKind": "точный свободный домен товара: dish_rack, kitchen_storage_rack, umbrella, clothing и т.п.",
+      "categoryType": "общая категория",
+      "subCategoryType": "подкатегория",
+      "titleForReport": "3-6 слов для отчёта",
+      "titleForSeo": "название для карточки товара без неподтверждённых claims",
+      "shortTitle": "2-4 слова",
+      "coreObject": "базовый объект без маркетинга",
+      "formFactor": "форма/конструкция",
+      "audience": "мужской|женский|унисекс|детский|неизвестно",
+      "gender": "мужской|женский|унисекс|детский|неизвестно",
+      "season": "лето|зима|демисезон|всесезон|не применимо|неизвестно",
+      "useCases": ["реальные сценарии применения"],
+      "materials": ["материалы только из данных или фото, если визуально очевидно"],
+      "visibleFeatures": ["только то, что видно на фото"],
+      "claimedFeatures": ["заявленные свойства, которые нужно подтвердить"],
+      "unconfirmedFeatures": ["что нельзя писать как факт"],
+      "notThis": ["с чем можно перепутать, но это не оно"],
+      "rejectedTitleCandidates": [{"value":"...","reason":"почему нельзя использовать как title"}]
+    },
+    "procurement": {
+      "status": "нужны данные поставщика|можно запрашивать образец|готов к заказу образца|данных мало",
+      "verdict": "конкретный вывод закупщика под этот товар",
+      "nextAction": "одно действие сейчас",
+      "mustAskSupplier": ["5-10 конкретных вопросов поставщику без дублей"],
+      "mustCheckBeforeSample": ["что проверить до заказа образца"],
+      "mustCheckOnSample": ["8-12 проверок образца именно для этого товара"],
+      "redFlags": ["реальные закупочные риски"]
+    },
+    "cargo": {
+      "mustAsk": ["6-10 вопросов по весу, габаритам, коробу, упаковке и ограничениям"],
+      "likelySensitiveCargoIssues": ["батарея/жидкость/магнит/стекло/острые части/электроника/нет"]
+    },
+    "content": {
+      "seoAllowedClaims": ["что можно безопасно писать"],
+      "seoForbiddenClaims": ["что нельзя писать без подтверждения/теста/документов"],
+      "titleWarnings": ["что не добавлять в title"],
+      "infographicIdeas": ["5-7 идей слайдов под этот товар"]
+    },
+    "dataQuality": {
+      "missingCriticalFields": ["чего не хватает"],
+      "contradictions": ["противоречия"],
+      "confidence": "high|medium|low",
+      "score": 1,
+      "reason": "почему такая оценка"
+    }
   }
 }
 
 Правила:
-
-1. Не используй китайский в русских полях. Передавай смысл на русском.
-2. Не придумывай материал, размер, вес, документы, сертификаты, свойства, цену, MOQ или комплектацию.
-3. Если свойство заявлено, но не подтверждено, клади его в claimedFeatures/unconfirmedFeatures и seoForbiddenClaims.
-4. selectedSkuName, selectedSkuId и selectedSkuPriceCny — обязательный контекст. Не противоречь выбранному SKU.
-5. Если selected SKU ненадёжен или конфликтует с данными, укажи это в skuWarnings и dataQuality.contradictions, но не придумывай другой SKU.
-6. Если передано selected_sku_image, оно важнее main_product_image.
-7. Если фото и текст конфликтуют, не выбирай наугад: снизь confidence, укажи disagreement=true и сделай документы осторожными.
-8. SKU раскрывай в терминах товара: цвет, размер, модель, версия, объём, нагрузка, комплектность, упаковка.
-9. Если SKU содержит технический параметр с единицей измерения, интерпретируй его как параметр товара:
-   - 10kg у весов = максимальная нагрузка 10 кг;
-   - 5L у ёмкости = объём 5 л;
-   - 300ml у диспенсера = объём 300 мл.
-10. Не называй понятный технический параметр “параметром SKU”.
-11. Если значение SKU непонятно, не называй его размером или моделью. Пиши, что значение нужно уточнить.
-12. Не добавляй возможности, которых нет в выбранном SKU: проводной SKU не должен получить Bluetooth, аккумулятор или беспроводное подключение.
-13. Не включай marketing-grade слова в selected SKU как технический параметр.
-14. mustAskSupplier должен быть конкретным под товар, максимум 10 вопросов, без дублей.
-15. mustCheckOnSample должен описывать реальные действия: примерить, измерить, включить, открыть, закрыть, согнуть, потянуть, постирать, нагреть, взвесить, проверить швы, упаковку или работу механизма — по смыслу товара.
-16. cargo.mustAsk должен включать вес единицы с упаковкой, габариты индивидуальной упаковки, количество в коробе, вес/габариты короба, фото упаковки и релевантные ограничения перевозки.
-17. Не добавляй чужие категории:
-   - одежде не нужны вилка, напряжение, подошва;
-   - обуви не нужны аккумулятор, мощность, рукав;
-   - зонту не нужна размерная сетка обуви;
-   - технике не нужны стелька и посадка на теле.
-18. seoAllowedClaims — только безопасные утверждения из данных или визуально очевидного.
-19. seoForbiddenClaims — всё, что нельзя писать без сертификата, ответа поставщика или проверки образца.
-20. Dangerous claims без подтверждения запрещены как факт: медицинский, ортопедический, лечебный, антибактериальный, сертифицированный, гипоаллергенный, безопасный для детей, профессиональный, оригинальный бренд, 100% водонепроницаемый, UPF50+, дезинфекция, стерилизация.
-21. dataQuality.score от 1 до 10: снижай за отсутствие веса, упаковки, selected SKU, цены, фото, документов и за противоречия.
+1. Не копируй raw attributes в ответ. Сначала отличай физический товар от category/sales-channel/technical labels, marketing claims и полезных закупочных полей.
+2. Не используй китайский в русских полях. Передавай смысл на русском.
+3. Запрещено использовать как title: cross-border, для cross-border торговли, товар, функции, category labels, raw attribute type, single number, empty/garbled text.
+4. Если видишь плохой title candidate — добавь его в rejectedTitleCandidates и не показывай пользователю.
+5. Не придумывай материал, размер, вес, документы, сертификаты, свойства, цену, MOQ или комплектацию.
+6. Supplier name не должен браться из материала. Если supplier name отсутствует — "не указано".
+7. Если titleForSeo получился мусорным — используй titleForReport или safe category title.
+8. Если свойство заявлено, но не подтверждено, клади его в claimedFeatures/unconfirmedFeatures и seoForbiddenClaims.
+9. selectedSkuName, selectedSkuId и selectedSkuPriceCny — обязательный контекст. Не противоречь выбранному SKU.
+10. Если selected SKU ненадёжен или конфликтует с данными, укажи это в dataQuality.contradictions, но не придумывай другой SKU.
+11. Если передано selected_sku_image, оно важнее main_product_image.
+12. Если фото и текст конфликтуют, не выбирай наугад: снизь confidence, disagreement=true, документы осторожные.
+13. SKU раскрывай в терминах товара: цвет, размер, модель, версия, объём, нагрузка, комплектность, упаковка.
+14. Если SKU содержит технический параметр с единицей измерения, интерпретируй его как параметр товара: 10kg у весов = максимальная нагрузка 10 кг; 5L у ёмкости = объём 5 л; 300ml у диспенсера = объём 300 мл.
+15. Не называй понятный технический параметр “параметром SKU”. Если значение SKU непонятно, не называй его размером или моделью.
+16. Не добавляй возможности, которых нет в выбранном SKU: проводной SKU не должен получить Bluetooth, аккумулятор или беспроводное подключение.
+17. mustAskSupplier должен быть конкретным под товар, максимум 10 вопросов, без дублей.
+18. mustCheckOnSample должен описывать реальные действия: примерить, измерить, включить, открыть, закрыть, согнуть, потянуть, постирать, нагреть, взвесить, проверить швы, упаковку или работу механизма — по смыслу товара.
+19. cargo.mustAsk должен включать вес единицы с упаковкой, габариты индивидуальной упаковки, количество в коробе, вес/габариты короба, фото упаковки и релевантные ограничения перевозки.
+20. Не добавляй чужие категории: одежде не нужны вилка/напряжение/подошва; обуви не нужны аккумулятор/мощность/рукав; зонту не нужна размерная сетка обуви; технике не нужны стелька/посадка на теле.
+21. Для dish_rack/kitchen_storage_rack обязательно учитывай количество ярусов, размеры 43/53 см, устойчивость, материал/покрытие, поддон, комплектацию, сборку, риск деформации при доставке.
+22. seoAllowedClaims — только безопасные утверждения из данных или визуально очевидного. seoForbiddenClaims — всё, что нельзя писать без сертификата, ответа поставщика или проверки образца.
+23. Dangerous claims без подтверждения запрещены как факт: медицинский, ортопедический, лечебный, антибактериальный, сертифицированный, гипоаллергенный, безопасный для детей, профессиональный, оригинальный бренд, 100% водонепроницаемый, UPF50+, дезинфекция, стерилизация.
+24. dataQuality.score от 1 до 10: снижай за отсутствие веса, упаковки, selected SKU, цены, фото, документов и за противоречия.
 `;
+
 const SYSTEM_MSG =
   "Ты Product Canonicalizer. Отвечай только валидным JSON-объектом. Без markdown. Без пояснений.";
 
@@ -775,7 +817,7 @@ async function callOpenRouter(
     const content = data.choices?.[0]?.message?.content ?? "";
     const parsed = parseJsonResult(content);
 
-    if (!parsed?.identity) {
+    if (!hasCanonicalizerPayload(parsed)) {
       console.warn(`[canonicalizer] ${model} returned invalid JSON/context`);
       return null;
     }
@@ -865,26 +907,69 @@ function normalizeContext(
   raw: RawProductForCanonicalizer,
   result: CanonicalizerModelResult,
 ): ProductContext {
+  const profileDraft = profileDraftOf(result);
+  const draftIdentity = (profileDraft.identity ?? {}) as Record<string, any>;
+  const draftProcurement = (profileDraft.procurement ?? {}) as Record<
+    string,
+    any
+  >;
+  const draftContent = (profileDraft.content ?? {}) as Record<string, any>;
   const identity = (result.identity ?? {}) as Record<string, any>;
   const titles = (result.titles ?? {}) as Record<string, any>;
-  const wbSearch = (result.wbSearch ?? {}) as Record<string, any>;
   const seoPolicy = (result.seoPolicy ?? {}) as Record<string, any>;
   const supplierQuestions = (result.supplierQuestions ?? {}) as Record<
     string,
     any
   >;
-  const dataQuality = (result.dataQuality ?? {}) as Record<string, any>;
+  const dataQuality = (profileDraft.dataQuality ??
+    result.dataQuality ??
+    {}) as Record<string, any>;
 
+  const titleSelection = selectBestProductTitle({
+    intelligenceTitle:
+      draftIdentity.titleForReport ||
+      draftIdentity.titleForSeo ||
+      identity.productType ||
+      identity.coreObject,
+    translatedTitle: titles.cleanRu || raw.titleRu || raw.titleEn,
+    rawTitleCn: raw.titleCn,
+    productKind:
+      draftIdentity.productKind ||
+      result.classifier?.domainKind ||
+      result.productKindClassifier?.domainKind,
+    candidates: [
+      draftIdentity.shortTitle,
+      draftIdentity.coreObject,
+      titles.shortRu,
+      titles.titleForSeo,
+    ],
+  });
   const productType = safeRu(
-    identity.productType,
-    raw.titleRu ?? raw.titleEn ?? raw.titleCn,
+    draftIdentity.titleForReport ||
+      draftIdentity.coreObject ||
+      identity.productType,
+    titleSelection.titleForReport,
   );
-  const coreObject = safeRu(identity.coreObject, productType);
-  const cleanRu = safeRu(titles.cleanRu, raw.titleRu ?? productType);
-  const shortRu = safeRu(titles.shortRu, coreObject);
-  const wbTitleDraft = safeRu(titles.wbTitleDraft, cleanRu);
+  const coreObject = safeRu(
+    draftIdentity.coreObject || identity.coreObject,
+    productType,
+  );
+  const cleanRu = safeRu(
+    draftIdentity.titleForReport || titles.cleanRu,
+    titleSelection.titleForReport,
+  );
+  const shortRu = safeRu(
+    draftIdentity.shortTitle || titles.shortRu,
+    coreObject,
+  );
+  const titleForSeo = safeRu(
+    draftIdentity.titleForSeo || titles.titleForSeo,
+    titleSelection.titleForSeo,
+  );
 
-  const ruQuestions = uniqueStrings(supplierQuestions.ru, 10);
+  const ruQuestions = uniqueStrings(draftProcurement.mustAskSupplier, 10).length
+    ? uniqueStrings(draftProcurement.mustAskSupplier, 10)
+    : uniqueStrings(supplierQuestions.ru, 10);
   const cnQuestions = uniqueStrings(supplierQuestions.cn, 12);
 
   const finalRuQuestions = ruQuestions.length
@@ -899,23 +984,27 @@ function normalizeContext(
     identity: {
       productType,
       coreObject,
-      categoryType: normalizeCategoryType(identity.categoryType),
-      domainKind: safeString(identity.domainKind || record(result.productKindClassifier).domainKind || record(result.productKindClassifier).finalKind || "").replace(/[^a-z0-9_]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || undefined,
-      useCases: uniqueStrings(identity.useCases, 10)
+      categoryType: normalizeCategoryType(
+        draftIdentity.categoryType || identity.categoryType,
+      ),
+      useCases: uniqueStrings(draftIdentity.useCases || identity.useCases, 10)
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
-      notThis: uniqueStrings(identity.notThis, 10)
+      notThis: uniqueStrings(draftIdentity.notThis || identity.notThis, 10)
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
-      audience: safeRu(identity.audience, "неизвестно"),
-      season: safeRu(identity.season, "неизвестно"),
-      gender: safeRu(identity.gender, "неизвестно"),
+      audience: safeRu(
+        draftIdentity.audience || identity.audience,
+        "неизвестно",
+      ),
+      season: safeRu(draftIdentity.season || identity.season, "неизвестно"),
+      gender: safeRu(draftIdentity.gender || identity.gender, "неизвестно"),
     },
     titles: {
-      titleCn: safeString(titles.titleCn, raw.titleCn),
+      titleCn: cleanCanonicalizerTitle(titles.titleCn || raw.titleCn),
       cleanRu,
       shortRu,
-      wbTitleDraft,
+      titleForSeo,
     },
     facts: normalizeFacts(result.facts),
     sku: mergeSku(raw, result.sku),
@@ -925,28 +1014,34 @@ function normalizeContext(
       .map((value) => stripChineseFromRussianField(value))
       .filter(Boolean),
     wbSearch: {
-      coreQuery: safeRu(wbSearch.coreQuery, shortRu).slice(0, 80),
-      queryLadder: uniqueStrings(wbSearch.queryLadder, 8)
+      coreQuery: shortRu.slice(0, 80),
+      queryLadder: uniqueStrings([shortRu, cleanRu], 8)
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
-      mustInclude: uniqueStrings(wbSearch.mustInclude, 8)
+      mustInclude: uniqueStrings([], 8)
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
-      mustExclude: uniqueStrings(wbSearch.mustExclude, 12)
+      mustExclude: uniqueStrings([], 12)
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
-      directMatchRules: uniqueStrings(wbSearch.directMatchRules, 10)
+      directMatchRules: uniqueStrings([], 10)
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
-      rejectRules: uniqueStrings(wbSearch.rejectRules, 12)
+      rejectRules: uniqueStrings([], 12)
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
     },
     seoPolicy: {
-      allowedClaims: uniqueStrings(seoPolicy.allowedClaims, 12)
+      allowedClaims: uniqueStrings(
+        draftContent.seoAllowedClaims || seoPolicy.allowedClaims,
+        12,
+      )
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
-      forbiddenClaims: uniqueStrings(seoPolicy.forbiddenClaims, 20)
+      forbiddenClaims: uniqueStrings(
+        draftContent.seoForbiddenClaims || seoPolicy.forbiddenClaims,
+        20,
+      )
         .map((value) => stripChineseFromRussianField(value))
         .filter(Boolean),
     },
@@ -964,46 +1059,28 @@ function normalizeContext(
     },
   };
 
-  const profileDraft = result.procurementProfile ?? result.productProcurementProfile;
-  if (profileDraft && typeof profileDraft === "object") ctx.procurementProfileDraft = profileDraft;
-  if (result.productKindClassifier && typeof result.productKindClassifier === "object") ctx.productKindClassifier = result.productKindClassifier;
+  if (profileDraft && typeof profileDraft === "object")
+    ctx.procurementProfileDraft = profileDraft;
+  const classifier = result.productKindClassifier ?? result.classifier;
+  if (classifier && typeof classifier === "object")
+    ctx.productKindClassifier = classifier;
 
   return ctx as ProductContext;
 }
 
 function hasUsableContext(ctx: ProductContext): boolean {
   return Boolean(
-    ctx.identity.productType &&
-    ctx.identity.coreObject &&
-    ctx.titles.cleanRu &&
-    ctx.wbSearch.coreQuery,
+    ctx.identity.productType && ctx.identity.coreObject && ctx.titles.cleanRu,
   );
 }
 
-async function runMultimodalCanonicalizer(
+async function runVisionCanonicalizer(
   prompt: string,
-  imageUrls: string[],
+  imageDataUrls: string[],
   apiKey: string,
 ): Promise<CanonicalizerModelResult | null> {
-  const mode = (process.env.PRODUCT_CANONICALIZER_IMAGE_MODE ?? "remote").toLowerCase();
-
-  for (const model of MULTIMODAL_MODELS) {
-    console.log(`[canonicalizer] Trying multimodal ${model}...`);
-    let modelImageUrls = imageUrls.slice(0, 4);
-
-    // Some OpenRouter vision routes reject base64 data URLs. Default is remote URLs so
-    // qwen/stepfun are tried for real instead of silently falling through to Gemini.
-    if (mode === "data_url") {
-      const dataUrls: string[] = [];
-      for (const url of modelImageUrls) {
-        const imageDataUrl = await fetchImageAsDataUrl(url);
-        if (imageDataUrl) dataUrls.push(imageDataUrl);
-      }
-      modelImageUrls = dataUrls;
-    }
-
-    if (!modelImageUrls.length) continue;
-
+  for (const model of VISION_MODELS) {
+    console.log(`[canonicalizer] Trying vision ${model}...`);
     const result = await callOpenRouter(
       model,
       [
@@ -1012,15 +1089,20 @@ async function runMultimodalCanonicalizer(
           role: "user",
           content: [
             { type: "text", text: prompt },
-            ...modelImageUrls.map((url) => ({ type: "image_url" as const, image_url: { url } })),
+            ...imageDataUrls
+              .slice(0, 3)
+              .map((url) => ({
+                type: "image_url" as const,
+                image_url: { url },
+              })),
           ],
         },
       ],
       apiKey,
     );
 
-    if (result?.identity) {
-      console.log(`[canonicalizer] Multimodal success with ${model}`);
+    if (hasCanonicalizerPayload(result)) {
+      console.log(`[canonicalizer] Vision success with ${model}`);
       return result;
     }
   }
@@ -1043,7 +1125,7 @@ async function runTextCanonicalizer(
       apiKey,
     );
 
-    if (result?.identity) {
+    if (hasCanonicalizerPayload(result)) {
       console.log(`[canonicalizer] Text success with ${model}`);
       return result;
     }
@@ -1075,16 +1157,20 @@ export async function canonicalizeProduct(
     raw.selectedSkuImage,
     raw.mainImageUrl,
   ].filter(Boolean) as string[];
-  const uniqueImageUrls = Array.from(new Set(imageSources)).slice(0, 4);
-  if (uniqueImageUrls.length) {
-    result = await runMultimodalCanonicalizer(prompt, uniqueImageUrls, apiKey);
+  const imageDataUrls: string[] = [];
+  for (const url of Array.from(new Set(imageSources)).slice(0, 3)) {
+    const imageDataUrl = await fetchImageAsDataUrl(url);
+    if (imageDataUrl) imageDataUrls.push(imageDataUrl);
+  }
+  if (imageDataUrls.length) {
+    result = await runVisionCanonicalizer(prompt, imageDataUrls, apiKey);
   }
 
-  if (!result?.identity) {
+  if (!hasCanonicalizerPayload(result)) {
     result = await runTextCanonicalizer(prompt, apiKey);
   }
 
-  if (!result?.identity) {
+  if (!hasCanonicalizerPayload(result)) {
     if (process.env.PRODUCT_CANONICALIZER_SAFE_FALLBACK === "1") {
       const fallback = buildFallbackContext(raw);
       console.warn(

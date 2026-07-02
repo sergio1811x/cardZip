@@ -36,7 +36,7 @@ export async function handleSearch1688(ctx: Context) {
       '',
       `<a href="${searchUrl}">🔗 Открыть поиск на 1688</a>`,
       '',
-      keywords ? `<b>Ключевые слова для WB:</b> ${keywords}` : '',
+      keywords ? `<b>Ключевые слова для маркетплейс:</b> ${keywords}` : '',
       '',
       '<i>Скопируйте китайское название и вставьте в поиск 1688. Ищите фабрики (工厂) с рейтингом от 4.5.</i>',
     ].filter(Boolean).join('\n');

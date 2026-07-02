@@ -1,6 +1,8 @@
 import type { RawProduct1688 } from '../types';
 import { cleanChineseTitle, normalizeSkuText, normalizeMixedProductText, detectPackCount, extractShoeSize, extractLetterSize, extractSkuComponents } from './cnNormalize';
-import { ensureProductProcurementProfile, formatSelectedSkuLine, plugStandardsDisplayValue } from './procurementProfile';
+import { ensureProductProcurementProfile } from './procurementProfile';
+import { cleanRawAttributes, isMaterialLikeSupplierName, stripRawSourceLabels } from './rawAttributeCleaner';
+import { sanitizeUserFacingText } from './userFacingSanitizer';
 
 export type DecisionConfidence = 'high' | 'medium' | 'low';
 
@@ -51,7 +53,7 @@ export type SkuDecision = {
 export type ReadinessDecision = {
   score: number;
   status: 'ready_for_sample' | 'needs_supplier_confirmation' | 'needs_market_check' | 'high_risk' | 'not_ready';
-  label: '🟢 Можно заказывать образец' | '🟡 Нужны данные' | '🟡 Нужно проверить рынок' | '🔴 Высокий риск' | '🔴 Не готово к закупке';
+  label: '🟢 Можно заказывать образец' | '🟡 Нужны данные' | '🟡 Нужно подтвердить данные' | '🔴 Высокий риск' | '🔴 Не готово к закупке';
   positiveSignals: string[];
   blockers: string[];
   risks: string[];
@@ -491,7 +493,7 @@ export function buildWeightDecision(product: RawProduct1688 | any, intelligence?
   return { weightKg: null, displayText: 'Вес: не указан', source: 'missing', isEstimated: false, canUseForCargo: false, canUseForRoi: false, reason: 'Вес не указан; для точного карго нужен вес выбранного SKU.' };
 }
 
-export function buildMarketDecision(_product: any): MarketDecision { return { status: 'not_required', rawCandidatesCount: 0, confirmedDirectCount: 0, similarLocalCount: 0, crossBorderCount: 0, categoryOnlyCount: 0, medianPriceRub: null, p25PriceRub: null, p75PriceRub: null, canShowMedianPrice: false, canCalculateRoi: false, confidence: 'low', reason: 'Автоматический WB/Ozon-поиск не входит в обязательный MVP. Рынок проверяется вручную или через будущий модуль конкурентов.' }; }
+export function buildMarketDecision(_product: any): MarketDecision { return { status: 'not_required', rawCandidatesCount: 0, confirmedDirectCount: 0, similarLocalCount: 0, crossBorderCount: 0, categoryOnlyCount: 0, medianPriceRub: null, p25PriceRub: null, p75PriceRub: null, canShowMedianPrice: false, canCalculateRoi: false, confidence: 'low', reason: 'CardZip готовит закупочный пакет по данным карточки и вопросам к поставщику.' }; }
 
 export function buildCostDecision(input: { priceDecision: PriceDecision; weightDecision: WeightDecision; yuanRate?: number; manualSalePriceRub?: number | null }): CostDecision {
   const { priceDecision: price, weightDecision: weight } = input;
@@ -502,15 +504,13 @@ export function buildCostDecision(input: { priceDecision: PriceDecision; weightD
   const costWithoutCargoRub = purchaseRub + bankRub + DEFAULT_FULFILLMENT_RUB;
   const cargoRub = weight.canUseForCargo && weight.weightKg ? Math.round(weight.weightKg * DEFAULT_CARGO_RUB_PER_KG) : null;
   const totalCostRub = cargoRub ? costWithoutCargoRub + cargoRub : null;
-  const sale = positive(input.manualSalePriceRub);
   const warnings = uniq([...(price.needsSkuConfirmation ? ['цена зависит от выбранного SKU/комплектации'] : []), ...(!weight.canUseForCargo ? ['карго не рассчитано — нужен вес с упаковкой'] : []), ...(weight.isEstimated ? ['вес только ориентировочный по категории'] : [])], 10);
-  if (sale && totalCostRub) { const marketplace = Math.round(sale * DEFAULT_MARKETPLACE_COST_RATE); const profit = sale - totalCostRub - marketplace; const roi = totalCostRub > 0 ? Math.round((profit / totalCostRub) * 100) : null; return { status: 'scenario_by_manual_sale_price', canShowPurchaseRub: true, canShowCostWithoutCargo: true, canShowCargo: true, canShowRoi: true, purchaseRub, costWithoutCargoRub, cargoRub, totalCostRub, manualSalePriceRub: sale, scenarioProfitRub: profit, scenarioRoiPercent: roi, breakEvenPriceRub: Math.round((totalCostRub + marketplace) / Math.max(0.01, 1 - DEFAULT_MARKETPLACE_COST_RATE)), warnings: [...warnings, 'Сценарий рассчитан по цене, введённой пользователем, а не по автоматическому рынку.'], nextAction: 'Проверить цену продажи вручную и подтвердить вес/упаковку перед закупкой.' }; }
-  return { status: cargoRub ? 'cost_with_manual_weight' : 'cost_without_cargo', canShowPurchaseRub: true, canShowCostWithoutCargo: true, canShowCargo: !!cargoRub, canShowRoi: false, purchaseRub, costWithoutCargoRub, cargoRub, totalCostRub, manualSalePriceRub: sale ?? null, scenarioProfitRub: null, scenarioRoiPercent: null, breakEvenPriceRub: null, warnings, nextAction: weight.canUseForCargo ? 'Введите предполагаемую цену продажи или добавьте конкурентов вручную.' : 'Уточните вес с упаковкой, затем пересчитаю себестоимость.' };
+  return { status: cargoRub ? 'cost_with_manual_weight' : 'cost_without_cargo', canShowPurchaseRub: true, canShowCostWithoutCargo: true, canShowCargo: !!cargoRub, canShowRoi: false, purchaseRub, costWithoutCargoRub, cargoRub, totalCostRub, manualSalePriceRub: null, scenarioProfitRub: null, scenarioRoiPercent: null, breakEvenPriceRub: null, warnings, nextAction: weight.canUseForCargo ? 'Себестоимость предварительно рассчитана. Перед партией подтвердите SKU, упаковку и образец.' : 'Уточните вес с упаковкой, затем пересчитаю себестоимость.' };
 }
 
 export function buildEconomyDecision(priceDecision: PriceDecision, weightDecision: WeightDecision, _marketDecision?: MarketDecision, opts: { yuanToRub?: number; manualSalePriceRub?: number | null } = {}): EconomyDecision {
   const cost = buildCostDecision({ priceDecision, weightDecision, yuanRate: opts.yuanToRub, manualSalePriceRub: opts.manualSalePriceRub });
-  return { status: cost.status, canShowCost: cost.canShowCostWithoutCargo, canShowCargo: cost.canShowCargo, canShowMargin: cost.canShowRoi, canShowRoi: cost.canShowRoi, costRub: cost.totalCostRub ?? cost.costWithoutCargoRub, costWithoutCargoRub: cost.costWithoutCargoRub, cargoRub: cost.cargoRub, profitRub: cost.scenarioProfitRub ?? null, roiPercent: cost.scenarioRoiPercent ?? null, warnings: cost.warnings, nextAction: cost.nextAction };
+  return { status: cost.status, canShowCost: cost.canShowCostWithoutCargo, canShowCargo: cost.canShowCargo, canShowMargin: false, canShowRoi: false, costRub: cost.totalCostRub ?? cost.costWithoutCargoRub, costWithoutCargoRub: cost.costWithoutCargoRub, cargoRub: cost.cargoRub, profitRub: null, roiPercent: null, warnings: cost.warnings, nextAction: cost.nextAction };
 }
 
 function looksLikeFeature(value: string): boolean {
@@ -582,14 +582,77 @@ export function buildReadinessDecision(input: { product: any; intelligence: Prod
   else if (score >= 75 && weight.canUseForCargo && !claimRisk.length) { status = 'ready_for_sample'; label = '🟢 Можно заказывать образец'; }
   else if (score < 45 || blockers.length >= 2) { status = 'high_risk'; label = '🔴 Высокий риск'; }
   else if (!weight.canUseForCargo || price.needsSkuConfirmation) { status = 'needs_supplier_confirmation'; label = '🟡 Нужны данные'; }
-  else { status = 'needs_market_check'; label = '🟡 Нужно проверить рынок'; }
-  const nextActions = uniq([...(missingData.length ? ['отправить вопросы поставщику и закрыть недостающие данные'] : []), ...(weight.canUseForCargo ? ['ввести предполагаемую цену продажи для сценария'] : ['уточнить вес с упаковкой']), 'подготовить SEO/ТЗ байеру и проверить рынок вручную', ...(score >= 55 ? ['рассмотреть заказ 1 образца после подтверждения SKU'] : [])], 5);
+  else { status = 'needs_supplier_confirmation'; label = '🟡 Нужно подтвердить данные'; }
+  const nextActions = uniq([...(missingData.length ? ['отправить вопросы поставщику и закрыть недостающие данные'] : []), ...(weight.canUseForCargo ? ['проверить образец и упаковку перед партией'] : ['уточнить вес с упаковкой']), 'подготовить SEO/ТЗ байеру и запросить данные у поставщика', ...(score >= 55 ? ['рассмотреть заказ 1 образца после подтверждения SKU'] : [])], 5);
   return { score, status, label, positiveSignals: uniq(positiveSignals, 8), blockers: uniq(blockers, 8), risks: uniq(risks, 10), missingData: uniq([...missingData, ...(intelligence.dataQuality?.missingCriticalFields ?? [])], 12), nextActions, canRecommendSample: score >= 55 && price.canCalculateCost, canRecommendBatch: false, reason: `${label}. Готовность ${score}/100: ${nextActions[0] ?? 'нужно уточнить данные'}.` };
 }
 
 export function buildDecisionContext(product: any) { const intelligence = getIntel(product); const sku = buildSkuDecision(product, intelligence); const price = buildPriceDecision(product, sku); const weight = buildWeightDecision(product, intelligence, sku); const market = buildMarketDecision(product); const economy = buildEconomyDecision(price, weight, market, { yuanToRub: product?.economics?.yuanToRub, manualSalePriceRub: product?.manualSalePriceRub ?? product?.manualSalePrice ?? product?.scenarioSalePriceRub }); const cost = buildCostDecision({ priceDecision: price, weightDecision: weight, yuanRate: product?.economics?.yuanToRub, manualSalePriceRub: product?.manualSalePriceRub ?? product?.manualSalePrice ?? product?.scenarioSalePriceRub }); const readiness = buildReadinessDecision({ product, intelligence, priceDecision: price, weightDecision: weight, skuDecision: sku }); return { intelligence, sku, price, weight, market, economy, cost, readiness, status: readiness.label, title: titleForReport(product, intelligence), categoryType: categoryType(product, intelligence) }; }
 
-export function buildStatusLine(price: PriceDecision, weight: WeightDecision, _market: MarketDecision, economy: EconomyDecision): string { const readinessLike = (!price.canCalculateCost) ? '🔴 Не готово к закупке' : (!weight.canUseForCargo || price.needsSkuConfirmation) ? '🟡 Нужны данные' : economy.canShowRoi ? '🟡 Сценарий по вашей цене' : '🟡 Нужно проверить рынок'; return readinessLike; }
+export function buildStatusLine(price: PriceDecision, weight: WeightDecision, _market: MarketDecision, _economy: EconomyDecision): string { const readinessLike = (!price.canCalculateCost) ? '🔴 Не готово к закупке' : (!weight.canUseForCargo || price.needsSkuConfirmation) ? '🟡 Нужны данные' : '🟡 Нужно подтвердить данные'; return readinessLike; }
+
+function topQuestions(product: any, x = buildDecisionContext(product), n = 7): string[] { return buildSupplierQuestions(product, x).ru.slice(0, n); }
+
+export function buildMainReport(product: any, statusInfo?: { creditsRemaining?: number }, _wbCategory?: any): string {
+  const x = buildDecisionContext(product);
+  const source = String(product?.platform ?? '1688').toUpperCase();
+  const supplierType = supplierTypeRu(product?.supplierType || product?.normalized1688?.supplierType || 'продавец');
+  const supplierRating = normalizeFact(product?.supplierRating ?? product?.normalized1688?.supplierRating);
+  const sold = positive(product?.normalized1688?.salesCount ?? product?.sold);
+  const moq = positive(product?.normalized1688?.moq ?? product?.moq);
+  const materials = materialsLine(x, product);
+  const colorLine = x.sku.colorOptions?.length ? `• Цвета: ${x.sku.colorOptions.slice(0, 8).join(', ')}` : null;
+  const modelLine = x.sku.sizeOptions?.length
+    ? `• Размеры/модели: ${x.sku.sizeOptions.slice(0, 10).join(', ')}`
+    : x.sku.ambiguousParams?.length
+      ? `• Параметры: ${x.sku.ambiguousParams.slice(0, 8).join(' / ')} — значение нужно уточнить`
+      : null;
+  const mainWeightText = x.weight.canUseForCargo ? x.weight.displayText.replace(/^Вес:\s*/i, '') : 'не указан';
+  const questions = topQuestions(product, x, 5).map(q => q.replace(/^\d+[.)]\s*/, ''));
+  const selectedSku = x.sku.ambiguousParams?.length ? 'выберите конкретный цвет и параметр SKU' : (x.sku.recommendedSampleSku || (x.sku.needsSelection ? 'выберите конкретный цвет/размер/модель' : 'уточнить у поставщика'));
+  const packageItems = ['вопросы поставщику', 'ТЗ байеру', 'ТЗ карго', 'чек-лист образца', 'SEO-черновик', 'фото товара'];
+  const verdict = x.price.canCalculateCost
+    ? 'Партию закупать рано. Можно запросить данные и заказать 1–2 образца.'
+    : 'Партию закупать рано. Сначала уточните цену выбранного SKU и базовые данные у поставщика.';
+  const lines = [
+    `📦 <b>${html(x.title)}</b>`,
+    '',
+    `Источник: ${html(source)}`,
+    `Поставщик: ${html([supplierType, supplierRating ? `рейтинг ${supplierRating}` : '', sold ? `заказов ${Math.round(sold).toLocaleString('ru-RU')}` : ''].filter(Boolean).join(' · '))}`,
+    '',
+    '📌 <b>Товар</b>',
+    `• Цена: ${html(displayPriceSummary(x.price.displayPriceText))}`,
+    `• Выбранный SKU: ${html(selectedSku)}`,
+    `• MOQ: ${moq ? `${Math.round(moq).toLocaleString('ru-RU')} шт.` : 'уточнить'}`,
+    `• SKU: ${html(displayMainSkuSummary(x))}`,
+    ...(colorLine ? [html(colorLine)] : []),
+    ...(modelLine ? [html(modelLine)] : []),
+    `• Материал: ${html(materials)}`,
+    `• Вес: ${html(mainWeightText)}`,
+    '',
+    `<b>${html(procurementStatusText(x))}</b>`,
+    '',
+    '⚠️ <b>Что уточнить</b>',
+    ...(questions.length ? questions.map(q => `• ${html(q)}`) : ['• цену, SKU, вес и упаковку выбранного товара']),
+    '',
+    '💸 <b>Предварительная себестоимость</b>',
+    ...buildCostSummaryLines(x).map(html),
+    '',
+    '📁 <b>Закупочный пакет готов</b>',
+    ...packageItems.map(v => `• ${html(v)}`),
+    '',
+    '🎯 <b>Вывод</b>',
+    html(verdict),
+    '',
+    'Что сделать:',
+    '1. Нажмите «💬 Вопросы поставщику».',
+    '2. Отправьте текст поставщику в чат 1688.',
+    '3. Скачайте закупочный пакет.',
+    '',
+    `📦 Осталось: ${typeof statusInfo?.creditsRemaining === 'number' ? Math.max(0, statusInfo.creditsRemaining) : 0} анализов`,
+  ];
+  return lines.join('\n');
+}
 
 function procurementStatusText(x: ReturnType<typeof buildDecisionContext>): string {
   if (!x.price.canCalculateCost) return '🔴 Статус: данных мало';
@@ -729,14 +792,25 @@ function cnQuestionFromCheck(check: string): string {
 
 export function build1688Detail(product: any): string {
   const p = ensureProductProcurementProfile(product);
+  const cleaned = cleanRawAttributes(product?.attributes ?? product?.normalized1688?.attributes ?? [], {
+    fashionLike: /clothing|footwear|одежд|обув/i.test(String(p.identity.productKind)),
+  });
   const x = buildDecisionContext(product);
-  const facts = mergeFacts(collectRawAttributes(product, 24), collectIntelFacts(product, x.intelligence, 10)).slice(0, 20);
-  const skuExamples = p.sku.normalizedExamples.slice(0, 15).map(l => `• ${l}`);
-  return [
+  const skuExamples = [
+    ...p.sku.normalizedExamples.slice(0, 8),
+    ...x.sku.skuVariantsNormalized.slice(0, 6).map(v => v.label),
+  ].filter(Boolean).filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i).slice(0, 8);
+  const useful = cleaned.userFacing.slice(0, 10).map(a => `• ${html(a.label)}: ${html(a.value)}`);
+  const materialText = p.identity.materials.join(', ') || 'нужно уточнить';
+  const supplierName = isMaterialLikeSupplierName(product?.supplierName) ? 'не указано' : (product?.supplierName || p.supplier.name || 'не указано');
+  const photoCount = imagesCount(product) || product?.normalized1688?.imageCount || '—';
+  const moq = positive(product?.moq ?? product?.normalized1688?.moq);
+  const weight = positive(product?.weightKg ?? product?.packedWeightKg ?? product?.normalized1688?.weightKg);
+  const detailLines = [
     '📦 <b>Данные товара с 1688</b>',
     '',
     '<b>Название CN:</b>',
-    html(cleanChineseTitle(product?.titleCn ?? product?.normalized1688?.titleCn ?? '') || '—'),
+    html(stripRawSourceLabels(cleanChineseTitle(product?.titleCn ?? product?.normalized1688?.titleCn ?? '')).replace(/cross[\s-]?border/gi, '').trim() || '—'),
     '',
     '<b>Название RU:</b>',
     html(p.identity.titleForReport),
@@ -745,40 +819,43 @@ export function build1688Detail(product: any): string {
     html(p.pricing.displayPriceText),
     '',
     '<b>Выбранный SKU:</b>',
-    html(formatSelectedSkuLine(p.identity.productKind, p.sku, p.pricing)),
+    html(p.sku.selectedSkuText ?? 'не определён'),
     '',
     '<b>SKU:</b>',
     html(p.sku.skuSummary),
-    ...(skuExamples.length ? skuExamples.map(html) : ['• SKU не указаны']),
-    ...(p.sku.plugStandards.length ? [`• стандарт питания/вилка: ${html(plugStandardsDisplayValue(p.sku.plugStandards))}`] : []),
+    ...(skuExamples.length ? skuExamples.map(v => `• ${html(v)}`) : ['• SKU нужно уточнить']),
     '',
     '<b>Поставщик:</b>',
-    `• название: ${html(p.supplier.name || 'не указано')}`,
-    `• тип: ${html(p.supplier.displayType)}`,
+    `• название: ${html(supplierName)}`,
+    `• тип: ${html(p.supplier.displayType || 'не указан')}`,
     `• рейтинг: ${html(p.supplier.rating || '—')}`,
     `• заказов: ${html(p.supplier.orders || '—')}`,
-    `• MOQ: ${positive(product?.moq ?? product?.normalized1688?.moq) ? `${positive(product?.moq ?? product?.normalized1688?.moq)} шт.` : 'уточнить'}`,
+    `• MOQ: ${moq ? `${moq} шт.` : 'уточнить'}`,
     '',
     '<b>Ключевые характеристики:</b>',
-    `• тип товара: ${html(p.identity.categoryType || p.identity.productKind)}`,
-    `• материалы: ${html(p.identity.materials.slice(0, 3).join(', ') || 'уточнить у поставщика')}`,
-    ...(facts.length ? facts.map(f => `• ${html(f.name)}: ${html(f.value)} — ${html(f.status)}`) : []),
+    `• тип товара: ${html(p.identity.titleForReport)}`,
+    p.identity.formFactor ? `• конструкция: ${html(p.identity.formFactor)}` : '',
+    p.sku.sizes.length ? `• размер: ${html(p.sku.sizes.join(', '))}` : '',
+    `• материал: ${html(materialText)}`,
+    ...(useful.length ? useful : []),
+    ...(p.identity.useCases.length ? [`• назначение: ${html(p.identity.useCases.slice(0, 3).join(', '))}`] : []),
     '',
     '<b>Логистика:</b>',
-    `• вес: ${html(x.weight.displayText.replace(/^Вес:\s*/i, ''))}`,
-    `• фото: ${imagesCount(product) || '—'}`,
-    `• остаток: ${html(product?.stock ?? product?.normalized1688?.stock ?? '—')}`,
-  ].join('\n');
+    `• вес: ${weight ? `${weight} кг` : 'не указан'}`,
+    `• упаковка: ${p.cargo.mustAsk.some(v => /габарит|упаков/i.test(v)) ? 'нужно уточнить' : 'не указана'}`,
+    `• фото: ${html(photoCount)}`,
+  ].filter(Boolean);
+  return detailLines.join('\n');
 }
 
 function seoFriendlyTitle(product: any, x: ReturnType<typeof buildDecisionContext>, content: any): string {
-  const rawTitle = normalizeFact(content.title || content.wbTitle || x.intelligence.cleanTitles?.titleForWb || x.title);
+  const rawTitle = normalizeFact(content.title || content.titleDraft || (x.intelligence.cleanTitles as any)?.titleForSeo || x.title);
   const text = `${rawTitle} ${product?.titleCn ?? ''}`.toLowerCase();
   if (/бахил|чехл.*обув|鞋套/.test(text)) return 'Бахилы многоразовые водонепроницаемые для обуви';
   if (isSmallAppliance(product, x)) return 'Мини стиральная машина портативная 4 л для белья и носков';
   if (isSleepMask(product, x)) return 'Маска для сна 3D с затемнением мягкая';
   if (isUmbrella(product, x)) return 'Зонт автоматический складной с крючком и чехлом';
-  if (/сабо|洞洞鞋|护士鞋/.test(text)) return 'Медицинские сабо EVA для работы и повседневной носки';
+  if (/сабо|洞洞鞋|护士鞋/.test(text)) return 'Сабо EVA для работы и повседневной носки';
   if (/сандал|凉鞋/.test(text)) return 'Женские сандалии летние с декоративным элементом';
   return rawTitle || x.title;
 }
@@ -873,7 +950,7 @@ export function buildSeoDraft(product: any): string {
     ...(colors ? colors.split(', ').map(c => `${x.title.toLowerCase()} ${c}`) : []),
   ], 18);
   return [
-    '# SEO-черновик WB/Ozon',
+    '# SEO-черновик карточки товара',
     '',
     'Статус документа: черновик. Можно использовать после подтверждения веса, материала, размерной сетки и выбранного SKU.',
     '',
@@ -1100,7 +1177,7 @@ export function buildRiskChecklist(product: any): string {
   const sampleChecks = cleanRuleList(rules.sampleMustCheck, product, x, 12);
   const redFlags = cleanRuleList(rules.redFlags, product, x, 12);
   const beforeBatch = uniq([
-    'ручную проверку 3–5 конкурентов WB/Ozon',
+    'проверку ответа поставщика и образца',
     'финальную себестоимость с карго',
     'ответ поставщика по весу, упаковке и выбранному SKU',
     'результат проверки образца',
@@ -1112,7 +1189,7 @@ export function buildRiskChecklist(product: any): string {
     'Статус документа: рабочий чек-лист для закупки. Красные флаги обязательны к проверке до партии.',
     '',
     '## Главные риски',
-    ...(x.readiness.risks.length ? x.readiness.risks.map(r => `- ${r}`) : ['- рынок и конкуренты не проверены вручную']),
+    ...(x.readiness.risks.length ? x.readiness.risks.map(r => `- ${r}`) : ['- данные поставщика и образец ещё не подтверждены']),
     '',
     '## Что проверить до образца',
     ...uniq([...x.readiness.missingData, ...rules.buyerMustCheck.slice(0, 8), 'реальные фото товара и упаковки'], 14).map(m => `- ${m}`),

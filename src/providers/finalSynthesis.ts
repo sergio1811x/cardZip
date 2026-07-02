@@ -123,7 +123,7 @@ function normalizeCharacteristics(
       if (!name || !val) continue;
       if (containsChinese(name) || containsChinese(val)) continue;
 
-      // Если модель пометила как небезопасное для WB — не кладём в characteristics.
+      // Если модель пометила как небезопасное для карточка товара — не кладём в characteristics.
       if (row.safeForWb === false) continue;
 
       out[name] = val;
@@ -292,13 +292,13 @@ function buildPrompt(
 
   return `CardZip 2.0 SEO Writer.
 
-Сделай безопасный, продающий SEO-черновик карточки маркетплейса. Это закупочный черновик, не аналитика рынка и не расчёт прибыли.
+Сделай безопасный, продающий черновик карточки товара по данным 1688. Это не закупочная аналитика и не расчёт себестоимости.
 
 Данные:
 - Тип: ${ctx.identity?.productType ?? ''}
 - Категория: ${ctx.identity?.categoryType ?? ''}
 - Название: ${ctx.titles?.shortRu ?? ''}
-- Draft title: ${ctx.titles?.wbTitleDraft ?? ''}
+- черновик карточки: ${ctx.titles?.wbTitleDraft ?? ''}
 - Сценарии: ${(ctx.identity?.useCases ?? []).join(', ')}
 - Facts: ${JSON.stringify(safeFacts)}
 - Allowed claims: ${allowedClaims.join(', ') || 'нет'}
@@ -318,13 +318,13 @@ ${categoryRules}
   "keywords": ["10-15 релевантных запросов"],
   "characteristics": {"Тип":"...", "Материал":"..."},
   "needsClarification": ["что уточнить перед публикацией/закупкой"],
-  "warnings": ["цена/SKU/вес/рынок/claims, если актуально"],
+  "warnings": ["цена/SKU/вес/контекст закупки/claims, если актуально"],
   "forbiddenRemoved": ["что не использовано как факт"],
   "confidence": "high|medium|low"
 }
 
 Правила:
-- Не упоминай 1688, поставщика, закупочную цену, ROI и внутреннюю экономику в SEO.
+- Не упоминай 1688, поставщика, закупочную цену, показатель и внутреннюю экономику в SEO.
 - Не добавляй другой тип товара или чужую категорию.
 - Не пиши forbiddenClaims как факт; перенеси в needsClarification/forbiddenRemoved.
 - Не превращай claim одного SKU в свойство всего товара.
@@ -432,13 +432,13 @@ async function callOpenRouter(
 ): Promise<RawSeoResult | null> {
   const body: Record<string, unknown> = {
     model,
-    max_tokens: 4000,
+    max_tokens: 2000,
     temperature: 0.2,
     messages: [
       {
         role: 'system',
         content: [
-          'Ты создаёшь безопасный черновик карточки маркетплейса.',
+          'Ты создаёшь безопасный черновик карточки товара.',
           'Ты не придумываешь свойства.',
           'Ты возвращаешь только валидный JSON.',
         ].join('\n'),
@@ -458,7 +458,7 @@ async function callOpenRouter(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!res.ok) return null;
@@ -543,7 +543,7 @@ function fallbackSeo(ctx: ProductContext): AiContentResult {
       normalizeText(ctx.titles?.wbTitleDraft) ||
       normalizeText(ctx.titles?.shortRu) ||
       normalizeText(ctx.titles?.cleanRu) ||
-      'Товар для маркетплейса';
+      'Товар для карточка товара';
 
   return {
     titleRu: safeTitle,

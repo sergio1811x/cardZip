@@ -24,7 +24,7 @@ function toProductIntelligence(raw: any, productContext: any) {
   const titleRu = titles.cleanRu || raw?.titleEn || cleanCn || raw?.titleCn || 'Товар 1688';
   return {
     productIdentity: {
-      marketNameRu: titleRu,
+      displayNameRu: titleRu,
       shortNameRu: titles.shortRu || titleRu,
       productKind: identity.productType || titleRu,
       categoryType: identity.categoryType || 'other',
@@ -47,7 +47,7 @@ function toProductIntelligence(raw: any, productContext: any) {
       titleCnClean: cleanCn,
       titleRuClean: titleRu,
       titleForReport: titles.shortRu || titleRu,
-      titleForWb: titles.wbTitleDraft || titleRu,
+      titleForSeo: titles.titleForSeo || titles.wbTitleDraft || titleRu,
     },
     wbSearch: {
       wbCoreQuery: wbSearch.coreQuery || titleRu,
@@ -59,7 +59,7 @@ function toProductIntelligence(raw: any, productContext: any) {
     matchingRules: {
       mustHaveForDirectAnalog: wbSearch.directMatchRules || wbSearch.mustInclude || [],
       allowedDifferences: ['цвет как SKU', 'размер как SKU'],
-      directAnalogBlockers: wbSearch.rejectRules || [],
+      rejectRules: wbSearch.rejectRules || [],
       similarOnlyIf: [],
       rejectIf: wbSearch.mustExclude || [],
     },
@@ -78,7 +78,7 @@ function toProductIntelligence(raw: any, productContext: any) {
       skuRisk: ctx.sku?.needsSelection ? 'SKU нужно выбрать' : '',
       priceRisk: ctx.price?.needsConfirmation ? 'цену SKU/партии нужно подтвердить' : '',
       weightRisk: raw?.weightKg > 0 ? '' : 'нужен вес с упаковкой',
-      marketRisk: 'рынок проверяется вручную; WB/Ozon не блокирует закупочный пакет',
+      packageRisk: 'недостающие закупочные данные переносятся в вопросы поставщику',
       visionConfidence: 'medium',
       textConfidence: 'medium',
       overallConfidence: ctx.dataQuality?.status === 'reliable' ? 'high' : 'medium',
@@ -95,17 +95,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!jobId) return res.status(400).json({ error: 'jobId required' });
 
   try {
-    console.log(`[step2] Start: ${jobId}`);
-    const { data: job, error: jobErr } = await supabase.from('jobs').select('*').eq('id', jobId).single();
-    if (jobErr) console.error('[step2] supabase error', jobErr.message);
-    if (!job || job.status !== 'elim_done') {
-      console.warn(`[step2] Skip: job=${!!job} status=${job?.status}`);
-      return res.status(200).json({ ok: true, skip: true });
-    }
-    if (!await acquireStepLock('step2', jobId)) {
-      console.warn(`[step2] Skip: lock already held`);
-      return res.status(200).json({ ok: true, skip: true });
-    }
+    const { data: job } = await supabase.from('jobs').select('*').eq('id', jobId).single();
+    if (!job || job.status !== 'elim_done') return res.status(200).json({ ok: true, skip: true });
+    if (!await acquireStepLock('step2', jobId)) return res.status(200).json({ ok: true, skip: true });
     await extendProcessingLock(job.user_id);
 
     await supabase.from('jobs').update({ status: 'ai_processing', updated_at: new Date().toISOString() }).eq('id', jobId);
@@ -160,11 +152,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!profileValidation.ok) console.warn('[step2-ai] profile validator:', profileValidation.errors.join('; '));
 
     // Backward-compatible fields from productContext
-    const wbCoreQuery = productContext?.wbSearch?.coreQuery ?? '';
+    const packageCoreQuery = productContext?.wbSearch?.coreQuery ?? '';
     const categoryType = productContext?.identity?.categoryType ?? 'other';
     const validatedQueries = productContext?.wbSearch?.queryLadder ?? [];
 
-    // Temporary SEO (will be regenerated in step4 with market data)
+    // Temporary SEO (final documents are regenerated from ProductProcurementProfile)
     const seoContent = {
       titleRu: productContext?.titles?.cleanRu ?? raw.titleEn ?? raw.titleCn,
       description: '',
@@ -175,9 +167,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     progress?.stop();
 
-    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | cat: ${categoryType} | wbCore: ${wbCoreQuery}`);
+    console.log(`[step2-ai] ${seoContent.titleRu?.slice(0, 40)} | cat: ${categoryType} | core: ${packageCoreQuery}`);
 
-    const { error: updateErr } = await supabase.from('jobs').update({
+    await supabase.from('jobs').update({
       status: 'ai_done',
       result_json: {
         ...(job.result_json as any),
@@ -188,7 +180,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         productProcurementProfile: profileValidation.fixedProfile,
         procurementProfile: profileValidation.fixedProfile,
         mainImageForProductIntelligence,
-        wbCoreQuery,
+        packageCoreQuery,
         categoryType,
         validatedQueries,
         // backward compat for step3
@@ -198,29 +190,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           material: Object.entries(productContext.facts).filter(([k]) => k.includes('материал')).map(([,v]) => v),
           hardConflicts: productContext.conflicts.filter(c => c.severity === 'high').map(c => c.field),
           softConflicts: productContext.conflicts.filter(c => c.severity !== 'high').map(c => c.field),
-          directAnalogBlockers: productContext.wbSearch.rejectRules,
-          marketSynonyms: productContext.wbSearch.queryLadder,
+          rejectRules: productContext.wbSearch.rejectRules,
+          searchSynonyms: productContext.wbSearch.queryLadder,
           mustKeep: productContext.wbSearch.mustInclude,
           doNotSearch: productContext.wbSearch.mustExclude,
           audience: productContext.identity.audience,
         } : null,
-        queryPlan: productContext ? {
+        legacyQueryPlan: productContext ? {
           L1_exact: productContext.wbSearch.queryLadder.slice(0, 2),
           L2_commercial: productContext.wbSearch.queryLadder.slice(2, 4),
           L3_subtype: [],
           L4_core: [productContext.identity.coreObject],
           L5_category: [],
         } : null,
-        productLexicon: productContext ? {
+        packageLexicon: productContext ? {
           mainTerms: [productContext.identity.coreObject],
           hardNegativeTerms: productContext.wbSearch.mustExclude,
         } : null,
       },
     }).eq('id', jobId);
-    if (updateErr) console.error('[step2] Supabase update ai_done failed:', updateErr.message);
-    else console.log('[step2] Status set to ai_done');
 
-    // Chain → step3-package (legacy endpoint name step3-market)
+    // Chain → step3-package
     const sent = await triggerPipelineStep(req, '/api/step3-market', { jobId }, { logPrefix: 'step2', timeoutMs: 8_000 });
 
     if (!sent) {

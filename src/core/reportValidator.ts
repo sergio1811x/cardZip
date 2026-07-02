@@ -52,8 +52,8 @@ const ZERO_WEIGHT_PATTERN = /(?:^|[^\d])0(?:[,.]0+)?\s*(?:кг|kg)\b/i;
 const LONG_FLOAT_PATTERN = /\d+[.,]\d{4,}/;
 const RAW_DEBUG_PATTERN =
   /\b(?:debug|rawPriceFields|extraInfoKeys|quote_type|stack trace|object Object)\b/i;
-const ROI_PATTERN =
-  /\b(?:ROI|марж[аиу]|прибыль|рентабельность)\b[^\n\r]*(?:\d|%|₽)/i;
+const показатель_PATTERN =
+  /\b(?:показатель|марж[аиу]|результат|рентабельность)\b[^\n\r]*(?:\d|%|₽)/i;
 const MARKET_PRICE_PATTERN =
   /(?:рыночн[а-яё]*\s+цен[а-яё]*|цена\s+продажи|sellPrice|marketPrice)[^\n\r]*(?:\d|₽)/i;
 const POSITIVE_BUY_PATTERN =
@@ -288,7 +288,7 @@ function sanitizeArtifacts(
             (line) =>
               isNegativeEconomyContext(line) ||
               isScenarioEconomyContext(line) ||
-              (!ROI_PATTERN.test(line) && (!MARKET_PRICE_PATTERN.test(line) || isScenarioEconomyContext(line))),
+              (!показатель_PATTERN.test(line) && (!MARKET_PRICE_PATTERN.test(line) || isScenarioEconomyContext(line))),
           )
           .join("\n")
           .trim();
@@ -465,7 +465,7 @@ function inferSafeSummary(
   if (!hasPrice) missing.push("цена выбранного SKU/партии");
   if (!hasWeight) missing.push("вес с упаковкой");
   if (skuNeedsSelection) missing.push("выбранный SKU");
-  /* WB/Ozon market is optional in no-WB MVP; do not add it as blocking missing data. */
+  /* карточки товара market is optional in no-карточка товара MVP; do not add it as blocking missing data. */
 
   const mainRisk =
     criticalIssues[0]?.problem ||
@@ -482,7 +482,7 @@ function inferSafeSummary(
     mainRisk,
     nextStep: missing.length
       ? `Запросить у поставщика: ${missing.slice(0, 4).join(", ")}.`
-      : "Сверить выбранный SKU, упаковку и прямые аналоги вручную перед закупкой.",
+      : "Сверить выбранный SKU, упаковку и прямые похожие товары вручную перед закупкой.",
     doNotDo:
       "Не закупать партию, пока не подтверждены SKU, вес с упаковкой, упаковка и ручная проверка рынка.",
   };
@@ -543,7 +543,7 @@ function isNegativeClaimContext(line: string): boolean {
 }
 
 function isNegativeEconomyContext(line: string): boolean {
-  return /(?:не\s+считаю|не\s+считать|не\s+показываю|не\s+подтвержден[а-яё]*|рынок\s+не\s+подтвержд|нет\s+подтвержд|нельзя\s+считать|без\s+прямых\s+аналогов)/i.test(
+  return /(?:не\s+считаю|не\s+считать|не\s+показываю|не\s+подтвержден[а-яё]*|контекст закупки\s+не\s+подтвержд|нет\s+подтвержд|нельзя\s+считать|без\s+прямых\s+похожих товаров)/i.test(
     line,
   );
 }
@@ -644,7 +644,7 @@ function unresolvedAfterSanitizer(
   if (issue.field === "artifacts.debug")
     return RAW_DEBUG_PATTERN.test(sanitizedText);
   if (issue.field === "economics.roi")
-    return ROI_PATTERN.test(textForEconomyScan(sanitizedText));
+    return показатель_PATTERN.test(textForEconomyScan(sanitizedText));
   if (issue.field === "market.price")
     return MARKET_PRICE_PATTERN.test(textForEconomyScan(sanitizedText));
   return true;
@@ -732,14 +732,14 @@ export function runHardValidator(input: {
   if (
     directAnalogsCount <= 0 &&
     ((canShowRoi || canShowMargin) && !/scenario|manual|сценар|ручн|введ[её]нн|по\s+вашей\s+цене/i.test(`${economicsStatus} ${fullText}`) ||
-      (ROI_PATTERN.test(textForEconomyScan(fullText)) && !/сценар|введ[её]нн|по\s+вашей\s+цене|ручн|manual/i.test(fullText)))
+      (показатель_PATTERN.test(textForEconomyScan(fullText)) && !/сценар|введ[её]нн|по\s+вашей\s+цене|ручн|manual/i.test(fullText)))
   ) {
     addIssue(
       issues,
       "economics.roi",
       "critical",
-      "ROI/маржа показаны без прямых аналогов.",
-      "Скрыть ROI и маржу. Написать: “Рыночная цена не подтверждена. ROI и маржу считать нельзя.”",
+      "показатель/себестоимость показаны без прямых похожих товаров.",
+      "Скрыть показатель и себестоимость. Написать: “Рыночная цена не подтверждена. показатель и себестоимость считать нельзя.”",
     );
   }
 
@@ -753,14 +753,14 @@ export function runHardValidator(input: {
       "market.price",
       "critical",
       "Рыночная цена используется при неподтверждённом рынке.",
-      "Не показывать цену продажи как рыночную, пока marketConfirmed/canUseForEconomics не true.",
+      "Не показывать цену продажи как закупочную, пока marketConfirmed/canUseForEconomics не true.",
     );
   }
 
   if (
     directAnalogsCount <= 0 &&
     broadCategoryCount > 0 &&
-    /рынок\s+подтвержд|рыночная\s+цена|можно\s+считать\s+roi/i.test(fullText)
+    /контекст закупки\s+подтвержд|закупочная\s+цена|можно\s+считать\s+roi/i.test(fullText)
   ) {
     addIssue(
       issues,
@@ -781,7 +781,7 @@ export function runHardValidator(input: {
       issues,
       "market.crossBorder",
       "critical",
-      "Cross-border товары используются или могут быть поняты как база экономики локального WB.",
+      "Cross-border товары используются или могут быть поняты как база экономики локального карточка товара.",
       "Указать, что cross-border не используется для локальной экономики.",
     );
   }
@@ -866,15 +866,15 @@ export function runHardValidator(input: {
   );
   const userCard = String(artifacts.userCard ?? artifacts.UserCard ?? "");
   if (lastMessage && userCard) {
-    const lastHasRoi = ROI_PATTERN.test(textForEconomyScan(lastMessage));
-    const mainHasRoi = ROI_PATTERN.test(textForEconomyScan(userCard));
+    const lastHasRoi = показатель_PATTERN.test(textForEconomyScan(lastMessage));
+    const mainHasRoi = показатель_PATTERN.test(textForEconomyScan(userCard));
     if (lastHasRoi !== mainHasRoi && directAnalogsCount <= 0) {
       addIssue(
         issues,
         "lastMessage.sourceOfTruth",
         "high",
-        "/last и основная карточка расходятся по ROI/марже.",
-        "Собрать оба текста из одного AnalysisSnapshot и скрыть ROI без direct analogs.",
+        "/last и основная карточка расходятся по показатель/марже.",
+        "Собрать оба текста из одного AnalysisSnapshot и скрыть показатель без direct analogs.",
       );
     }
   }
@@ -920,15 +920,6 @@ export function validateReport(
     hasDirectAnalogs: boolean;
     wb429: boolean;
     intelligence?: ProductIntelligence | null;
-    // Skip step 5 (forbidden-category-term deletion). Use this when the text was
-    // already built and validated per-productKind by procurementProfile.ts, whose
-    // classifier (vision + text + rules consensus) and per-kind forbidden-word list
-    // cover far more product types than this module's fixed 11-bucket categoryRules.
-    // Without this flag, a product type this module doesn't recognize (anything
-    // outside shoes/clothes/electronics/home/beauty/accessory/kitchen/fishing/tools/
-    // passive_insect_trap) silently falls back to a wrong bucket and this step blindly
-    // deletes real spec words (e.g. "напряжение"/"мощность") from the final report.
-    skipCategoryTermCheck?: boolean;
   },
 ): ValidationResult {
   const errors: string[] = [];
@@ -973,34 +964,32 @@ export function validateReport(
   }
 
   // 5. No forbidden category terms
-  if (!context.skipCategoryTermCheck) {
-    for (const forbidden of rules.forbiddenFields) {
-      const pattern = new RegExp(forbidden, "gi");
-      if (pattern.test(fixed)) {
-        errors.push(`forbidden term for ${categoryType}: ${forbidden}`);
-        fixed = fixed.replace(pattern, "");
-      }
+  for (const forbidden of rules.forbiddenFields) {
+    const pattern = new RegExp(forbidden, "gi");
+    if (pattern.test(fixed)) {
+      errors.push(`forbidden term for ${categoryType}: ${forbidden}`);
+      fixed = fixed.replace(pattern, "");
     }
   }
 
-  // 6. ROI without direct analogs
+  // 6. показатель without direct analogs
   if (
     !context.hasDirectAnalogs &&
-    ROI_PATTERN.test(textForEconomyScan(fixed)) &&
+    показатель_PATTERN.test(textForEconomyScan(fixed)) &&
     !/сценар|введ[её]нн|по\s+вашей\s+цене|ручн|manual/i.test(fixed)
   ) {
-    errors.push("ROI calculated without direct analogs");
+    errors.push("показатель calculated without direct analogs");
     fixed = fixed
       .split("\n")
       .filter(
-        (line) => isNegativeEconomyContext(line) || !ROI_PATTERN.test(line),
+        (line) => isNegativeEconomyContext(line) || !показатель_PATTERN.test(line),
       )
       .join("\n");
   }
 
-  // 7. WB 429 not mentioned
+  // 7. карточка товара 429 not mentioned
   if (context.wb429 && !fixed.includes("ограничил") && !fixed.includes("429")) {
-    errors.push("WB 429 not mentioned");
+    errors.push("карточка товара 429 not mentioned");
   }
 
   // 8. Intelligence-based forbidden content

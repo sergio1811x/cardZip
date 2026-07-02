@@ -13,94 +13,10 @@ export interface WbTrendsResult {
   latencyMs: number;
 }
 
-const WBCON_TRENDS_URL = 'https://wbcon.ru/wp-json/wb-services/v1/extended/get_wb_trends_by_query';
-
 export async function fetchWbTrends(query: string): Promise<WbTrendsResult> {
-  const start = Date.now();
-  try {
-    const res = await fetch(WBCON_TRENDS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, offset: 0, limit: 50 }),
-      signal: AbortSignal.timeout(5_000),
-    });
-
-    if (!res.ok) {
-      console.log(`[wbcon-trends] ${query} → HTTP ${res.status}`);
-      return { query, trends: [], latencyMs: Date.now() - start };
-    }
-
-    const data = await res.json() as any;
-    const trends: WbTrend[] = (data?.trends ?? []).map((t: any) => ({
-      search_words: t.search_words ?? '',
-      weeks_request_per_day: t.weeks_request_per_day ?? 0,
-      month_request_per_day: t.month_request_per_day ?? 0,
-      rank: t.rank ?? 0,
-      products: t.products ?? 0,
-      coef: t.coef ?? 0,
-    }));
-
-    console.log(`[wbcon-trends] ${query} → ${trends.length} trends, ${Date.now() - start}ms`);
-    return { query, trends, latencyMs: Date.now() - start };
-  } catch (e: any) {
-    console.log(`[wbcon-trends] ${query} → error: ${e.message}, ${Date.now() - start}ms`);
-    return { query, trends: [], latencyMs: Date.now() - start };
-  }
+  return { query, trends: [], latencyMs: 0 };
 }
 
-export function filterRelevantTrends(
-  trends: WbTrend[],
-  coreQuery: string,
-  productType: string,
-  materials: string[],
-  negativeMatches?: string[],
-  directAnalogBlockers?: string[],
-): WbTrend[] {
-  // WBCON trends are search-demand hints, not direct analogs.
-  // No product-specific hardcode here: blockers must come from Product Intelligence.
-  const excludePatterns = [
-    /медицинск/i,
-    /ортопедическ/i,
-    /профессиональн/i,
-  ];
-
-  const coreLower = coreQuery.toLowerCase();
-  const typeLower = productType.toLowerCase();
-  const materialSet = new Set(materials.map((m) => m.toLowerCase()));
-
-  let result = trends
-    .filter((t) => {
-      const w = t.search_words.toLowerCase();
-
-      if (!w.includes(coreLower.split(' ')[0])) return false;
-
-      if (excludePatterns.some((p) => p.test(w))) return false;
-
-      const materialConflictTerms = ['кожаные', 'кожа', 'замшевые', 'замша', 'текстильные', 'деревянные', 'металлические'];
-      for (const cm of materialConflictTerms) {
-        if (w.includes(cm) && !materialSet.has(cm) && !typeLower.includes(cm)) return false;
-      }
-
-      return true;
-    })
-    .sort((a, b) => b.weeks_request_per_day - a.weeks_request_per_day);
-
-  // Filter by negative matches
-  if (negativeMatches?.length) {
-    const filtered = result.filter(t => {
-      const w = t.search_words.toLowerCase();
-      return !negativeMatches.some(neg => w.includes(neg.toLowerCase()));
-    });
-    if (filtered.length > 0) result = filtered;
-  }
-
-  // Filter by analog blockers
-  if (directAnalogBlockers?.length) {
-    result = result.filter(t => {
-      const w = t.search_words.toLowerCase();
-      return !directAnalogBlockers.some(blocker => w.includes(blocker.toLowerCase()));
-    });
-  }
-
-  return result.slice(0, 10);
+export function filterRelevantTrends(trends: WbTrend[]): WbTrend[] {
+  return trends;
 }
