@@ -8,7 +8,7 @@ type ProductIntelligenceImageInput = {
   note?: string;
 };
 
-type RawProductForCanonicalizer = {
+export type RawProductForCanonicalizer = {
   offerId: string;
   titleCn: string;
   titleRu?: string;

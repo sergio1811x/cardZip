@@ -199,6 +199,8 @@ export interface AnalysisSnapshot {
   offerId: string;
   sourceUrl: string;
   productContext: ProductContext | null;
+  factSheet?: ProductFactSheet | null;
+  categoryPolicy?: CategoryPolicyProfile | null;
 
   supplier: {
     name: string;
@@ -257,6 +259,30 @@ export interface QaResult {
   issues: string[];
   fixedArtifacts?: GeneratedArtifacts;
   safeUserSummary?: string;
+  canShowToUser?: boolean;
+  confidence?: 'low' | 'medium' | 'high';
+  summary?: string;
+  warnings?: string[];
+  criticalIssues?: string[];
+  requiredEdits?: Array<Record<string, unknown>>;
+}
+
+export interface GapPlannerResult {
+  missingFacts: string[];
+  supplierQuestionsRu: string[];
+  requiredConfirmations: string[];
+  warnings: string[];
+}
+
+export interface ConsistencyAuditResult {
+  decision: 'PASS' | 'FIX_REQUIRED' | 'BLOCK';
+  summary: string;
+  issues: string[];
+  requiredEdits: Array<{
+    artifact: string;
+    reason: string;
+    instruction: string;
+  }>;
 }
 
 
@@ -548,6 +574,90 @@ export interface SupplierQuestions {
   cn: string[];
 }
 
+export type FactStatus =
+  | 'confirmed'
+  | 'extracted'
+  | 'inferred'
+  | 'supplier_pending'
+  | 'unknown'
+  | 'conflict';
+
+export type FactSourceKind =
+  | 'title'
+  | 'sku'
+  | 'attribute'
+  | 'description'
+  | 'supplier'
+  | 'seller'
+  | 'image'
+  | 'llm'
+  | 'calculation'
+  | 'user'
+  | 'unknown';
+
+export interface FactEvidenceItem {
+  source: FactSourceKind;
+  path: string;
+  snippet: string;
+  confidence: number;
+}
+
+export interface ProductFact<T = string | number | boolean | string[] | null> {
+  key: string;
+  label: string;
+  value: T;
+  normalizedValue?: string;
+  unit?: string;
+  status: FactStatus;
+  confidence: number;
+  sources: FactEvidenceItem[];
+  notes?: string[];
+}
+
+export interface ProductFactConflict {
+  key: string;
+  label: string;
+  values: string[];
+  reason: string;
+  severity: 'low' | 'medium' | 'high';
+}
+
+export interface ProductFactSheet {
+  facts: ProductFact[];
+  conflicts: ProductFactConflict[];
+  missingRequired: string[];
+  summary: {
+    confidence: 'high' | 'medium' | 'low';
+    blockingIssues: string[];
+  };
+}
+
+export type ProductCapability =
+  | 'electrical'
+  | 'battery'
+  | 'plug_required'
+  | 'textile'
+  | 'footwear'
+  | 'inflatable'
+  | 'kids_risk'
+  | 'food_contact'
+  | 'medical_claim_risk'
+  | 'fragile'
+  | 'assembled_size_differs_from_package_size'
+  | 'cosmetic'
+  | 'wearable'
+  | 'outdoor'
+  | 'home_furniture';
+
+export interface CategoryPolicyProfile {
+  categoryType: string;
+  capabilities: ProductCapability[];
+  requiredSupplierFacts: string[];
+  requiredCargoFacts: string[];
+  forbiddenSeoClaims: string[];
+  criticalWarnings: string[];
+}
+
 // ─── Risk Flags ──────────────────────────────────────────────────────────────
 
 export interface RiskFlags {
@@ -601,6 +711,9 @@ export interface FieldEvidence {
   value: string | number;
   confidence: FieldConfidence;
   source: FieldSource;
+  status?: FactStatus;
+  provenance?: FactEvidenceItem[];
+  notes?: string[];
 }
 
 export interface AiContentGenerator {
@@ -647,7 +760,8 @@ export type EventName =
   | 'upgrade_clicked'
   | 'paid'
   | 'opened_zip'
-  | 'last_used';
+  | 'last_used'
+  | 'quality_metrics_recorded';
 
 export interface AnalyticsService {
   track(userId: string, event: EventName, payload?: Record<string, unknown>): void;

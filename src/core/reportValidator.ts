@@ -661,6 +661,7 @@ export function runHardValidator(input: {
   const fullText = toPlainText(artifacts);
   const issues: HardValidatorIssue[] = [];
   const warnings: HardValidatorIssue[] = [];
+  const factSheet = asRecord(snapshot.factSheet);
 
   if (ZERO_PRICE_PATTERN.test(fullText)) {
     addIssue(
@@ -715,6 +716,18 @@ export function runHardValidator(input: {
   const sku = asRecord(snapshot.sku);
   const supplier = asRecord(snapshot.supplier);
   const moq = asRecord(supplier.moq);
+  const factBlockingIssues = Array.isArray(factSheet.summary && (factSheet.summary as any).blockingIssues)
+    ? (factSheet.summary as any).blockingIssues as string[]
+    : [];
+  if (factBlockingIssues.length) {
+    addIssue(
+      warnings,
+      'snapshot.factSheet',
+      'medium',
+      `В canonical facts есть незакрытые блокирующие пункты: ${factBlockingIssues.slice(0, 3).join('; ')}`,
+      'Не превращать эти поля в подтверждённые факты в пользовательских материалах.',
+    );
+  }
 
   const directAnalogsCount = asNumber(market.directAnalogsCount) ?? 0;
   const broadCategoryCount = asNumber(market.broadCategoryCount) ?? 0;

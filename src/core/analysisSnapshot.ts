@@ -1,3 +1,7 @@
+import type { CategoryPolicyProfile, ProductFactSheet } from '../types';
+import { buildCategoryPolicyProfile } from './categoryPolicyRegistry';
+import { buildProductFactSheet } from './factSheet';
+
 export type CardZipCategoryType = 'shoes' | 'clothes' | 'electronics' | 'home' | 'beauty' | 'accessory' | 'kitchen' | 'fishing' | 'tools' | 'other';
 
 export type ProductContextLike = {
@@ -57,6 +61,8 @@ export type AnalysisSnapshot = {
     photosCount: number;
   };
   productContext: ProductContextLike;
+  factSheet?: ProductFactSheet | null;
+  categoryPolicy?: CategoryPolicyProfile | null;
   supplier: {
     name?: string;
     type?: string;
@@ -403,16 +409,70 @@ export function buildAnalysisSnapshot(input: BuildAnalysisSnapshotInput): Analys
   const raw1688 = normalizeRaw1688(raw);
   const offerId = safeString(input.offerId ?? context.offerId ?? raw.offerId ?? raw.id ?? raw.productId, 'unknown_offer');
   const selectedSkuId = input.selectedSkuId ?? null;
+  const moq = normalizeMoq(supplierInput, raw);
   const purchasePrice = resolvePurchasePrice(raw, context, selectedSkuId);
   const weight = resolveWeight(raw);
   const sku = normalizeSku(raw, context, selectedSkuId);
   const market = normalizeMarket(input.market);
   const economics = normalizeEconomics(input.economics, purchasePrice, weight, sku, market);
   const conflicts = normalizeConflicts(context, raw.conflicts);
+  const rawProductForFacts = {
+    productId: offerId,
+    platform: '1688',
+    titleCn: raw1688.titleCn,
+    titleEn: safeString(raw.titleEn),
+    description: safeString(raw.description),
+    priceYuan: purchasePrice.valueCny ?? 0,
+    moq: asNumber(raw.moq) ?? 0,
+    weightKg: weight.valueKg ?? 0,
+    images: asArray(raw.images).map((item) => safeString(item)).filter(Boolean),
+    supplierName: safeString(supplierInput.name),
+    supplierRating: asNumber(supplierInput.rating) ?? undefined,
+    supplierType: safeString(supplierInput.type) as 'factory' | 'merchant' | 'seller' | undefined,
+    mainImageUrl: safeString(raw.mainImageUrl),
+    sold: asNumber(raw.sold) ?? undefined,
+    stock: asNumber(raw.stock) ?? undefined,
+    categoryName: safeString(asRecord(context.identity).categoryType ?? raw.categoryName),
+    attributes: Object.entries(raw1688.attributesRaw).map(([name, value]) => ({ name, value: safeString(value) })).filter((item) => item.name && item.value),
+    skus: sku.variants.map((item) => ({ name: item.label, price: item.priceCny ?? undefined })),
+    selectedSkuName: sku.variants.find((item) => item.id === sku.selectedSkuId)?.label,
+    normalized1688: {
+      pricing: {
+        quoteType: 'unknown',
+        displayPriceYuan: purchasePrice.valueCny ?? 0,
+        rawPriceFields: [],
+      },
+      moq: moq.value ?? undefined,
+      skuCount: sku.count,
+      skuVariants: sku.variants.map((item) => ({ name: item.label, price: item.priceCny ?? undefined })),
+      supplierType: (safeString(supplierInput.type) || undefined) as 'factory' | 'merchant' | 'seller' | undefined,
+      imageCount: raw1688.photosCount,
+      images: asArray(raw.images).map((item) => safeString(item)).filter(Boolean),
+      weightKg: weight.valueKg ?? undefined,
+      attributes: Object.entries(raw1688.attributesRaw).map(([name, value]) => ({ name, value: safeString(value) })).filter((item) => item.name && item.value),
+      keyAttributes: [],
+      debug: {
+        quoteType: 'unknown',
+        rawPriceFields: [],
+        skuCount: sku.count,
+        attributesCount: Object.keys(raw1688.attributesRaw).length,
+        imageCount: raw1688.photosCount,
+        extraInfoKeys: Object.keys(raw),
+        missingCriticalFields: [],
+      },
+    },
+  } as import('../types').RawProduct1688;
+  const factSheet = buildProductFactSheet(rawProductForFacts);
+  const categoryPolicy = buildCategoryPolicyProfile({
+    categoryType: safeString(asRecord(context.identity).categoryType ?? raw.categoryName),
+    title: raw1688.titleCn,
+    attributes: rawProductForFacts.attributes,
+  });
   const missingData = [
     ...normalizeStringArray(input.missingData, 50),
     ...normalizeStringArray(context.missingCritical, 30),
     ...economics.missing,
+    ...factSheet.missingRequired,
   ].filter((value, index, arr) => arr.indexOf(value) === index);
 
   return {
@@ -421,12 +481,14 @@ export function buildAnalysisSnapshot(input: BuildAnalysisSnapshotInput): Analys
     createdAt: input.createdAt ?? new Date().toISOString(),
     raw1688,
     productContext: context,
+    factSheet,
+    categoryPolicy,
     supplier: {
       name: safeString(supplierInput.name),
       type: safeString(supplierInput.type),
       rating: safeString(supplierInput.rating),
       orders: safeString(supplierInput.orders),
-      moq: normalizeMoq(supplierInput, raw),
+      moq,
     },
     purchasePrice,
     weight,

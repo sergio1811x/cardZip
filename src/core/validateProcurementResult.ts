@@ -2,6 +2,9 @@
 // Pure validator over user-facing strings + document strings.
 // No side effects, no I/O.
 
+import type { ProductFactSheet } from '../types';
+import { validateCrossDocumentConsistency } from './crossDocConsistency';
+
 export interface ProcurementQualityInput {
   files: Array<{ name: string; content: string }>; // ZIP docs
   productDetailsText: string;
@@ -11,6 +14,7 @@ export interface ProcurementQualityInput {
   priceReliable?: boolean;
   plugStandardReliable?: boolean;
   selectedSkuText?: string;
+  factSheet?: ProductFactSheet | null;
 }
 
 export interface ProcurementQualityResult {
@@ -395,6 +399,15 @@ export function validateProcurementResult(
     warnings.push(
       'weight conflict: "вес не указан" present while a numeric "N,N кг" appears elsewhere',
     );
+  }
+
+  const crossDocIssues = validateCrossDocumentConsistency({
+    docs: files,
+    factSheet: input.factSheet,
+  });
+  for (const issue of crossDocIssues) {
+    if (issue.severity === 'error') errors.push(`[cross-doc:${issue.field}] ${issue.message}`);
+    else warnings.push(`[cross-doc:${issue.field}] ${issue.message}`);
   }
 
   return { passed: errors.length === 0, errors, warnings };

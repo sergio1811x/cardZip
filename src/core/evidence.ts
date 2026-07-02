@@ -1,8 +1,10 @@
 import type { RawProduct1688, AiContentResult, FieldEvidence } from '../types';
+import { buildProductFactSheet } from './factSheet';
 
 export function buildEvidence(product: RawProduct1688, content: AiContentResult): FieldEvidence[] {
   const evidence: FieldEvidence[] = [];
   const normalized = product.normalized1688;
+  const factSheet = buildProductFactSheet(product);
 
   evidence.push({
     field: 'Цена',
@@ -56,6 +58,20 @@ export function buildEvidence(product: RawProduct1688, content: AiContentResult)
       });
     }
   });
+
+  for (const fact of factSheet.facts) {
+    const alreadyExists = evidence.some((item) => item.field.toLowerCase() === fact.label.toLowerCase());
+    if (alreadyExists) continue;
+    evidence.push({
+      field: fact.label,
+      value: typeof fact.value === 'string' || typeof fact.value === 'number' ? fact.value : String(fact.normalizedValue ?? ''),
+      confidence: fact.status === 'confirmed' ? 'confirmed' : fact.status === 'unknown' ? 'unknown' : 'inferred',
+      source: fact.sources[0]?.source === 'seller' ? 'seller' : fact.sources[0]?.source === 'title' ? 'title' : fact.sources[0]?.source === 'llm' ? 'llm' : 'product_attributes',
+      status: fact.status,
+      provenance: fact.sources,
+      notes: fact.notes,
+    });
+  }
 
   return evidence;
 }

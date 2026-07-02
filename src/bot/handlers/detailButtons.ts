@@ -157,6 +157,8 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   if (formatErrors.length) console.error('[file-format-validator]', formatErrors.join('; '));
   const seoDoc = docs.find((d) => d.filename === '05_SEO_черновик.md');
   const qProfile = product ? ensureProductProcurementProfile(product, { sourceUrl: job.input_url }) : undefined;
+  const { buildProductFactSheet } = require('../../core/factSheet') as typeof import('../../core/factSheet');
+  const factSheet = (product as any)?.analysisSnapshot?.factSheet ?? (product ? buildProductFactSheet(product as any) : null);
   const quality = validateProcurementResult({
     files: docs.map((d) => ({ name: d.filename, content: d.text })),
     productDetailsText: '',
@@ -166,6 +168,7 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
     priceReliable: qProfile?.pricing.priceReliable,
     plugStandardReliable: !!qProfile?.sku.selectedPlugStandard,
     selectedSkuText: qProfile?.sku.selectedSkuText ?? undefined,
+    factSheet,
   });
   if (!quality.passed) console.error('[procurement-quality-gate]', quality.errors.join('; '));
   if (quality.warnings.length) console.warn('[procurement-quality-gate:warn]', quality.warnings.join('; '));

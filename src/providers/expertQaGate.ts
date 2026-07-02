@@ -1,14 +1,12 @@
-import type { AnalysisSnapshot, QaResult, GeneratedArtifacts } from '../types';
+import type { AnalysisSnapshot } from '../core/analysisSnapshot';
+import type { QaResult, GeneratedArtifacts } from '../types';
+import { QaGateResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const QA_MODELS = [
   'deepseek/deepseek-v4-pro',
   'deepseek/deepseek-chat-v3.2',
   'qwen/qwen3-235b-a22b',
 ];
-
-function cleanJson(raw: string): string {
-  return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-}
 
 const QA_GATE_PROMPT = `CardZip QA Gate.
 
@@ -81,6 +79,8 @@ function compactQaPackage(snapshot: AnalysisSnapshot, artifacts: Record<string, 
       purchasePrice: s.purchasePrice,
       weight: s.weight,
       sku: { ...s.sku, variants: s.sku?.variants?.slice?.(0, 8) ?? [] },
+      factSheet: s.factSheet,
+      categoryPolicy: s.categoryPolicy,
       missingData: s.missingData,
       conflicts: s.conflicts,
       riskFlags: s.riskFlags,
@@ -123,7 +123,7 @@ export async function runQaGate(
       }
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };
       const raw = data.choices?.[0]?.message?.content ?? '';
-      const parsed = JSON.parse(cleanJson(raw));
+      const parsed = parseLlmJson(QaGateResultSchema, raw);
       if (parsed?.decision) {
         console.log(`[qa-gate] ${model} | ${parsed.decision} | score: ${parsed.qualityScore}/10 | issues: ${parsed.issues?.length ?? 0}`);
         return {

@@ -1,18 +1,11 @@
-import type { AnalysisSnapshot } from "../types";
+import type { AnalysisSnapshot } from '../core/analysisSnapshot';
+import { ExpertWriterResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const WRITER_MODELS = [
   "deepseek/deepseek-v4-pro",
   "deepseek/deepseek-chat-v3.2",
   "qwen/qwen3-235b-a22b",
 ];
-
-function cleanJson(raw: string): string {
-  return raw
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-}
 
 export interface ExpertWriterResult {
   userCard?: string;
@@ -34,9 +27,13 @@ export interface ExpertWriterResult {
 
 const EXPERT_WRITER_PROMPT = `CardZip Expert Writer.
 
-Роль: редактор закупочного пакета 1688. Улучшай только тексты на основе готового ProductProcurementProfile. Не определяй товар заново. Не меняй productKind, selected SKU, цену, MOQ, вес, материалы и риски.
+Роль: writer пользовательских артефактов закупочного пакета 1688. Ты не extractor и не classifier. Не определяй товар заново. Пиши только по canonical facts.
 
-Источник правды: ProductProcurementProfile, selectedSkuDecision и supplierReplyExtract, если есть.
+Источник правды: analysisSnapshot.factSheet, analysisSnapshot.categoryPolicy, analysisSnapshot.productContext, analysisSnapshot.supplier, analysisSnapshot.purchasePrice, analysisSnapshot.weight, analysisSnapshot.sku.
+
+Если факт имеет статус unknown, supplier_pending или conflict — не превращай его в утверждение. Пиши только как «нужно подтвердить у поставщика».
+
+Если есть conflict по полю, не выбирай значение сам. Укажи, что есть противоречие и его нужно снять у поставщика.
 
 CardZip — закупочный пакет по ссылке. Не пиши оценку продаж или финансовый прогноз.
 
@@ -100,6 +97,8 @@ function compactSnapshot(snapshot: AnalysisSnapshot): Record<string, unknown> {
     purchasePrice: s.purchasePrice,
     weight: s.weight,
     sku: { ...s.sku, variants: s.sku?.variants?.slice?.(0, 12) ?? [] },
+    factSheet: s.factSheet,
+    categoryPolicy: s.categoryPolicy,
     missingData: s.missingData,
     conflicts: s.conflicts,
     riskFlags: s.riskFlags,
@@ -149,7 +148,7 @@ export async function runExpertWriter(
         choices?: { message?: { content?: string } }[];
       };
       const raw = data.choices?.[0]?.message?.content ?? "";
-      const parsed = JSON.parse(cleanJson(raw));
+      const parsed = parseLlmJson(ExpertWriterResultSchema, raw);
       if (parsed?.userCard) {
         console.log(
           `[expert-writer] ${model} | verdict: ${parsed.verdict} | readiness: ${parsed.readinessScore}/10`,

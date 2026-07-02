@@ -4,6 +4,7 @@ import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { markSent } from '../src/db/queries/jobs';
 import { getStatus, tryConsumeCredit } from '../src/services/subscriptionService';
+import { trackQualityMetrics } from '../src/services/analyticsService';
 import { buildMainMessage, buildSafeSummary } from '../src/core/messageBuilder';
 
 import { buildDecisionContext } from '../src/core/decisionLayer';
@@ -16,6 +17,9 @@ import { redis } from '../src/lib/redis';
 import { createStepProgress } from '../src/core/progress';
 import { runQaGate } from '../src/providers/expertQaGate';
 import { runAutoFix } from '../src/providers/autoFix';
+import { runConsistencyAuditor } from '../src/providers/consistencyAuditor';
+import { buildProductFactSheet } from '../src/core/factSheet';
+import { buildQualityMetricsPayload, summarizeQualityMetrics } from '../src/core/qualityMetrics';
 import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
@@ -43,15 +47,59 @@ function applyCreditsLine(text: string, creditsRemaining: number): string {
   return `${withoutOldCounters}\n\n${line}`;
 }
 
+function uniqueQuestions(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const value = String(item ?? '').replace(/\s+/g, ' ').trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
 
-function applySanitizedArtifacts(hard: { fixedArtifacts?: Record<string, unknown> }, artifacts: { finalText: string; seoText: string; briefText: string; supplierText: string }) {
-  const fixed = hard.fixedArtifacts ?? {};
+
+function applySanitizedArtifacts(
+  fixedPayload: Record<string, unknown> | null | undefined,
+  artifacts: {
+    finalText: string;
+    seoText: string;
+    briefText: string;
+    supplierText: string;
+    cargoText: string;
+    sampleChecklistText: string;
+    readmeText: string;
+  },
+) {
+  const fixed = fixedPayload ?? {};
   return {
     finalText: String(fixed.userCard ?? fixed.UserCard ?? artifacts.finalText),
     seoText: String(fixed.seoText ?? fixed.SeoText ?? artifacts.seoText),
     briefText: String(fixed.buyerBrief ?? fixed.BuyerBrief ?? artifacts.briefText),
     supplierText: String(fixed.supplierQuestions ?? fixed.SupplierQuestions ?? artifacts.supplierText),
+    cargoText: String(fixed.cargoBrief ?? fixed.CargoBrief ?? artifacts.cargoText),
+    sampleChecklistText: String(fixed.sampleChecklist ?? fixed.SampleChecklist ?? artifacts.sampleChecklistText),
+    readmeText: String(fixed.readme ?? fixed.Readme ?? artifacts.readmeText),
   };
+}
+
+function formatConsistencyIssuesForRepair(audit: {
+  issues?: string[];
+  requiredEdits?: Array<{ artifact?: string; reason?: string; instruction?: string }>;
+} | null | undefined): string[] {
+  const issues = Array.isArray(audit?.issues) ? audit.issues.map(String) : [];
+  const editIssues = Array.isArray(audit?.requiredEdits)
+    ? audit.requiredEdits.map((edit) => {
+        const artifact = String(edit?.artifact ?? 'artifact');
+        const reason = String(edit?.reason ?? 'нужна правка');
+        const instruction = String(edit?.instruction ?? '').trim();
+        return `[${artifact}] ${reason}${instruction ? `: ${instruction}` : ''}`;
+      })
+    : [];
+  return [...issues, ...editIssues];
 }
 
 async function sendPaymentRequired(job: any) {
@@ -113,8 +161,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Generate every user-facing document from the single ProductProcurementProfile.
     // No document builder is allowed to re-detect productKind or infer category from raw attributes.
     const supplierQuestionSet = buildSupplierQuestionsFromProfile(product, { sourceUrl: job.input_url });
-    const translatedCn = await translateSupplierQuestionsRuToCn(supplierQuestionSet.ru).catch(() => supplierQuestionSet.cn);
-    const formattedSupplierQuestions = formatSupplierQuestionsText(supplierQuestionSet.ru, translatedCn);
+    const gapPlan = result.gapPlan as { supplierQuestionsRu?: string[] } | null | undefined;
+    const mergedSupplierQuestionsRu = uniqueQuestions([
+      ...(supplierQuestionSet.ru ?? []),
+      ...((gapPlan?.supplierQuestionsRu ?? []) as string[]),
+    ]).slice(0, 12);
+    const translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch(() => supplierQuestionSet.cn);
+    const formattedSupplierQuestions = formatSupplierQuestionsText(mergedSupplierQuestionsRu, translatedCn);
     const profileForFiles = {
       ...profileValidation.fixedProfile,
       supplierQuestionsCn: formattedSupplierQuestions.cn,
@@ -237,9 +290,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (qaResult?.decision === 'FIX_REQUIRED') {
       progress?.step('autofix');
       const fixed = await runAutoFix(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText }, { ...qaResult, issues: safeIssues(qaResult.issues).length ? safeIssues(qaResult.issues) : safeIssues(qaResult.requiredEdits) } as any).catch(() => null);
-      if (fixed?.userCard || fixed?.UserCard) finalText = String(fixed.userCard ?? fixed.UserCard);
-      if (fixed?.seoText) seoText = String(fixed.seoText);
-      if (fixed?.buyerBrief) briefText = String(fixed.buyerBrief);
+      const repaired = applySanitizedArtifacts(fixed, {
+        finalText,
+        seoText,
+        briefText,
+        supplierText,
+        cargoText,
+        sampleChecklistText,
+        readmeText,
+      });
+      finalText = repaired.finalText;
+      seoText = repaired.seoText;
+      briefText = repaired.briefText;
+      supplierText = repaired.supplierText;
+      cargoText = repaired.cargoText;
+      sampleChecklistText = repaired.sampleChecklistText;
+      readmeText = repaired.readmeText;
 
       const postFixValidation = repairProcurementTexts({
         mainReport: finalText,
@@ -264,7 +330,111 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    const auditMode = String(process.env.CARDZIP_CONSISTENCY_AUDIT_MODE ?? 'always').toLowerCase();
+    const shouldRunConsistencyAudit = auditMode !== 'off';
+    const consistencyAudit = shouldRunConsistencyAudit
+      ? await runConsistencyAuditor(snapshot as any, {
+          userCard: finalText,
+          seoText,
+          buyerBrief: briefText,
+          cargoBrief: cargoText,
+          sampleChecklist: sampleChecklistText,
+          supplierQuestions: supplierText,
+          readme: readmeText,
+        }).catch(() => null)
+      : null;
+    if (consistencyAudit?.decision === 'BLOCK') {
+      progress?.message('Consistency auditor остановил отчёт', 98);
+      progress?.stop();
+      await sendBlocked(job, product, consistencyAudit.issues.join('; ') || consistencyAudit.summary || 'Consistency auditor не разрешил показ отчёта.');
+      return res.status(200).json({ ok: true, blocked: true, source: 'consistency_audit' });
+    }
+    if (consistencyAudit?.issues?.length) {
+      console.warn('[step5] consistency audit:', consistencyAudit.issues.join('; '));
+    }
+
+    if (consistencyAudit?.decision === 'FIX_REQUIRED' && (consistencyAudit.requiredEdits?.length ?? 0) > 0) {
+      progress?.step('autofix');
+      const consistencyFixed = await runAutoFix(
+        snapshot as any,
+        {
+          userCard: finalText,
+          seoText,
+          buyerBrief: briefText,
+          supplierQuestions: supplierText,
+          cargoBrief: cargoText,
+          sampleChecklist: sampleChecklistText,
+          readme: readmeText,
+        },
+        {
+          decision: 'FIX_REQUIRED',
+          qualityScore: 5,
+          issues: formatConsistencyIssuesForRepair(consistencyAudit),
+          requiredEdits: consistencyAudit.requiredEdits,
+        } as any,
+      ).catch(() => null);
+
+      const repaired = applySanitizedArtifacts(consistencyFixed, {
+        finalText,
+        seoText,
+        briefText,
+        supplierText,
+        cargoText,
+        sampleChecklistText,
+        readmeText,
+      });
+      finalText = repaired.finalText;
+      seoText = repaired.seoText;
+      briefText = repaired.briefText;
+      supplierText = repaired.supplierText;
+      cargoText = repaired.cargoText;
+      sampleChecklistText = repaired.sampleChecklistText;
+      readmeText = repaired.readmeText;
+
+      const postConsistencyRepair = repairProcurementTexts({
+        mainReport: finalText,
+        docs: [
+          { filename: '01_Вопросы_поставщику.txt', text: supplierText },
+          { filename: '02_ТЗ_байеру.md', text: briefText },
+          { filename: '03_ТЗ_карго.md', text: cargoText },
+          { filename: '04_Чеклист_образца.md', text: sampleChecklistText },
+          { filename: '05_SEO_черновик.md', text: seoText },
+          { filename: '00_Инструкция.txt', text: readmeText },
+        ],
+        profile: profileForFiles,
+      });
+      if (postConsistencyRepair.fixed.mainReport) finalText = postConsistencyRepair.fixed.mainReport;
+      for (const doc of postConsistencyRepair.fixed.docs) {
+        if (doc.filename === '01_Вопросы_поставщику.txt') supplierText = doc.text;
+        if (doc.filename === '02_ТЗ_байеру.md') briefText = doc.text;
+        if (doc.filename === '03_ТЗ_карго.md') cargoText = doc.text;
+        if (doc.filename === '04_Чеклист_образца.md') sampleChecklistText = doc.text;
+        if (doc.filename === '05_SEO_черновик.md') seoText = doc.text;
+        if (doc.filename === '00_Инструкция.txt') readmeText = doc.text;
+      }
+
+      const auditAfterRepair = await runConsistencyAuditor(snapshot as any, {
+        userCard: finalText,
+        seoText,
+        buyerBrief: briefText,
+        cargoBrief: cargoText,
+        sampleChecklist: sampleChecklistText,
+        supplierQuestions: supplierText,
+        readme: readmeText,
+      }).catch(() => null);
+      if (auditAfterRepair?.decision === 'BLOCK') {
+        progress?.message('Consistency auditor остановил отчёт после repair', 98);
+        progress?.stop();
+        await sendBlocked(job, product, auditAfterRepair.issues.join('; ') || auditAfterRepair.summary || 'Consistency auditor не разрешил показ отчёта после repair.');
+        return res.status(200).json({ ok: true, blocked: true, source: 'consistency_audit_after_repair' });
+      }
+      if (auditAfterRepair?.issues?.length) {
+        console.warn('[step5] consistency audit after repair:', auditAfterRepair.issues.join('; '));
+      }
+    }
+
     // Final read-only quality gate over the finalized package (logs defects; non-blocking).
+    const finalFactSheet = (snapshot as any)?.factSheet ?? buildProductFactSheet(product as any);
     const finalQuality = validateProcurementResult({
       files: [
         { name: '01_Вопросы_поставщику.txt', content: supplierText },
@@ -281,9 +451,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       priceReliable: profileForFiles?.pricing?.priceReliable,
       plugStandardReliable: !!profileForFiles?.sku?.selectedPlugStandard,
       selectedSkuText: profileForFiles?.sku?.selectedSkuText ?? undefined,
+      factSheet: finalFactSheet,
     });
     if (!finalQuality.passed) console.error('[step5] procurement quality gate defects:', finalQuality.errors.join('; '));
     if (finalQuality.warnings.length) console.warn('[step5] procurement quality warnings:', finalQuality.warnings.join('; '));
+
+    const qualityMetrics = buildQualityMetricsPayload({
+      jobId,
+      offerId: (snapshot as any)?.offerId,
+      categoryType: (snapshot as any)?.productContext?.identity?.categoryType,
+      productKind: profileForFiles?.identity?.productKind,
+      metrics: [
+        {
+          stage: 'qa_gate',
+          status: qaResult?.decision === 'BLOCK' ? 'fail' : qaResult?.decision === 'FIX_REQUIRED' ? 'warn' : 'pass',
+          issuesCount: qaResult?.issues?.length ?? 0,
+          warningsCount: qaResult?.warnings?.length ?? 0,
+        },
+        {
+          stage: 'consistency_audit',
+          status: consistencyAudit?.decision === 'FIX_REQUIRED' ? 'warn' : 'pass',
+          issuesCount: consistencyAudit?.issues?.length ?? 0,
+          warningsCount: consistencyAudit?.requiredEdits?.length ?? 0,
+        },
+        {
+          stage: 'final_quality',
+          status: !finalQuality.passed ? 'fail' : finalQuality.warnings.length ? 'warn' : 'pass',
+          issuesCount: finalQuality.errors.length,
+          warningsCount: finalQuality.warnings.length,
+        },
+      ],
+    });
+    const qualitySummary = summarizeQualityMetrics(qualityMetrics.metrics as any);
+    await trackQualityMetrics(job.user_id, {
+      jobId,
+      offerId: (snapshot as any)?.offerId,
+      categoryType: (snapshot as any)?.productContext?.identity?.categoryType,
+      productKind: profileForFiles?.identity?.productKind,
+      metrics: qualityMetrics.metrics as any,
+    });
 
     progress?.step('charge');
     // Charge only after hard validator + QA allow the full user report.
@@ -323,6 +529,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         generatedFiles: { seoText, briefText, supplierQuestions: supplierText, supplierQuestionsCn: formattedSupplierQuestions.cn, supplierQuestionsCnValid: formattedSupplierQuestions.cnValid, cargoText, sampleChecklistText, readmeText },
         finalUserCard: finalText,
         qaResult,
+        consistencyAudit,
+        qualityMetrics,
+        qualitySummary,
       },
     }).eq('id', jobId);
 

@@ -8,10 +8,13 @@ import { createStepProgress } from '../src/core/progress';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock, extendProcessingLock } from '../src/lib/stepLock';
 import { runExpertWriter } from '../src/providers/expertWriter';
+import { runGapPlanner } from '../src/providers/gapPlanner';
 import { buildDecisionContext } from '../src/core/decisionLayer';
 import { ensureProductProcurementProfile } from '../src/core/procurementProfile';
+import { buildAnalysisSnapshot as buildCoreAnalysisSnapshot, type AnalysisSnapshot } from '../src/core/analysisSnapshot';
+import { buildQualityMetricsPayload } from '../src/core/qualityMetrics';
 import { redis } from '../src/lib/redis';
-import type { ProductWithContent, AnalysisSnapshot } from '../src/types';
+import type { ProductWithContent } from '../src/types';
 
 export const config = { maxDuration: 60 };
 
@@ -30,12 +33,22 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
   const purchasePriceCny = positive(decision.price.calculationPriceYuan);
   const weightKg = decision.weight.source === 'category_default' ? null : positive(decision.weight.weightKg);
 
-  return {
+  return buildCoreAnalysisSnapshot({
     offerId: product.productId ?? 'unknown_offer',
     sourceUrl: jobUrl,
-    createdAt: new Date().toISOString(),
     raw1688: {
       titleCn: product.titleCn ?? '',
+      titleEn: product.titleEn ?? product.titleRu ?? '',
+      description: product.description ?? '',
+      price: purchasePriceCny ?? undefined,
+      moq: product.moq,
+      weightKg,
+      mainImageUrl: product.mainImageUrl,
+      images: product.images ?? [],
+      sold: product.sold,
+      stock: product.stock,
+      categoryName: product.categoryName,
+      attributes: product.attributes ?? [],
       attributesRaw: Object.fromEntries((product.attributes ?? []).map((a: any) => [a.name, a.value]).filter(([k]: any[]) => !!k)),
       skus: product.skus ?? product.normalized1688?.skuVariants ?? [],
       photosCount: Array.isArray(product.images) ? product.images.length : 0,
@@ -46,33 +59,9 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
       type: profile.supplier.displayType,
       rating: product.supplierRating ?? '',
       orders: String(product.sold ?? ''),
-      moq: {
-        value: positive(product.moq),
-        source: positive(product.moq) ? 'parsed' : 'unknown',
-        displayLabel: positive(product.moq) ? `${Math.round(positive(product.moq)!)} шт.` : 'MOQ уточняется',
-      },
+      moq: product.moq,
     },
-    purchasePrice: {
-      valueCny: purchasePriceCny,
-      minCny: positive(decision.price.minPriceYuan),
-      maxCny: positive(decision.price.maxPriceYuan),
-      displayLabel: decision.price.displayPriceText,
-      source: purchasePriceCny ? (decision.price.priceSource === 'selected_sku' ? 'explicit_sku_price' : decision.price.priceSource === 'price_range' || decision.price.priceSource === 'fallback_min' ? 'price_range_min' : decision.price.priceSource === 'promotion' ? 'visible_1688_price' : 'visible_1688_price') : 'unknown',
-      isSyntheticPrice: decision.price.isEstimated,
-      needsSkuConfirmation: decision.price.needsSkuConfirmation,
-    },
-    weight: {
-      valueKg: weightKg,
-      packedWeightKg: weightKg,
-      source: weightKg ? (decision.weight.source === 'manual' ? 'supplier_answer' : 'parsed') : 'unknown',
-      displayLabel: weightKg ? `${weightKg} кг` : decision.weight.displayText,
-    },
-    sku: {
-      count: decision.sku.skuCount,
-      selectedSkuId: null,
-      needsSelection: decision.sku.needsSelection,
-      variants: decision.sku.skuVariantsNormalized.map((s: any, i: number) => ({ id: String(s.raw ?? i), label: String(s.label ?? `SKU ${i + 1}`), priceCny: positive(s.priceYuan) })),
-    },
+    selectedSkuId: null,
     market: {
       directAnalogsCount: 0,
       similarAnalogsCount: 0,
@@ -103,11 +92,9 @@ function buildAnalysisSnapshot(product: ProductWithContent & Record<string, any>
       canShowMargin: false,
       warning: 'Себестоимость является предварительной и зависит от веса, упаковки и условий доставки.',
     },
-    readiness: decision.readiness,
     missingData: decision.readiness.missingData,
-    conflicts: ctx.conflicts ?? [],
     riskFlags: intel.reportRules?.riskFlags ?? ctx.riskTags ?? [],
-  } as unknown as AnalysisSnapshot;
+  });
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -141,6 +128,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const writerMode = String(process.env.CARDZIP_EXPERT_WRITER_MODE ?? 'off').toLowerCase();
     const shouldRunWriter = writerMode !== 'off' && writerMode === 'always';
     const writerResult = shouldRunWriter ? await runExpertWriter(snapshot).catch(() => null) : null;
+    const gapPlannerMode = String(process.env.CARDZIP_GAP_PLANNER_MODE ?? 'if_missing').toLowerCase();
+    const shouldRunGapPlanner = gapPlannerMode === 'always' || (gapPlannerMode === 'if_missing' && ((snapshot.factSheet?.missingRequired?.length ?? 0) > 0 || (snapshot.factSheet?.conflicts?.length ?? 0) > 0));
+    const gapPlan = shouldRunGapPlanner ? await runGapPlanner(snapshot).catch(() => null) : null;
+    const qualityMetrics = buildQualityMetricsPayload({
+      jobId,
+      offerId: snapshot.offerId,
+      categoryType: snapshot.productContext?.identity?.categoryType,
+      productKind: snapshot.productContext?.identity?.productType,
+      metrics: [
+        {
+          stage: 'fact_sheet',
+          status: (snapshot.factSheet?.summary?.blockingIssues?.length ?? 0) > 0 ? 'warn' : 'pass',
+          issuesCount: snapshot.factSheet?.conflicts?.length ?? 0,
+          warningsCount: snapshot.factSheet?.missingRequired?.length ?? 0,
+        },
+        {
+          stage: 'writer',
+          status: shouldRunWriter ? (writerResult ? 'pass' : 'warn') : 'pass',
+          issuesCount: writerResult ? 0 : shouldRunWriter ? 1 : 0,
+        },
+        {
+          stage: 'gap_planner',
+          status: shouldRunGapPlanner ? (gapPlan ? 'pass' : 'warn') : 'pass',
+          issuesCount: gapPlan?.missingFacts?.length ?? 0,
+          warningsCount: gapPlan?.warnings?.length ?? 0,
+        },
+      ],
+    });
     if (writerResult) {
       // Update seoContent from writer only with fields that validators can still repair.
       product.seoContent = {
@@ -170,6 +185,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         procurementProfile: ensureProductProcurementProfile(product, { sourceUrl: job.input_url }),
         analysisSnapshot: snapshot,
         writerResult,
+        gapPlan,
+        qualityMetrics,
         freshStatus: {
           creditsRemaining: freshStatus.creditsRemaining,
           plan: freshStatus.plan,

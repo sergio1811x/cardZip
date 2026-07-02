@@ -1,14 +1,12 @@
-import type { AnalysisSnapshot, QaResult } from '../types';
+import type { AnalysisSnapshot } from '../core/analysisSnapshot';
+import type { QaResult } from '../types';
+import { AutoFixResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const FIX_MODELS = [
   'google/gemini-2.5-flash-lite',
   'openai/gpt-5-mini',
   'qwen/qwen3-235b-a22b',
 ];
-
-function cleanJson(raw: string): string {
-  return raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-}
 
 const AUTO_FIX_PROMPT = `CardZip Auto-Fix.
 
@@ -79,6 +77,8 @@ export async function runAutoFix(
     snapshot: {
       purchasePrice: snapshot.purchasePrice,
       weight: snapshot.weight,
+      factSheet: (snapshot as any).factSheet,
+      categoryPolicy: (snapshot as any).categoryPolicy,
       riskFlags: snapshot.riskFlags,
     },
   }, null, 0).slice(0, 5000);
@@ -104,7 +104,7 @@ export async function runAutoFix(
       if (!res.ok) continue;
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };
       const raw = data.choices?.[0]?.message?.content ?? '';
-      const parsed = JSON.parse(cleanJson(raw));
+      const parsed = parseLlmJson(AutoFixResultSchema, raw);
       if (parsed && typeof parsed === 'object') {
         console.log(`[auto-fix] ${model} fixed ${Object.keys(parsed).length} field(s)`);
         return parsed as Record<string, unknown>;

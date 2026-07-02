@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import 'dotenv/config';
 import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
-import { canonicalizeProduct } from '../src/providers/productCanonicalizer';
+import { runProductRolePipeline } from '../src/providers/productRolePipeline';
 import { createStepProgress } from '../src/core/progress';
 import { cleanChineseTitle } from '../src/core/cnNormalize';
 import { buildProductProcurementProfile, preprocessMainImageForProductIntelligence, validateProfile } from '../src/core/procurementProfile';
@@ -112,8 +112,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Price, MOQ, weight and SKU are still taken only from provider/API fields.
     const mainImageForProductIntelligence = preprocessMainImageForProductIntelligence(raw);
 
-    // Single product-intelligence call: Product Canonicalizer with image-aware input.
-    const productContext = await canonicalizeProduct({
+    // Ролевой pipeline: контекст товара, canonical facts и category policy.
+    const rolePipeline = await runProductRolePipeline({
       offerId: raw.productId,
       titleCn: raw.titleCn,
       titleRu: raw.titleEn,
@@ -144,9 +144,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       imageUrls: mainImageForProductIntelligence.images,
       sold: raw.sold,
       stock: raw.stock,
-    }).catch(() => null);
+    }).catch(() => ({
+      productContext: null,
+      factSheet: null,
+      categoryPolicy: null,
+      roleInputs: {
+        classification: { promptSegment: '', visualHints: [], textHints: [] },
+        skuResolution: { promptSegment: '', selectedSkuLabel: null, skuOptions: [] },
+        policy: { promptSegment: '', highRiskClaims: [] },
+      },
+      roleOutputs: {
+        classification: null,
+        skuResolution: null,
+        policy: null,
+      },
+    }));
+
+    const productContext = rolePipeline.productContext;
 
     const productIntelligence = toProductIntelligence(raw, productContext);
+    const factSheet = rolePipeline.factSheet;
+    const categoryPolicy = rolePipeline.categoryPolicy;
     const productProcurementProfile = buildProductProcurementProfile({ ...raw, intelligence: productIntelligence, productContext, sourceUrl: job.input_url }, { sourceUrl: job.input_url, intelligence: productIntelligence });
     const profileValidation = validateProfile(productProcurementProfile);
     if (!profileValidation.ok) console.warn('[step2-ai] profile validator:', profileValidation.errors.join('; '));
@@ -179,6 +197,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         intelligence: productIntelligence,
         productProcurementProfile: profileValidation.fixedProfile,
         procurementProfile: profileValidation.fixedProfile,
+        factSheet,
+        categoryPolicy,
+        roleInputs: rolePipeline.roleInputs,
+        roleOutputs: rolePipeline.roleOutputs,
         mainImageForProductIntelligence,
         packageCoreQuery,
         categoryType,
