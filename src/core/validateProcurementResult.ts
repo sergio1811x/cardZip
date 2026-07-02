@@ -291,6 +291,103 @@ export function validateProcurementResult(
     }
   }
 
+  // ---- Text-quality regressions over every user-facing blob ----
+  // (composition percentage asserted as fact; nominative-after-"для" grammar smell)
+  const compositionRe =
+    /\b\d{1,3}\s*%\s*(нейлон|полиэстер|хлопок|спандекс|эластан|вискоз|шерст|лён|лен|полиамид)/i;
+  const compositionQualifierRe = /подтверд|уточн|если\s+указан/i;
+  const nominativeAfterDlyaRe = /для\s+(йога|бег|фитнес|спорт)(?![а-яё])/i;
+
+  for (const blob of userFacingBlobs) {
+    for (const rawLine of blob.text.split("\n")) {
+      const line = rawLine;
+
+      // Composition percentage stated as fact without a same-line qualifier.
+      if (compositionRe.test(line) && !compositionQualifierRe.test(line)) {
+        errors.push(
+          `[${blob.label}] composition percentage asserted without confirmation`,
+        );
+      }
+
+      // Nominative form after "для" (should be genitive: "для йоги/бега/фитнеса").
+      if (nominativeAfterDlyaRe.test(line)) {
+        warnings.push(`[${blob.label}] grammar: nominative after 'для'`);
+      }
+    }
+  }
+
+  // ---- Per-file text-quality warnings (supplier questions, risks/checklists) ----
+  for (const f of files) {
+    const content = f.content ?? "";
+    const isSupplierQuestions = /(^|\/)01_/.test(f.name) || /Вопрос/i.test(f.name);
+
+    // Bulleted / numbered lines only.
+    const bulletLines = content
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^(\d+[.)]|[•\-*])\s*\S/.test(l));
+
+    // Duplicate question intent within a supplier-questions file.
+    if (isSupplierQuestions) {
+      const intentGroups: Array<{ key: string; re: RegExp }> = [
+        { key: "size-chart", re: /размерн[а-яё]*\s+сетк/i },
+        { key: "weight-with-packaging", re: /вес.*упаковк/i },
+      ];
+      for (const { key, re } of intentGroups) {
+        const hits = bulletLines.filter((l) => re.test(l)).length;
+        if (hits >= 2) {
+          warnings.push(`[${f.name}] duplicate question intent (${key})`);
+        }
+      }
+    }
+
+    // Bare-fragment risk/checklist line: a short lowercase bullet with no verb
+    // punctuation, mixed among full-sentence bullets in the same file.
+    const isRiskOrChecklist =
+      /риск|red|флаг|чеклист|checklist|образц/i.test(f.name) ||
+      /красные\s+флаги|риски/i.test(content);
+    if (isRiskOrChecklist && bulletLines.length >= 2) {
+      const bulletText = (l: string): string =>
+        l.replace(/^(\d+[.)]|[•\-*])\s*/, "").trim();
+      const isBareFragment = (t: string): boolean => {
+        if (!t) return false;
+        if (/[.!?:;…]$/.test(t)) return false; // has ending punctuation
+        if (t !== t.toLowerCase()) return false; // has an uppercase char
+        const words = t.split(/\s+/).filter(Boolean);
+        return words.length >= 1 && words.length <= 3;
+      };
+      const isFullSentence = (t: string): boolean => {
+        const words = t.split(/\s+/).filter(Boolean);
+        return words.length >= 4 || /[.!?:;…]$/.test(t);
+      };
+      const texts = bulletLines.map(bulletText);
+      const hasFragment = texts.some(isBareFragment);
+      const hasFullSentence = texts.some(isFullSentence);
+      if (hasFragment && hasFullSentence) {
+        warnings.push(`[${f.name}] unpolished bare-fragment line`);
+      }
+    }
+  }
+
+  // ---- SEO description opener (optional warning) ----
+  {
+    const seoLines = (input.seoDraftMd ?? "").split("\n").map((l) => l.trim());
+    for (let i = 0; i < seoLines.length; i++) {
+      const m = seoLines[i].match(/^(?:#{1,6}\s*)?Описание\s*:?\s*(.*)$/i);
+      if (!m) continue;
+      let body = m[1];
+      if (!body) {
+        // Description text may be on the following non-empty line.
+        body = seoLines.slice(i + 1).find((l) => l.length > 0) ?? "";
+      }
+      // Bare short noun + period: a single lowercase word ending in "." only.
+      if (/^[а-яё]+\.\s*$/i.test(body) && body.trim().toLowerCase() === body.trim()) {
+        warnings.push("[seoDraftMd] SEO description starts with a bare noun");
+      }
+      break;
+    }
+  }
+
   // ---- Warnings (non-blocking) ----
   // Weight conflict: "вес не указан" while a numeric kg value appears elsewhere.
   const allText = userFacingBlobs.map((b) => b.text).join("\n");

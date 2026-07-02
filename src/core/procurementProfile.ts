@@ -106,6 +106,8 @@ export type ProductProcurementProfile = {
   };
   logistics: {
     weightKg: number | null;
+    dimensionsCm: string | null;
+    volumetricWeightKg: number | null;
   };
   procurement: {
     status: string;
@@ -1194,6 +1196,120 @@ export function extractWeightKg(product: any): number | null {
 }
 
 /**
+ * Read the LLM-canonicalized packing dimensions string (e.g. "17×17×23") from
+ * either logistics location. Returns a cleaned "L×W×H" string or null.
+ */
+export function extractDimensionsCm(product: any): string | null {
+  const raw =
+    product?.productContext?.procurementProfileDraft?.logistics?.dimensionsCm ??
+    product?.productContext?.logistics?.dimensionsCm ??
+    product?.logistics?.dimensionsCm;
+  const parsed = parseDimensionsCm(raw);
+  if (!parsed) return null;
+  return `${parsed[0]}×${parsed[1]}×${parsed[2]}`;
+}
+
+/**
+ * Parse an "N×N×N" dimensions string tolerating ×, x, х (Cyrillic), *, and
+ * spaces around separators. Returns [L, W, H] in cm, or null if not three
+ * positive finite numbers.
+ */
+export function parseDimensionsCm(value: unknown): [number, number, number] | null {
+  const str = String(value ?? "").trim();
+  if (!str) return null;
+  const parts = str
+    .replace(/[×хx*]/gi, "×")
+    .split("×")
+    .map((s) => num(s));
+  if (parts.length !== 3) return null;
+  const [l, w, h] = parts;
+  if (
+    l === null ||
+    w === null ||
+    h === null ||
+    l <= 0 ||
+    w <= 0 ||
+    h <= 0
+  )
+    return null;
+  const round = (n: number) => Math.round(n * 100) / 100;
+  return [round(l), round(w), round(h)];
+}
+
+/**
+ * Volumetric (dimensional) weight in kg using the standard air/cargo divisor
+ * 5000: (L×W×H cm) / 5000. Returns kg rounded to 2 dp, or null when dimensions
+ * are unknown. This is an ESTIMATE before the supplier confirms real packing.
+ */
+export function volumetricWeightKgFromDimensions(value: unknown): number | null {
+  const dims = parseDimensionsCm(value);
+  if (!dims) return null;
+  const kg = (dims[0] * dims[1] * dims[2]) / 5000;
+  if (!Number.isFinite(kg) || kg <= 0) return null;
+  return Math.round(kg * 100) / 100;
+}
+
+/**
+ * Render a Russian volumetric-weight estimate line for reports/docs, or null
+ * when dimensions are unknown (never invent). Weight formatted with a comma
+ * decimal separator, e.g. "~1,4 кг".
+ */
+export function volumetricWeightLine(
+  dimensionsCm: string | null,
+  volumetricWeightKg: number | null,
+  bullet = "• ",
+): string | null {
+  if (!dimensionsCm || !volumetricWeightKg) return null;
+  const kg = String(volumetricWeightKg).replace(".", ",");
+  return `${bullet}Объёмный вес (оценка): ~${kg} кг (по габаритам ${dimensionsCm} см) — карго считает по большему из фактического и объёмного`;
+}
+
+/**
+ * Normalize a single user-facing red-flag / checklist line. Bare tags coming
+ * from KIND_RULES / red-flag lists (e.g. "нет состава", "сильная усадка") are
+ * expanded into clean, capitalized phrases. Anything already a full phrase is
+ * only capitalized. General: any kind benefits, no per-product hardcoding.
+ */
+const FRAGMENT_NORMALIZERS: Array<{ rx: RegExp; text: string }> = [
+  { rx: /^нет\s+состава(\s+ткани)?$/i, text: "Состав ткани не подтверждён" },
+  { rx: /^не\s+подтверждён?\s+состав(\s+ткани)?$/i, text: "Состав ткани не подтверждён" },
+  { rx: /^нет\s+состава\s+ткани$/i, text: "Состав ткани не подтверждён" },
+  { rx: /^нет\s+размерн[а-яё]*\s+сетк[а-яё]*$/i, text: "Размерная сетка не предоставлена" },
+  { rx: /^сильн[а-яё]*\s+усадк[а-яё]*$/i, text: "Риск сильной усадки после стирки" },
+  { rx: /^усадка\s+после\s+стирки$/i, text: "Риск усадки после стирки" },
+  { rx: /^плох[а-яё]*\s+швы$/i, text: "Риск плохого качества швов" },
+  { rx: /^плох[а-яё]*\s+склейк[а-яё]*.*$/i, text: "Риск плохой склейки/литья подошвы" },
+  { rx: /^тонк[а-яё]*\s+ткан[а-яё]*$/i, text: "Риск слишком тонкой ткани" },
+  { rx: /^сильный\s+запах$/i, text: "Риск сильного запаха" },
+  { rx: /^резкий\s+запах$/i, text: "Риск резкого запаха" },
+  { rx: /^скользк[а-яё]*\s+подошв[а-яё]*$/i, text: "Риск скользкой подошвы" },
+  { rx: /^нет\s+реальных\s+фото$/i, text: "Нет реальных фото товара" },
+  { rx: /^нет\s+веса\s+с\s+упаковкой$/i, text: "Вес с упаковкой не указан" },
+  { rx: /^нет\s+фото\s+упаковки$/i, text: "Нет фото упаковки" },
+  { rx: /^подтвердить\s+состав(\s+ткани)?$/i, text: "Подтвердить состав ткани у поставщика" },
+  { rx: /^получить\s+замеры$/i, text: "Получить замеры изделия у поставщика" },
+  { rx: /^получить\s+размерн[а-яё]*\s+сетк[а-яё]*$/i, text: "Получить размерную сетку у поставщика" },
+];
+
+export function normalizeFragmentLine(value: unknown): string {
+  let text = clean(value)
+    .replace(/^\s*(?:[-•]|\d+[.)])\s*/, "")
+    .replace(/[.]+$/g, "")
+    .trim();
+  if (!text) return "";
+  for (const { rx, text: replacement } of FRAGMENT_NORMALIZERS) {
+    if (rx.test(text)) return replacement;
+  }
+  // Generic fallback: capitalize the first letter so bare fragments don't look
+  // like tags next to full sentences.
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+export function normalizeFragmentLines(items: string[]): string[] {
+  return items.map((v) => normalizeFragmentLine(v)).filter(Boolean);
+}
+
+/**
  * Deterministic supplier reliability assessment. Uses only signals present on
  * the product — never invents data. Scoring (documented, simple):
  *   start at 50 (neutral).
@@ -1259,7 +1375,7 @@ export function computeSupplierReliability(product: any): {
       reasons.push(`рейтинг ${r}/5 — низкий`);
     }
   }
-  if (orders !== null && orders > 0) {
+  if (orders !== null && orders >= 0) {
     signals++;
     const o = Math.round(orders);
     if (orders >= 500) {
@@ -1267,9 +1383,13 @@ export function computeSupplierReliability(product: any): {
       reasons.push(`${o} заказов`);
     } else if (orders >= 50) {
       reasons.push(`${o} заказов (мало статистики)`);
-    } else {
+    } else if (orders > 0) {
       score -= 15;
       reasons.push(`${o} заказов — мало статистики`);
+    } else {
+      // 0 orders is a real signal, not a missing one: no sales track record.
+      score -= 20;
+      reasons.push(`0 заказов — нет истории продаж`);
     }
   }
   if (returnRate !== null) {
@@ -1393,8 +1513,17 @@ function normalizeDedupKey(value: string): string {
     return "габариты индивидуальной упаковки";
   if (/количеств.*транспорт.*короб|штук.*короб/.test(key))
     return "количество в транспортной коробке";
-  if (/состав.*ткан/.test(key)) return "состав ткани";
-  if (/реальн.*фото|фото.*модел|фото.*упаков/.test(key))
+  if (/состав.*ткан|ткан.*состав/.test(key)) return "состав ткани";
+  // NB: an earlier replace turns "размер" → "габариты", so match on "сетк".
+  if (/сетк/.test(key)) return "размерная сетка";
+  if (/(?:замер|обмер)[а-яё]*\s*издели|издели[а-яё]*\s*замер|снять\s*замер/.test(key))
+    return "замеры изделия";
+  if (/цен[а-яё]*.*sku|sku.*цен|подтверд.*цен|цен[а-яё]*.*подтверд|уточн.*цен|цен[а-яё]*.*уточн/.test(key))
+    return "цена выбранного sku";
+  if (/усадк/.test(key)) return "усадка после стирки";
+  if (/moq|минимальн[а-яё]*\s*заказ/.test(key)) return "moq";
+  if (/образц|образец/.test(key)) return "заказ образца";
+  if (/реальн.*фото|фото.*модел|фото.*упаков|пришлите.*фото/.test(key))
     return "реальные фото товара и упаковки";
   if (/уф|uv|upf/.test(key)) return "подтверждение уф защиты";
   return key;
@@ -1422,6 +1551,21 @@ export function dedupNormalizedList(
 
 function uniq(list: Array<string | null | undefined>, limit = 30): string[] {
   return dedupNormalizedList(list, limit);
+}
+
+/**
+ * Resolve the supplier name shown across all docs consistently. Material-like
+ * junk ("нержавеющая сталь") is dropped. A real name is kept even when it is
+ * Chinese — safeRu would strip it to empty, so we fall back to the raw cleaned
+ * name so buyer brief and ProductDetails agree instead of showing
+ * "не указано".
+ */
+export function resolveSupplierName(value: unknown): string {
+  if (isMaterialLikeSupplierName(value)) return "не указано";
+  const raw = clean(value);
+  if (!raw || raw === "—" || isPlaceholderValue(raw)) return "не указано";
+  const ru = safeRu(raw);
+  return ru || raw;
 }
 
 export function supplierTypeDisplay(value: unknown): string {
@@ -2490,14 +2634,17 @@ export function buildProductProcurementProfile(
       displayType: supplierTypeDisplay(supplierRaw),
       rating: clean(product?.supplierRating ?? product?.rating ?? "—") || "—",
       orders: clean(product?.sold ?? product?.orders ?? "—") || "—",
-      name: isMaterialLikeSupplierName(product?.supplierName)
-        ? "не указано"
-        : safeRu(product?.supplierName || "") || "не указано",
+      name: resolveSupplierName(product?.supplierName),
       reliability: computeSupplierReliability(product),
     },
-    logistics: {
-      weightKg: extractWeightKg(product),
-    },
+    logistics: (() => {
+      const dimensionsCm = extractDimensionsCm(product);
+      return {
+        weightKg: extractWeightKg(product),
+        dimensionsCm,
+        volumetricWeightKg: volumetricWeightKgFromDimensions(dimensionsCm),
+      };
+    })(),
     procurement: {
       status: missing.length
         ? "🟡 Нужны данные поставщика"
@@ -2515,12 +2662,14 @@ export function buildProductProcurementProfile(
       }),
       nextAction: "Отправьте вопросы поставщику и скачайте закупочный пакет.",
       mustAskSupplier,
-      mustCheckBeforeSample: uniq(
-        [
-          ...array<string>(draftProcurement.mustCheckBeforeSample).map(safeRu),
-          ...rules.beforeSample,
-        ],
-        8,
+      mustCheckBeforeSample: normalizeFragmentLines(
+        uniq(
+          [
+            ...array<string>(draftProcurement.mustCheckBeforeSample).map(safeRu),
+            ...rules.beforeSample,
+          ],
+          8,
+        ),
       ),
       mustCheckOnSample: uniq(
         [
@@ -2529,13 +2678,15 @@ export function buildProductProcurementProfile(
         ],
         12,
       ),
-      redFlags: uniq(
-        [
-          ...array<string>(draftProcurement.redFlags).map(safeRu),
-          ...rules.redFlags,
-          ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu),
-        ],
-        12,
+      redFlags: normalizeFragmentLines(
+        uniq(
+          [
+            ...array<string>(draftProcurement.redFlags).map(safeRu),
+            ...rules.redFlags,
+            ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu),
+          ],
+          12,
+        ),
       ),
     },
     cargo: {
@@ -2806,7 +2957,7 @@ export function buildMainReportFromProfile(
   const weight = p.logistics?.weightKg ?? extractWeightKg(product);
   const rel = p.supplier.reliability;
   const relLine = `Надёжность: ${rel.badge} ${RELIABILITY_LEVEL_RU[rel.level]}${rel.reasons.length ? ` — ${rel.reasons.slice(0, 3).join(", ")}` : ""}`;
-  const lines = [
+  const lines: Array<string | null> = [
     `📦 <b>${escapeHtml(p.identity.titleForReport)}</b>`,
     "",
     "Источник: 1688",
@@ -2820,20 +2971,20 @@ export function buildMainReportFromProfile(
     `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
     p.sku.models.length
       ? `• Модели: ${escapeHtml(p.sku.models.join(", "))}`
-      : "",
+      : null,
     p.sku.colors.length
       ? `• Цвета: ${escapeHtml(p.sku.colors.join(", "))}`
-      : "",
+      : null,
     p.sku.plugStandards.length
       ? `• Стандарты вилки: ${escapeHtml(p.sku.plugStandards.join(", "))} — уточнить выбранный SKU`
-      : "",
+      : null,
     p.sku.labeledParams.length
       ? `• Параметры: ${escapeHtml(p.sku.labeledParams.join(" · "))}`
       : p.sku.sizes.length
         ? `• Размеры: ${escapeHtml(p.sku.sizes.join(", "))}`
         : p.sku.ambiguousParams.length
           ? `• Параметры: ${escapeHtml(p.sku.ambiguousParams.join(" / "))} — значение нужно уточнить`
-          : "",
+          : null,
     `• Материал: ${escapeHtml(p.identity.materials.join(", "))}${/подтверд/i.test(p.identity.materials.join(" ")) ? "" : " — подтвердить"}`,
     `• Вес: ${weight ? `${String(weight).replace(".", ",")} кг — подтвердить, нужен вес с упаковкой` : "не указан"}`,
     "",
@@ -2848,6 +2999,13 @@ export function buildMainReportFromProfile(
     `• Закупка: ${priceYuan ? `${cny(priceYuan)} ≈ ${rub(purchaseRub)}` : "нужно уточнить"}`,
     `• Без карго: ${costWithoutCargo ? `~${rub(costWithoutCargo)}` : "нужно уточнить"}`,
     "• Карго: нужен вес с упаковкой",
+    (() => {
+      const line = volumetricWeightLine(
+        p.logistics?.dimensionsCm ?? null,
+        p.logistics?.volumetricWeightKg ?? null,
+      );
+      return line ? escapeHtml(line) : null;
+    })(),
     "",
     "📁 <b>Закупочный пакет готов</b>",
     "• вопросы поставщику",
@@ -2864,8 +3022,30 @@ export function buildMainReportFromProfile(
     "1. Нажмите «💬 Вопросы поставщику».",
     "2. Отправьте текст поставщику в чат 1688.",
     "3. Скачайте закупочный пакет.",
-  ].filter(Boolean);
-  return lines.join("\n");
+  ];
+  return joinReportLines(lines);
+}
+
+/**
+ * Join report lines keeping intentional blank-line section separators, while
+ * dropping content lines that resolved to empty (optional bullets that were
+ * filtered out). Collapses any run of blanks to a single blank line so we never
+ * glue sections together and never stack multiple blank lines.
+ */
+function joinReportLines(lines: Array<string | null>): string {
+  const out: string[] = [];
+  for (const raw of lines) {
+    if (raw === null) continue; // omitted optional bullet — not a separator
+    const isBlank = raw === "";
+    if (isBlank) {
+      if (out.length === 0 || out[out.length - 1] === "") continue;
+      out.push("");
+      continue;
+    }
+    out.push(raw);
+  }
+  while (out.length && out[out.length - 1] === "") out.pop();
+  return out.join("\n");
 }
 
 function escapeHtml(v: unknown): string {
@@ -3209,6 +3389,12 @@ export function buildCargoBriefFromProfile(
 ): string {
   const p = ensureProductProcurementProfile(product, opts);
   const weight = p.logistics?.weightKg ?? extractWeightKg(product);
+  const dims = p.logistics?.dimensionsCm ?? null;
+  const volLine = volumetricWeightLine(
+    dims,
+    p.logistics?.volumetricWeightKg ?? null,
+    "",
+  );
   return [
     "# ТЗ карго",
     "",
@@ -3221,6 +3407,7 @@ export function buildCargoBriefFromProfile(
     "## Что нужно запросить для доставки",
     ...list(p.cargo.mustAsk, 16),
     "",
+    ...(volLine ? ["## Объёмный вес (предварительно)", volLine, ""] : []),
     "## Дополнительно по этому товару",
     ...(p.cargo.likelySensitiveCargoIssues.length
       ? list(p.cargo.likelySensitiveCargoIssues, 8)
@@ -3230,7 +3417,7 @@ export function buildCargoBriefFromProfile(
     "",
     "## Текущий статус",
     `Вес: ${weight ? `${String(weight).replace(".", ",")} кг — подтвердить, нужен вес с упаковкой` : "не указан"}`,
-    "Габариты: не указаны",
+    `Габариты: ${dims ? `${dims} см (предварительно, подтвердить у поставщика)` : "не указаны"}`,
     `SKU: ${p.sku.selectedSkuText ?? "не определён"}`,
     "",
     "## Важно",

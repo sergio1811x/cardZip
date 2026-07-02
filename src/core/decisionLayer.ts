@@ -286,6 +286,22 @@ function supplierTypeRu(value: unknown): string {
   if (/seller|store|shop|продав/.test(raw)) return 'продавец';
   return normalizeFact(value) || 'продавец';
 }
+// Single source of truth for the supplier display name across ProductDetails and
+// the buyer brief. Buyers need the real 1688 shop name (often Chinese) to find the
+// store, so we do NOT drop it just because it is non-Latin. We only reject
+// material-like garbage, trim trailing legal-form parentheticals like
+// "(个体工商户)" / "(有限公司)", and normalize whitespace. Returns null when there is
+// no usable name so callers can render a consistent "не указано".
+function cleanSupplierName(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw || isMaterialLikeSupplierName(raw)) return null;
+  const trimmed = raw
+    // strip a trailing legal-form parenthetical (Chinese or Latin brackets)
+    .replace(/[（(]\s*(?:个体工商户|有限公司|有限责任公司|股份有限公司|个体户|工作室)\s*[)）]\s*$/u, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return trimmed || null;
+}
 function money(value: number | null | undefined): string { if (!value || !Number.isFinite(value) || value <= 0) return '—'; return `${Math.round(value).toLocaleString('ru-RU')} ₽`; }
 // Safe "yuan ≈ rub" price line. A number is NEVER string-glued to fallback text.
 // Delegates the yuan/range/fallback decision to the clean priceNormalizer so both
@@ -830,35 +846,57 @@ export function build1688Detail(product: any): string {
   // name when an equivalent structured line exists, and bare "Цвет: X" lines
   // whose color already appears among the structured variants.
   const norm = (v: string) => String(v ?? '').toLowerCase().replace(/[\s;,·|]+/g, ' ').replace(/цвет:|размер:|модель:/g, '').trim();
-  const structured = x.sku.skuVariantsNormalized.map(v => String(v.label ?? '')).filter(Boolean);
-  const structuredKeys = new Set(structured.map(norm));
-  // colors already represented by structured variants (so we can drop bare color-only lines)
-  const structuredColorSet = new Set(
-    x.sku.skuVariantsNormalized.map(v => String(v.color ?? '').toLowerCase().trim()).filter(Boolean)
-  );
-  const selectedKey = norm(String(p.sku.selectedSkuText ?? ''));
-  const isBareColorLine = (v: string) => {
-    const m = /^\s*цвет:\s*([^;·|]+?)\s*$/i.exec(String(v));
-    return !!m && structuredColorSet.has(m[1].toLowerCase().trim());
+  // Build every structured variant line from the SAME fields the profile/main report
+  // use (color/size), so lines are consistent: "Цвет: X; Размер: Y" when both are
+  // known, otherwise the one known dimension in the same stable format. Falls back to
+  // the raw label only when neither color nor size is present.
+  const cleanDim = (v: unknown) => normalizeCnText(String(v ?? '')).replace(/\s+/g, ' ').trim();
+  const buildVariantLine = (v: { label?: string; color?: string; size?: string }): string => {
+    const color = cleanDim(v.color);
+    const size = cleanDim(v.size);
+    const parts: string[] = [];
+    if (color) parts.push(`Цвет: ${color}`);
+    if (size) parts.push(`Размер: ${size}`);
+    if (parts.length) return parts.join('; ');
+    return cleanDim(v.label);
   };
+  const structuredLines = x.sku.skuVariantsNormalized.map(buildVariantLine).filter(Boolean);
+  // A line is a strict subset of another when its normalized tokens are all contained
+  // in the fuller line (e.g. bare "Размер: L" ⊂ "Цвет: белый; Размер: L"). Drop subsets.
+  const tokens = (v: string) => new Set(norm(v).split(' ').filter(Boolean));
+  const isSubsetOfAny = (v: string, others: string[]) => {
+    const t = tokens(v);
+    if (!t.size) return false;
+    return others.some(o => {
+      if (o === v) return false;
+      const ot = tokens(o);
+      if (ot.size <= t.size) return false; // only strictly fuller lines
+      for (const tok of t) if (!ot.has(tok)) return false;
+      return true;
+    });
+  };
+  const structuredKeys = new Set(structuredLines.map(norm));
+  const selectedKey = norm(String(p.sku.selectedSkuText ?? ''));
   const skuCandidates = [
-    ...structured,
+    ...structuredLines,
     ...p.sku.normalizedExamples.map(e => String((e as any)?.normalized ?? (e as any) ?? '')),
   ]
     .filter(Boolean)
-    .filter(v => !isBareColorLine(v))
     // drop the raw selected-SKU name if an equivalent structured line already exists
     .filter(v => !(structuredKeys.size && norm(v) === selectedKey && structuredKeys.has(selectedKey)));
   const seenSku = new Set<string>();
-  const skuDeduped = skuCandidates.filter(v => {
-    const k = norm(v);
-    if (seenSku.has(k)) return false;
-    seenSku.add(k);
-    return true;
-  });
+  const skuDeduped = skuCandidates
+    .filter(v => {
+      const k = norm(v);
+      if (seenSku.has(k)) return false;
+      seenSku.add(k);
+      return true;
+    });
+  // Second pass: now that duplicates are gone, drop strict subsets of fuller lines.
+  const skuDedupedNoSubset = skuDeduped.filter((v, _i, arr) => !isSubsetOfAny(v, arr));
   const SKU_CAP = 6;
-  const skuExamples = skuDeduped.slice(0, SKU_CAP);
-  const skuTail = skuDeduped.length > SKU_CAP ? `• +${skuDeduped.length - SKU_CAP} ещё` : '';
+  const skuExamples = skuDedupedNoSubset.slice(0, SKU_CAP);
+  const skuTail = skuDedupedNoSubset.length > SKU_CAP ? `• +${skuDedupedNoSubset.length - SKU_CAP} ещё` : '';
   const materialText = p.identity.materials.join(', ') || 'нужно уточнить';
   const formatDims = (v: string): string => {
     const s = String(v).trim();
@@ -886,7 +924,12 @@ export function build1688Detail(product: any): string {
     .filter((a, i, arr) => arr.findIndex(o => o.label.toLowerCase() === a.label.toLowerCase()) === i)
     .slice(0, 10)
     .map(a => `• ${html(a.label)}: ${html(a.value)}`);
-  const supplierName = isMaterialLikeSupplierName(product?.supplierName) ? 'не указано' : (product?.supplierName || p.supplier.name || 'не указано');
+  // Same source/cleaning as the buyer brief so the name is consistent everywhere.
+  const cleanedSupplierName = cleanSupplierName(product?.supplierName) ?? cleanSupplierName(p.supplier.name);
+  const supplierName = cleanedSupplierName ?? 'не указано';
+  const supplierNameNote = cleanedSupplierName && hasHan(cleanedSupplierName)
+    ? ' (оригинальное название магазина на 1688)'
+    : '';
   const photoCount = imagesCount(product) || product?.normalized1688?.imageCount || '—';
   const moq = positive(product?.moq ?? product?.normalized1688?.moq);
   // Resolve weight from the SAME source the profile uses so "Вес" (key chars)
@@ -928,7 +971,7 @@ export function build1688Detail(product: any): string {
     ...(skuTail ? [skuTail] : []),
     '',
     '<b>Поставщик:</b>',
-    `• название: ${html(supplierName)}`,
+    `• название: ${html(supplierName)}${supplierNameNote}`,
     `• тип: ${html(p.supplier.displayType || 'не указан')}`,
     `• рейтинг: ${html(p.supplier.rating || '—')}`,
     `• заказов: ${html(p.supplier.orders || '—')}`,
@@ -936,10 +979,10 @@ export function build1688Detail(product: any): string {
     '',
     '<b>Ключевые характеристики:</b>',
     `• тип товара: ${html(p.identity.titleForReport)}`,
-    p.identity.formFactor ? `• конструкция: ${html(p.identity.formFactor)}` : '',
-    p.sku.sizes.length ? `• размер: ${html(p.sku.sizes.join(', '))}` : '',
+    p.identity.formFactor ? `• конструкция: ${html(p.identity.formFactor)}` : null,
+    p.sku.sizes.length ? `• размер: ${html(p.sku.sizes.join(', '))}` : null,
     `• материал: ${html(materialText)}`,
-    weightText ? `• вес: ${html(weightText)}` : '',
+    weightText ? `• вес: ${html(weightText)}` : null,
     ...(useful.length ? useful : []),
     ...(p.identity.useCases.length ? [`• назначение: ${html(p.identity.useCases.slice(0, 3).join(', '))}`] : []),
     '',
@@ -947,8 +990,19 @@ export function build1688Detail(product: any): string {
     `• вес: ${weightText ? html(weightText) : 'не указан'}`,
     `• упаковка: ${p.cargo.mustAsk.some(v => /габарит|упаков/i.test(v)) ? 'нужно уточнить' : 'не указана'}`,
     `• фото: ${html(photoCount)}`,
-  ].filter(Boolean);
-  return detailLines.join('\n');
+  ];
+  // Drop conditional entries that evaluated to '' (e.g. absent formFactor/size/weight)
+  // BUT keep the intentional blank-line separators. Empty separators are represented as
+  // a dedicated sentinel so section headers never run together, then collapsed so we
+  // never emit two blank lines in a row.
+  const rendered: string[] = [];
+  for (const line of detailLines) {
+    if (line === '') { if (rendered.length && rendered[rendered.length - 1] !== '') rendered.push(''); continue; }
+    if (!line) continue; // conditional entry that produced falsy (not '') → skip
+    rendered.push(line);
+  }
+  while (rendered.length && rendered[rendered.length - 1] === '') rendered.pop();
+  return rendered.join('\n');
 }
 
 function seoFriendlyTitle(product: any, x: ReturnType<typeof buildDecisionContext>, content: any): string {
@@ -1193,7 +1247,7 @@ export function buildBuyerBrief(product: any, sourceUrl = ''): string {
     `MOQ: ${positive(product?.moq ?? product?.normalized1688?.moq) ? `${positive(product?.moq ?? product?.normalized1688?.moq)} шт.` : 'уточнить'}`,
     '',
     '## 3. Поставщик',
-    `Название: ${normalizeFact(product?.supplierName) || 'не указано'}`,
+    `Название: ${(() => { const n = cleanSupplierName(product?.supplierName); return n ? `${n}${hasHan(n) ? ' (оригинальное название магазина на 1688)' : ''}` : 'не указано'; })()}`,
     `Тип: ${supplierTypeRu(product?.supplierType) || 'не указан'}`,
     `Рейтинг: ${normalizeFact(product?.supplierRating) || '—'}`,
     `Заказы: ${normalizeFact(product?.sold) || '—'}`,
