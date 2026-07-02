@@ -78,7 +78,15 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
   if (!apiKey) return localTranslated;
 
   try {
-    const prompt = `Переведи названия SKU-вариантов товара с китайского на русский. Это цвета, размеры или комбинации. Верни JSON массив строк, по одной на каждый вход. Только JSON, без markdown.\n\nВход: ${JSON.stringify(stillChinese)}`;
+    const prompt = `Ты переводчик SKU-вариантов товаров с 1688 (CN→RU). Это цвета, размеры, модели, комплектации или их комбинации.
+Правила:
+- переводи смысл цвета/размера на русский;
+- артикулы, коды моделей и стандарты НЕ искажай: 美规→US, 欧规→EU, 英规→UK, 日规→JP, 韩规→KR, 澳规→AU, 国标→CN;
+- сохраняй числа и единицы (10kg, 5L, 300ml) как есть;
+- ровно один перевод на каждый вход, тот же порядок.
+Верни только JSON-массив строк, без markdown.
+
+Вход: ${JSON.stringify(stillChinese)}`;
 
     const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',

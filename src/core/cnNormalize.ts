@@ -127,12 +127,84 @@ const COLOR_MAP: Record<string, string> = {
   灰色: "серый",
   灰: "серый",
   紫色: "фиолетовый",
+  浅紫色: "светло-фиолетовый",
+  浅紫: "светло-фиолетовый",
   紫: "фиолетовый",
   橙色: "оранжевый",
   橙: "оранжевый",
+  卡其色: "хаки",
   卡其: "хаки",
   米白: "молочно-белый",
+  米色: "бежевый",
+  棕色: "коричневый",
+  咖啡色: "коричневый",
+  天蓝: "голубой",
+  浅蓝: "голубой",
+  深蓝: "тёмно-синий",
 };
+
+/**
+ * Maps a Chinese plug/power-standard token to a short region code.
+ * Used for electrical goods where SKU variants differ only by plug standard.
+ */
+const PLUG_STANDARD_MAP: Array<[RegExp, string]> = [
+  [/美规|美标|美式插头|us\s*plug/i, "US"],
+  [/欧规|欧标|欧式插头|eu\s*plug/i, "EU"],
+  [/英规|英标|英式插头|uk\s*plug/i, "UK"],
+  [/日规|日标|日式插头|jp\s*plug/i, "JP"],
+  [/韩规|韩标|韩国标准|韩式插头|kr\s*plug/i, "KR"],
+  [/澳规|澳标|澳式插头|au\s*plug/i, "AU"],
+  [/国标|国规|中规|中国标准|cn\s*plug/i, "CN"],
+];
+
+/** Chinese display-type tokens for electrical goods → RU. */
+const DISPLAY_TYPE_MAP: Array<[RegExp, string]> = [
+  [/数显款|数显|数字显示/i, "цифровой дисплей"],
+  [/灯显款|灯显|指示灯款/i, "ламповая индикация"],
+];
+
+/** In-stock/logistics labels that must NOT surface in a SKU description. */
+const STOCK_LABEL_RE =
+  /现货库存速发|现货速发|现货库存|现货|库存充足|速发|包邮|跨境|外贸|新款|爆款|网红|厂家直销|一件代发/gi;
+
+/** Returns the plug standard code (US/EU/UK/JP/KR/AU/CN) for a SKU token, if any. */
+export function extractPlugStandard(input: unknown): string | undefined {
+  const text = String(input ?? "");
+  for (const [re, code] of PLUG_STANDARD_MAP) {
+    if (re.test(text)) return code;
+  }
+  return undefined;
+}
+
+/** Returns the RU display-type ("цифровой дисплей" / "ламповая индикация") for a SKU token, if any. */
+export function extractDisplayType(input: unknown): string | undefined {
+  const text = String(input ?? "");
+  for (const [re, ru] of DISPLAY_TYPE_MAP) {
+    if (re.test(text)) return ru;
+  }
+  return undefined;
+}
+
+/** Extracts a model code like FWM-01 / FWM02 → normalized "FWM-02". */
+export function extractModelCode(input: unknown): string | undefined {
+  const text = String(input ?? "");
+  const m = text.match(/\b([A-Z]{2,})-?(\d{2,})\b/);
+  if (!m) return undefined;
+  return `${m[1].toUpperCase()}-${m[2]}`;
+}
+
+/** Maps a Chinese color token to RU (public wrapper over the internal color detector). */
+export function extractColor(input: unknown): string | undefined {
+  return detectColor(String(input ?? ""));
+}
+
+/** Removes stock/logistics labels from a SKU string. */
+export function stripStockLabels(input: unknown): string {
+  return String(input ?? "")
+    .replace(STOCK_LABEL_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 const RU_COLOR_PATTERNS: Array<[RegExp, string]> = [
   [/розов\w*/i, "розовый"],

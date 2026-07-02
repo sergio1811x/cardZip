@@ -8,6 +8,9 @@ export interface ProcurementQualityInput {
   mainReportText: string;
   seoDraftMd: string;
   productKind?: string;
+  priceReliable?: boolean;
+  plugStandardReliable?: boolean;
+  selectedSkuText?: string;
 }
 
 export interface ProcurementQualityResult {
@@ -130,6 +133,92 @@ export function validateProcurementResult(
         errors.push(
           "[seoDraftMd] fake_security_camera: real-camera capability asserted as fact without a forbidden-claims qualifier",
         );
+      }
+    }
+  }
+
+  // ---- Electrical-specific failures over every user-facing blob ----
+  const electricalForbidden: Array<{ re: RegExp; msg: string }> = [
+    { re: /\d+\s*нужно уточнить/, msg: 'broken glued price (e.g. "8нужно уточнить")' },
+    {
+      re: /Закупка:\s*нужно уточнить\s*≈/,
+      msg: "economics computed off unknown price",
+    },
+    { re: /для\s+поддержание(?![а-яё])/i, msg: 'bad Russian grammar "для поддержание"' },
+    { re: /\bNaN\b|\bundefined\b|\bnull\b/, msg: "NaN/undefined/null in user-facing text" },
+  ];
+
+  // Qualifier-aware voltage/wattage tokens.
+  const voltWattTokens = [
+    /\b\d{2,3}\s?V\b/,
+    /\b\d{2,4}\s?W\b/,
+    /\d{2,3}\s?В\b/,
+    /\d{2,4}\s?Вт\b/,
+  ];
+  const qualifierRe = /проверить|уточнить|маркировк/i;
+
+  for (const blob of userFacingBlobs) {
+    for (const { re, msg } of electricalForbidden) {
+      if (re.test(blob.text)) {
+        errors.push(`[${blob.label}] ${msg}`);
+      }
+    }
+
+    // Unconfirmed US plug asserted.
+    if (/американская\s+вилка/i.test(blob.text) && input.plugStandardReliable === false) {
+      errors.push(`[${blob.label}] unconfirmed plug asserted ("американская вилка")`);
+    }
+
+    // Voltage/wattage asserted as fact without a nearby qualifier.
+    const hasVoltWatt = voltWattTokens.some((re) => re.test(blob.text));
+    if (hasVoltWatt && !qualifierRe.test(blob.text)) {
+      errors.push(
+        `[${blob.label}] voltage/wattage asserted as fact without проверить/уточнить/маркировк qualifier`,
+      );
+    }
+
+    // Too-positive verdict on unknown price.
+    if (
+      /Можно готовить\s+(заказ\s+)?образц/i.test(blob.text) &&
+      input.priceReliable === false
+    ) {
+      errors.push(`[${blob.label}] too-positive verdict on unknown price`);
+    }
+  }
+
+  // ---- SEO title plug-standard must match selectedSkuText ----
+  {
+    const seo = input.seoDraftMd ?? "";
+    const titleLine =
+      seo
+        .split("\n")
+        .map((l) => l.trim())
+        .find(
+          (l) =>
+            /^#{1,6}\s/.test(l) || /^Название\s*:/i.test(l),
+        ) ?? "";
+    const plugWordRe = /US|EU|UK|JP|американск|европейск|британск|японск/i;
+    const m = titleLine.match(plugWordRe);
+    if (m) {
+      const sku = input.selectedSkuText ?? "";
+      if (!plugWordRe.test(sku) || !sku.toLowerCase().includes(m[0].toLowerCase())) {
+        errors.push(
+          `[seoDraftMd] SEO title plug standard "${m[0]}" not present in selectedSkuText`,
+        );
+      }
+    }
+  }
+
+  // ---- Raw long SKU list one-liner in productDetails ----
+  {
+    const modelTokenRe = /[A-Z]{2,}-?\d{2,}/g;
+    for (const line of (input.productDetailsText ?? "").split("\n")) {
+      if (line.length > 120 && /[一-鿿]/.test(line)) {
+        const matches = line.match(modelTokenRe);
+        if (matches && matches.length >= 2) {
+          errors.push("[productDetailsText] raw SKU list one line");
+          break;
+        }
       }
     }
   }

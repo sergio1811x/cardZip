@@ -156,12 +156,16 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   const formatErrors = docs.flatMap((d) => validateFileFormatting(d.filename, d.text));
   if (formatErrors.length) console.error('[file-format-validator]', formatErrors.join('; '));
   const seoDoc = docs.find((d) => d.filename === '05_SEO_черновик.md');
+  const qProfile = product ? ensureProductProcurementProfile(product, { sourceUrl: job.input_url }) : undefined;
   const quality = validateProcurementResult({
     files: docs.map((d) => ({ name: d.filename, content: d.text })),
     productDetailsText: '',
     mainReportText: '',
     seoDraftMd: seoDoc?.text ?? '',
-    productKind: product ? ensureProductProcurementProfile(product, { sourceUrl: job.input_url }).identity.productKind : undefined,
+    productKind: qProfile?.identity.productKind,
+    priceReliable: qProfile?.pricing.priceReliable,
+    plugStandardReliable: !!qProfile?.sku.selectedPlugStandard,
+    selectedSkuText: qProfile?.sku.selectedSkuText ?? undefined,
   });
   if (!quality.passed) console.error('[procurement-quality-gate]', quality.errors.join('; '));
   if (quality.warnings.length) console.warn('[procurement-quality-gate:warn]', quality.warnings.join('; '));

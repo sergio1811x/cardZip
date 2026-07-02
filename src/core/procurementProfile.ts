@@ -1,5 +1,13 @@
 import type { ProductIntelligence } from "../types";
-import { normalizeMixedProductText } from "./cnNormalize";
+import {
+  normalizeMixedProductText,
+  extractPlugStandard,
+  extractDisplayType,
+  extractModelCode,
+  extractColor,
+  stripStockLabels,
+} from "./cnNormalize";
+import { normalizePrice } from "./priceNormalizer";
 import {
   cleanRawAttributes,
   isMaterialLikeSupplierName,
@@ -22,6 +30,7 @@ export type ProductKind =
   | "passive_insect_trap"
   | "usb_device"
   | "small_appliance"
+  | "heating_food_mat"
   | "kitchen_tool"
   | "bag_accessory"
   | "fake_security_camera"
@@ -30,6 +39,7 @@ export type ProductKind =
 export type SelectedSkuDecision = {
   selectedSkuText: string | null;
   selectedPriceYuan: number | null;
+  selectedPlugStandard: string | null;
   reliable: boolean;
   reason: string;
 };
@@ -64,6 +74,8 @@ export type ProductProcurementProfile = {
     models: string[];
     packageTypes: string[];
     packCounts: string[];
+    plugStandards: string[];
+    selectedPlugStandard: string | null;
     skuRisk: string;
     skuWarnings: string[];
     normalizedExamples: string[];
@@ -796,6 +808,115 @@ const KIND_RULES: Record<
       "режимы нагрева",
     ],
   },
+  heating_food_mat: {
+    mustAskSupplier: [
+      "Подтвердите цену выбранного SKU.",
+      "Уточните модель и её отличие: ламповая индикация или цифровой дисплей.",
+      "Подтвердите цвет выбранного SKU.",
+      "Уточните стандарт вилки: EU/US/UK/JP.",
+      "Укажите напряжение и мощность по маркировке.",
+      "Пришлите фото шильдика (таблички с маркировкой).",
+      "Укажите температурный диапазон и шаг регулировки.",
+      "Есть ли автоотключение?",
+      "Есть ли защита от перегрева?",
+      "Подтвердите материалы: покрытие, нагревательный элемент, нижняя часть.",
+      "Совместима ли с металлической/керамической/стеклянной посудой?",
+      "Укажите максимальную нагрузку и размер посуды.",
+      "Есть ли запах при первом включении?",
+      "Есть ли инструкция?",
+      "Есть ли сертификаты CE/RoHS/UKCA/ETL/GS?",
+      "Укажите вес единицы с упаковкой.",
+      "Укажите габариты упаковки.",
+      "Пришлите видео работы.",
+      "Можно ли заказать 1–2 образца?",
+    ],
+    beforeSample: [
+      "подтвердить вилку, напряжение и мощность",
+      "получить фото шильдика",
+      "получить вес и габариты",
+      "запросить видео работы",
+    ],
+    onSample: [
+      "соответствие вилки выбранному SKU",
+      "напряжение и мощность на шильдике",
+      "работу дисплея",
+      "скорость нагрева",
+      "равномерность нагрева",
+      "фактическую температуру пирометром",
+      "автоотключение, если заявлено",
+      "запах при работе",
+      "качество силикона",
+      "устойчивость на столе",
+      "нагрев нижней части",
+      "кабель и вилку",
+      "инструкцию и маркировку",
+      "упаковку после доставки",
+    ],
+    cargo: [
+      "вес с упаковкой",
+      "габариты индивидуальной упаковки",
+      "количество в транспортной коробке",
+      "вес коробки",
+      "габариты коробки",
+      "фото индивидуальной упаковки",
+      "фото коробки",
+      "есть ли аккумулятор или батарея",
+      "есть ли магнит",
+      "есть ли жидкость",
+      "тип вилки",
+      "сертификаты",
+      "защита от сгиба/деформации силикона",
+    ],
+    redFlags: [
+      "цена SKU не подтверждена",
+      "стандарт вилки не подтверждён",
+      "напряжение/мощность не подтверждены",
+      "нет фото шильдика",
+      "нет видео работы",
+      "нет сертификатов",
+      "поставщик с 0 заказов",
+      "неизвестен вес с упаковкой",
+      "риск запаха/перегрева/деформации",
+    ],
+    seoAllowed: [
+      "греющая подставка для еды",
+      "подставка для подогрева блюд",
+      "гибкая подставка",
+      "цифровой дисплей (только если модель с дисплеем подтверждена)",
+      "поддержание температуры готовых блюд",
+      "регулировка температуры (после подтверждения)",
+      "автоотключение (после подтверждения)",
+    ],
+    seoForbidden: [
+      "безопасная",
+      "сертифицированная",
+      "равномерный нагрев",
+      "быстрый нагрев",
+      "защита от перегрева",
+      "автоотключение",
+      "пищевой силикон",
+      "водонепроницаемая",
+      "энергосберегающая",
+      "подходит для любой посуды",
+      "не пахнет",
+      "можно мыть водой",
+      ...DANGEROUS_CLAIMS,
+    ],
+    infographic: [
+      "Подставка общий вид",
+      "Дисплей и регулировка",
+      "Стандарт вилки и маркировка",
+      "Материал поверхности",
+      "Упаковка",
+    ],
+    forbiddenCategoryWords: [
+      "подошва",
+      "стелька",
+      "размерная сетка",
+      "срок годности",
+      "консистенция",
+    ],
+  },
   usb_device: genericRules("USB-товар"),
   small_appliance: genericRules("малая техника"),
   kitchen_tool: genericRules("кухонный товар"),
@@ -1122,9 +1243,15 @@ function normalizeProductKind(value: unknown): ProductKind | null {
     .toLowerCase();
   if (!raw) return null;
   const direct = raw.match(
-    /footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|dish_rack|kitchen_storage_rack|passive_insect_trap|usb_device|small_appliance|kitchen_tool|bag_accessory|fake_security_camera|generic_product/,
+    /footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|dish_rack|kitchen_storage_rack|passive_insect_trap|usb_device|heating_food_mat|small_appliance|kitchen_tool|bag_accessory|fake_security_camera|generic_product/,
   )?.[0];
   if (direct && direct in KIND_RULES) return direct as ProductKind;
+  if (
+    /暖菜板|保温板|恒温垫|热菜板|热饭.*垫|греющ[а-яё ]*подставк|подогреватель\s+блюд|подставк[а-яё ]*для\s+подогрев|warming\s*tray|food\s*warming\s*mat|电热.*暖菜/i.test(
+      raw,
+    )
+  )
+    return "heating_food_mat";
   if (
     /仿真摄像头|假监控|假摄像头|dummy\s*camera|fake\s*camera|imitation\s*(security\s*)?camera|имитац[а-яё ]*камер|муляж\s*камер|фальш[- ]?камер|камера[- ]?муляж|fake\s*cctv/i.test(
       raw,
@@ -1396,6 +1523,47 @@ function extractAmbiguousParams(labels: string[], kind: ProductKind): string[] {
   );
 }
 
+const ELECTRICAL_KINDS: ProductKind[] = [
+  "heating_food_mat",
+  "small_appliance",
+  "mini_washer",
+  "usb_device",
+];
+
+function isElectricalKind(kind: ProductKind): boolean {
+  return ELECTRICAL_KINDS.includes(kind);
+}
+
+/**
+ * Builds a clean, structured RU label for an electrical SKU variant from a raw
+ * (usually Chinese) SKU string like `FWM-02数显款浅紫色美规`:
+ *   → `FWM-02 · цифровой дисплей · светло-фиолетовый · US`
+ * Stock/logistics labels are dropped. Returns the structured parts plus the plug.
+ */
+function structureElectricalSku(rawLabel: string): {
+  text: string;
+  model: string | null;
+  color: string | null;
+  plugStandard: string | null;
+  displayType: string | null;
+} {
+  const cleaned = stripStockLabels(rawLabel);
+  const model = extractModelCode(cleaned) ?? null;
+  const displayType = extractDisplayType(cleaned) ?? null;
+  const color = extractColor(cleaned) ?? null;
+  const plugStandard = extractPlugStandard(cleaned) ?? null;
+  const parts = [model, displayType, color, plugStandard].filter(
+    Boolean,
+  ) as string[];
+  return {
+    text: parts.length ? parts.join(" · ") : safeRu(cleaned),
+    model,
+    color,
+    plugStandard,
+    displayType,
+  };
+}
+
 function buildSkuProfile(
   product: any,
   kind: ProductKind,
@@ -1403,8 +1571,44 @@ function buildSkuProfile(
 ): ProductProcurementProfile["sku"] {
   const variants = collectSkuVariants(product);
   const labels = variants.map(skuName).filter(Boolean);
+  const electrical = isElectricalKind(kind);
+  // Raw (still-Chinese) variant names — needed because skuName()/safeRu strips
+  // CJK, which would destroy plug/color/model tokens for electrical goods.
+  const rawNames = variants
+    .map((s: any) =>
+      String(
+        s?.name ?? s?.label ?? s?.skuName ?? s?.propertiesName ?? s?.raw ?? "",
+      ),
+    )
+    .filter(Boolean);
   const colors = extractColors(labels);
-  const ambiguousParams = extractAmbiguousParams(labels, kind);
+  const ambiguousParams = electrical
+    ? []
+    : extractAmbiguousParams(labels, kind);
+  const plugStandards = electrical
+    ? uniq(
+        rawNames
+          .map((l) => extractPlugStandard(l))
+          .filter((v): v is string => !!v),
+        8,
+      )
+    : [];
+  const electricalModels = electrical
+    ? uniq(
+        rawNames
+          .map((l) => extractModelCode(l))
+          .filter((v): v is string => !!v),
+        8,
+      )
+    : [];
+  const electricalColors = electrical
+    ? uniq(
+        rawNames
+          .map((l) => extractColor(l))
+          .filter((v): v is string => !!v),
+        12,
+      )
+    : [];
   const sizeMatches =
     kind === "footwear"
       ? uniq(
@@ -1426,8 +1630,9 @@ function buildSkuProfile(
       ),
     8,
   );
-  const models =
-    kind === "dish_rack" || kind === "kitchen_storage_rack"
+  const models = electrical
+    ? electricalModels
+    : kind === "dish_rack" || kind === "kitchen_storage_rack"
       ? uniq(
           labels.flatMap((l) =>
             Array.from(l.matchAll(/\b[23]\s*(?:ярус[а-яё]*|tier|层)/gi)).map(
@@ -1437,6 +1642,9 @@ function buildSkuProfile(
           8,
         )
       : [];
+  const allColors = electrical
+    ? uniq([...colors, ...electricalColors], 12)
+    : colors;
   const packCounts = uniq(
     labels.flatMap((l) =>
       Array.from(l.matchAll(/\b\d+\s*(?:шт|pcs|件|个)\b/gi)).map((m) => m[0]),
@@ -1444,8 +1652,10 @@ function buildSkuProfile(
     8,
   );
   const dims: string[] = [];
-  if (colors.length) dims.push("цвет");
-  if (models.length) dims.push("количество ярусов");
+  if (allColors.length) dims.push("цвет");
+  if (models.length)
+    dims.push(electrical ? "модель" : "количество ярусов");
+  if (plugStandards.length) dims.push("стандарт вилки");
   if (sizeMatches.length)
     dims.push(
       kind === "dish_rack" || kind === "kitchen_storage_rack"
@@ -1458,25 +1668,42 @@ function buildSkuProfile(
   const skuSummary = count
     ? `${count} ${pluralRu(count, "вариант", "варианта", "вариантов")} · ${dims.join(" × ") || "вариант"}`
     : "SKU нужно уточнить";
-  const normalizedExamples = labels
-    .slice(0, 5)
-    .map((l) =>
-      ambiguousParams.length
-        ? l.replace(/\b(8|16|40|120)\b/g, "Параметр $1")
-        : l,
+  const normalizedExamples = electrical
+    ? uniq(
+        rawNames.map((l) => structureElectricalSku(l).text).filter(Boolean),
+        5,
+      )
+    : labels
+        .slice(0, 5)
+        .map((l) =>
+          ambiguousParams.length
+            ? l.replace(/\b(8|16|40|120)\b/g, "Параметр $1")
+            : l,
+        );
+  const selected = makeSelectedSkuDecision(product, variants, sourceUrl, kind);
+  // For an electrical kind, never show a selected SKU without a plug slot when
+  // the variant set contains plug standards.
+  if (electrical && selected.selectedSkuText && plugStandards.length) {
+    const hasPlugInText = /(?:^|·\s*)(?:US|EU|UK|JP|KR|AU|CN)\b/.test(
+      selected.selectedSkuText,
     );
-  const selected = makeSelectedSkuDecision(product, variants, sourceUrl);
+    if (!selected.selectedPlugStandard && !hasPlugInText) {
+      selected.selectedSkuText = `${selected.selectedSkuText} · стандарт вилки уточнить`;
+    }
+  }
   return {
     skuSummary,
     selectedSkuText: selected.selectedSkuText,
     selectedSkuReliable: selected.reliable,
     selectedSkuDecision: selected,
     dimensions: dims,
-    colors,
+    colors: allColors,
     sizes: sizeMatches,
     models,
     packageTypes,
     packCounts,
+    plugStandards,
+    selectedPlugStandard: selected.selectedPlugStandard,
     skuRisk: selected.reliable
       ? "ok"
       : count > 1
@@ -1500,7 +1727,19 @@ export function makeSelectedSkuDecision(
   product: any,
   variants = collectSkuVariants(product),
   sourceUrl?: string,
+  kind?: ProductKind,
 ): SelectedSkuDecision {
+  const electrical = !!kind && isElectricalKind(kind);
+  const rawNameOf = (s: any): string =>
+    String(
+      s?.name ?? s?.label ?? s?.skuName ?? s?.propertiesName ?? s?.raw ?? "",
+    );
+  const plugOf = (raw: unknown): string | null =>
+    electrical ? (extractPlugStandard(raw) ?? null) : null;
+  // For electrical goods, build the display text from the raw (Chinese) SKU so
+  // plug/color/model tokens survive; else fall back to the CJK-stripped name.
+  const electricalText = (raw: string, fallback: string): string =>
+    electrical ? structureElectricalSku(raw).text || fallback : fallback;
   const url = String(
     sourceUrl ?? product?.sourceUrl ?? product?.inputUrl ?? product?.url ?? "",
   );
@@ -1511,21 +1750,29 @@ export function makeSelectedSkuDecision(
         String(s?.skuId ?? s?.id ?? s?.specId ?? s?.offerSkuId ?? "") ===
         urlSku,
     );
-    if (found)
+    if (found) {
+      const raw = rawNameOf(found);
+      const name = skuName(found);
       return {
-        selectedSkuText: skuName(found) || `SKU ${urlSku}`,
+        selectedSkuText: electricalText(raw, name || `SKU ${urlSku}`),
         selectedPriceYuan: skuPrice(found),
+        selectedPlugStandard: plugOf(raw),
         reliable: true,
         reason: "SKU взят из URL и найден в API.",
       };
+    }
   }
-  if (variants.length === 1)
+  if (variants.length === 1) {
+    const raw = rawNameOf(variants[0]);
+    const name = skuName(variants[0]);
     return {
-      selectedSkuText: skuName(variants[0]) || "единственный SKU",
+      selectedSkuText: electricalText(raw, name || "единственный SKU"),
       selectedPriceYuan: skuPrice(variants[0]),
+      selectedPlugStandard: plugOf(raw),
       reliable: true,
       reason: "В карточке один SKU.",
     };
+  }
   const explicit =
     product?.selectedSku ??
     product?.selectedSkuText ??
@@ -1538,14 +1785,16 @@ export function makeSelectedSkuDecision(
   );
   if (explicit)
     return {
-      selectedSkuText: safeRu(explicit),
+      selectedSkuText: electricalText(String(explicit), safeRu(explicit)),
       selectedPriceYuan: explicitPrice,
+      selectedPlugStandard: plugOf(explicit),
       reliable: true,
       reason: "SKU передан явно после выбора пользователя/URL.",
     };
   return {
     selectedSkuText: null,
     selectedPriceYuan: null,
+    selectedPlugStandard: null,
     reliable: false,
     reason:
       variants.length > 1
@@ -1568,32 +1817,38 @@ function buildPricing(
   const max =
     pos(product?.priceRange?.max ?? product?.maxPriceYuan) ??
     (skuPrices.length ? Math.max(...skuPrices) : min);
-  const selectedPrice =
-    selected.selectedPriceYuan ??
-    (selected.reliable ? pos(product?.priceYuan ?? product?.price) : null);
-  const pricingCore: ProductProcurementProfile["pricing"] = {
-    displayPriceText: "",
+  // A range/min price is only a *selected* price when the SKU decision is
+  // reliable. Otherwise it stays a range and priceReliable must be false so
+  // economics are not computed as exact.
+  const selectedPrice = selected.reliable
+    ? (selected.selectedPriceYuan ?? pos(product?.priceYuan ?? product?.price))
+    : null;
+  const normalized = normalizePrice({
     selectedPriceYuan: selectedPrice,
     minPriceYuan: min,
     maxPriceYuan: max,
-    priceSource: selectedPrice
+  });
+  return {
+    displayPriceText: normalized.displayPriceText,
+    selectedPriceYuan: normalized.selectedPriceYuan,
+    minPriceYuan: normalized.minPriceYuan,
+    maxPriceYuan: normalized.maxPriceYuan,
+    priceSource: normalized.selectedPriceYuan
       ? "selected_sku"
       : skuPrices.length
         ? "sku_range"
-        : min
+        : normalized.minPriceYuan
           ? "price_range"
           : "missing",
-    priceReliable: !!selectedPrice || (!!min && !!max),
+    priceReliable: normalized.priceReliable,
     priceWarnings: uniq(
       [
         !selected.reliable ? "цена выбранного SKU требует подтверждения" : "",
-        !min ? "нет цены в данных" : "",
+        ...normalized.warnings,
       ],
       4,
     ),
   };
-  pricingCore.displayPriceText = formatPriceForDisplay(pricingCore);
-  return pricingCore;
 }
 
 /**
@@ -1678,7 +1933,25 @@ function buildKindVerdict(
   kind: ProductKind,
   product: any,
   needsSupplierData: boolean,
+  reliability?: {
+    priceReliable: boolean;
+    selectedPlugStandard: string | null;
+    hasPlugVariants: boolean;
+    ordersUnknownOrZero: boolean;
+  },
 ): string {
+  if (isElectricalKind(kind) && reliability) {
+    const plugMissing =
+      reliability.hasPlugVariants && !reliability.selectedPlugStandard;
+    const blocked =
+      !reliability.priceReliable ||
+      plugMissing ||
+      reliability.ordersUnknownOrZero;
+    if (blocked) {
+      return "Заказывать образец рано. Сначала нужно подтвердить цену выбранного SKU, стандарт вилки, напряжение, мощность, температурный диапазон, сертификаты, вес и упаковку.";
+    }
+    return "Можно готовить образец, но партию закупать только после проверки вилки, нагрева, дисплея, сертификатов и упаковки.";
+  }
   if (kind === "dish_rack" || kind === "kitchen_storage_rack") {
     return "Товар можно рассматривать для образца, но партию закупать рано. Сначала подтвердите размер выбранного SKU, количество ярусов, материал, покрытие, комплектацию, вес и упаковку. На образце нужно проверить устойчивость, качество покрытия, сборку и риск деформации при доставке.";
   }
@@ -1767,10 +2040,15 @@ export function buildProductProcurementProfile(
     identity: {
       productKind: kind,
       categoryType:
-        kind === "dish_rack" || kind === "kitchen_storage_rack"
-          ? "home_kitchen"
-          : safeRu(identity.categoryType || product?.categoryType || kind),
-      subCategoryType: safeRu(identity.subCategoryType || ""),
+        kind === "heating_food_mat"
+          ? "small_appliance"
+          : kind === "dish_rack" || kind === "kitchen_storage_rack"
+            ? "home_kitchen"
+            : safeRu(identity.categoryType || product?.categoryType || kind),
+      subCategoryType:
+        kind === "heating_food_mat"
+          ? "food_warmer"
+          : safeRu(identity.subCategoryType || ""),
       titleForReport: safeTitle(titleForReport),
       titleForSeo,
       shortTitle: safeRu(identity.shortNameRu || titleForReport),
@@ -1847,7 +2125,17 @@ export function buildProductProcurementProfile(
       status: missing.length
         ? "🟡 Нужны данные поставщика"
         : "🟢 Готов к заказу образца",
-      verdict: buildKindVerdict(kind, product, missing.length > 0),
+      verdict: buildKindVerdict(kind, product, missing.length > 0, {
+        priceReliable: pricing.priceReliable,
+        selectedPlugStandard: sku.selectedPlugStandard,
+        hasPlugVariants: sku.plugStandards.length > 0,
+        ordersUnknownOrZero: (() => {
+          const o = String(product?.sold ?? product?.orders ?? "").trim();
+          if (!o || o === "—") return true;
+          const digits = o.replace(/\D/g, "");
+          return digits === "" || Number(digits) === 0;
+        })(),
+      }),
       nextAction: "Отправьте вопросы поставщику и скачайте закупочный пакет.",
       mustAskSupplier,
       mustCheckBeforeSample: uniq(
@@ -2128,7 +2416,11 @@ export function buildMainReportFromProfile(
   opts: { sourceUrl?: string } = {},
 ): string {
   const p = ensureProductProcurementProfile(product, opts);
-  const priceYuan = p.pricing.selectedPriceYuan ?? p.pricing.minPriceYuan;
+  // Economics are only computed when the price is reliable (confirmed selected
+  // SKU). An unconfirmed range must not turn into an "exact" cost estimate.
+  const priceYuan = p.pricing.priceReliable
+    ? (p.pricing.selectedPriceYuan ?? p.pricing.minPriceYuan)
+    : null;
   const purchaseRub = priceYuan ? Math.round(priceYuan * YUAN_TO_RUB) : null;
   const costWithoutCargo = purchaseRub
     ? Math.round(purchaseRub * (1 + BANK_MARKUP) + FULFILLMENT_RUB)
@@ -2146,8 +2438,14 @@ export function buildMainReportFromProfile(
     `• Выбранный SKU: ${escapeHtml(p.sku.selectedSkuText || (p.sku.selectedSkuReliable ? "не определён" : `не определён. ${p.pricing.minPriceYuan && p.pricing.maxPriceYuan ? `Цена по SKU: ${String(p.pricing.minPriceYuan).replace(".", ",")}${p.pricing.maxPriceYuan !== p.pricing.minPriceYuan ? `–${String(p.pricing.maxPriceYuan).replace(".", ",")}` : ""} ¥.` : "Нужен выбор SKU."}`))}`,
     `• MOQ: ${moq ? `${Math.round(moq)} шт` : "уточнить"}`,
     `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
+    p.sku.models.length
+      ? `• Модели: ${escapeHtml(p.sku.models.join(", "))}`
+      : "",
     p.sku.colors.length
       ? `• Цвета: ${escapeHtml(p.sku.colors.join(", "))}`
+      : "",
+    p.sku.plugStandards.length
+      ? `• Стандарты вилки: ${escapeHtml(p.sku.plugStandards.join(", "))} — уточнить выбранный SKU`
       : "",
     p.sku.sizes.length
       ? `• Размеры: ${escapeHtml(p.sku.sizes.join(", "))}`

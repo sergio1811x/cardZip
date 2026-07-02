@@ -278,6 +278,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       mainReportText: finalText,
       seoDraftMd: seoText,
       productKind: profileForFiles?.identity?.productKind,
+      priceReliable: profileForFiles?.pricing?.priceReliable,
+      plugStandardReliable: !!profileForFiles?.sku?.selectedPlugStandard,
+      selectedSkuText: profileForFiles?.sku?.selectedSkuText ?? undefined,
     });
     if (!finalQuality.passed) console.error('[step5] procurement quality gate defects:', finalQuality.errors.join('; '));
     if (finalQuality.warnings.length) console.warn('[step5] procurement quality warnings:', finalQuality.warnings.join('; '));
