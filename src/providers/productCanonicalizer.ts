@@ -1220,7 +1220,7 @@ async function runTextCanonicalizer(
   return null;
 }
 
-export async function canonicalizeProduct(
+export async function runLegacyCanonicalizerFallback(
   raw: RawProductForCanonicalizer,
 ): Promise<ProductContext | null> {
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -1290,4 +1290,13 @@ export async function canonicalizeProduct(
   );
 
   return ctx;
+}
+
+// Legacy compatibility entrypoint.
+// Основной путь в пайплайне уже должен идти через role-based orchestration,
+// а этот вызов остаётся как аварийный fallback для старых мест интеграции.
+export async function canonicalizeProduct(
+  raw: RawProductForCanonicalizer,
+): Promise<ProductContext | null> {
+  return runLegacyCanonicalizerFallback(raw);
 }
