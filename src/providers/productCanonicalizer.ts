@@ -59,7 +59,7 @@ type OpenRouterMessage =
       >;
     };
 
-type CanonicalizerModelResult = Partial<ProductContext> & {
+export type CanonicalizerModelResult = Partial<ProductContext> & {
   identity?: Partial<ProductContext["identity"]>;
   titles?: Partial<ProductContext["titles"]>;
   facts?: Record<string, unknown>;
@@ -930,7 +930,7 @@ const CANONICALIZER_PROMPT = `Ты — старший закупщик 1688/Taob
 const SYSTEM_MSG =
   "Ты Product Canonicalizer. Отвечай только валидным JSON-объектом. Без markdown. Без пояснений.";
 
-async function fetchImageAsDataUrl(url: string): Promise<string | null> {
+export async function fetchCanonicalizerImageAsDataUrl(url: string): Promise<string | null> {
   const maxBytes = getNumberEnv(
     "PRODUCT_CANONICALIZER_MAX_IMAGE_BYTES",
     DEFAULT_MAX_IMAGE_BYTES,
@@ -960,7 +960,7 @@ async function fetchImageAsDataUrl(url: string): Promise<string | null> {
   }
 }
 
-async function callOpenRouter(
+export async function callCanonicalizerOpenRouter(
   model: string,
   messages: OpenRouterMessage[],
   apiKey: string,
@@ -1025,7 +1025,7 @@ async function callOpenRouter(
   }
 }
 
-function buildPrompt(raw: RawProductForCanonicalizer): string {
+export function buildCanonicalizerPrompt(raw: RawProductForCanonicalizer): string {
   return `${CANONICALIZER_PROMPT}
 
 ДАННЫЕ ТОВАРА:
@@ -1096,7 +1096,7 @@ function mergeSku(
   };
 }
 
-function normalizeContext(
+export function normalizeCanonicalizerContext(
   raw: RawProductForCanonicalizer,
   result: CanonicalizerModelResult,
 ): ProductContext {
@@ -1291,20 +1291,20 @@ function normalizeContext(
   return ctx as ProductContext;
 }
 
-function hasUsableContext(ctx: ProductContext): boolean {
+export function hasUsableCanonicalizerContext(ctx: ProductContext): boolean {
   return Boolean(
     ctx.identity.productType && ctx.identity.coreObject && ctx.titles.cleanRu,
   );
 }
 
-async function runVisionCanonicalizer(
+export async function runVisionCanonicalizer(
   prompt: string,
   imageDataUrls: string[],
   apiKey: string,
 ): Promise<CanonicalizerModelResult | null> {
   for (const model of VISION_MODELS) {
     console.log(`[canonicalizer] Trying vision ${model}...`);
-    const result = await callOpenRouter(
+    const result = await callCanonicalizerOpenRouter(
       model,
       [
         { role: "system", content: SYSTEM_MSG },
@@ -1336,13 +1336,13 @@ async function runVisionCanonicalizer(
   return null;
 }
 
-async function runTextCanonicalizer(
+export async function runTextCanonicalizer(
   prompt: string,
   apiKey: string,
 ): Promise<CanonicalizerModelResult | null> {
   for (const model of TEXT_MODELS) {
     console.log(`[canonicalizer] Trying text ${model}...`);
-    const result = await callOpenRouter(
+    const result = await callCanonicalizerOpenRouter(
       model,
       [
         { role: "system", content: SYSTEM_MSG },
@@ -1378,26 +1378,8 @@ export async function runLegacyCanonicalizerFallback(
     return null;
   }
 
-  const prompt = buildPrompt(raw);
-  let result: CanonicalizerModelResult | null = null;
-
-  const imageSources = [
-    ...(raw.imageUrls ?? []).map((img) => img.url).filter(Boolean),
-    raw.selectedSkuImage,
-    raw.mainImageUrl,
-  ].filter(Boolean) as string[];
-  const imageDataUrls: string[] = [];
-  for (const url of Array.from(new Set(imageSources)).slice(0, 3)) {
-    const imageDataUrl = await fetchImageAsDataUrl(url);
-    if (imageDataUrl) imageDataUrls.push(imageDataUrl);
-  }
-  if (imageDataUrls.length) {
-    result = await runVisionCanonicalizer(prompt, imageDataUrls, apiKey);
-  }
-
-  if (!hasCanonicalizerPayload(result)) {
-    result = await runTextCanonicalizer(prompt, apiKey);
-  }
+  const { runLegacyCanonicalizerContract } = await import('./canonicalizerLegacyContractProvider');
+  const result = await runLegacyCanonicalizerContract(raw, apiKey);
 
   if (!hasCanonicalizerPayload(result)) {
     if (process.env.PRODUCT_CANONICALIZER_SAFE_FALLBACK === "1") {
@@ -1412,9 +1394,9 @@ export async function runLegacyCanonicalizerFallback(
     return null;
   }
 
-  const ctx = normalizeContext(raw, result);
+  const ctx = normalizeCanonicalizerContext(raw, result);
 
-  if (!hasUsableContext(ctx)) {
+  if (!hasUsableCanonicalizerContext(ctx)) {
     if (process.env.PRODUCT_CANONICALIZER_SAFE_FALLBACK === "1") {
       const fallback = buildFallbackContext(raw);
       console.warn(
