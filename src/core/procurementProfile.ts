@@ -121,12 +121,18 @@ export type ProductProcurementProfile = {
   cargo: {
     mustAsk: string[];
     likelySensitiveCargoIssues: string[];
+    whatToRequest?: string[];
+    cargoNature?: string;
+    packagingNotes?: string;
   };
   content: {
     seoAllowedClaims: string[];
     seoForbiddenClaims: string[];
     titleWarnings: string[];
     infographicIdeas: string[];
+    seoDescription?: string;
+    seoBullets?: string[];
+    seoKeywords?: string[];
   };
   dataQuality: {
     missingCriticalFields: string[];
@@ -1023,6 +1029,47 @@ function aiDomainRules(product: any): Partial<(typeof KIND_RULES)[ProductKind]> 
   };
 }
 
+/**
+ * Reads the richer, product-specific SEO + cargo content the LLM canonicalizer
+ * emits under `domainRules.seo` / `domainRules.cargo`. Defensive: every field may
+ * be missing/empty on older jobs, in which case the deterministic builders fall
+ * back to their template output.
+ */
+function aiDomainContent(product: any): {
+  seoDescription: string;
+  seoBullets: string[];
+  seoKeywords: string[];
+  cargoWhatToRequest: string[];
+  cargoSensitiveIssues: string[];
+  cargoNature: string;
+  cargoPackagingNotes: string;
+} {
+  const draft = record(
+    product?.productProcurementProfileDraft ??
+      product?.procurementProfileDraft ??
+      product?.productContext?.procurementProfileDraft ??
+      product?.productContext?.profileDraft,
+  );
+  const rules = record(
+    draft.domainRules ?? product?.productContext?.domainRules,
+  );
+  const seo = record(rules.seo);
+  const cargo = record(rules.cargo);
+  return {
+    seoDescription: safeRu(seo.description),
+    seoBullets: array<string>(seo.sellingBullets).map(safeRu).filter(Boolean),
+    seoKeywords: array<string>(seo.keywords).map(safeRu).filter(Boolean),
+    cargoWhatToRequest: array<string>(cargo.whatToRequest)
+      .map(safeRu)
+      .filter(Boolean),
+    cargoSensitiveIssues: array<string>(cargo.sensitiveIssues)
+      .map(safeRu)
+      .filter(Boolean),
+    cargoNature: safeRu(cargo.cargoNature),
+    cargoPackagingNotes: safeRu(cargo.packagingNotes),
+  };
+}
+
 function mergeRuleLists(base: (typeof KIND_RULES)[ProductKind], extra: Partial<(typeof KIND_RULES)[ProductKind]>): (typeof KIND_RULES)[ProductKind] {
   return {
     mustAskSupplier: uniq([...(extra.mustAskSupplier ?? []), ...base.mustAskSupplier], 12),
@@ -1258,10 +1305,26 @@ export function volumetricWeightLine(
   dimensionsCm: string | null,
   volumetricWeightKg: number | null,
   bullet = "• ",
+  actualWeightKg: number | null = null,
 ): string | null {
   if (!dimensionsCm || !volumetricWeightKg) return null;
   const kg = String(volumetricWeightKg).replace(".", ",");
-  return `${bullet}Объёмный вес (оценка): ~${kg} кг (по габаритам ${dimensionsCm} см) — карго считает по большему из фактического и объёмного`;
+  // Dimensions often describe the ASSEMBLED/inflated product, not the shipping
+  // package. Flag the figure as product dims and add a sanity caveat when the
+  // volumetric weight is implausibly larger than the known actual weight — never
+  // present the inflated volumetric as the real shipping figure without it.
+  const implausible =
+    (actualWeightKg != null &&
+      actualWeightKg > 0 &&
+      volumetricWeightKg > actualWeightKg * 5) ||
+    (actualWeightKg != null &&
+      actualWeightKg > 0 &&
+      actualWeightKg < 5 &&
+      volumetricWeightKg > 30);
+  const caveat = implausible
+    ? " — вероятно это габариты товара, а не упаковки; запросите габариты УПАКОВКИ в сложенном виде"
+    : "";
+  return `${bullet}Объёмный вес (оценка): ~${kg} кг (по габаритам товара ${dimensionsCm} см, возможно в собранном/надутом виде) — карго считает по большему из фактического и объёмного${caveat}`;
 }
 
 /**
@@ -2515,6 +2578,7 @@ export function buildProductProcurementProfile(
   );
   const kind = draftKind ?? classifier.productKind;
   const rules = productSpecificRules(kind, product, intelligence);
+  const aiContent = aiDomainContent(product);
   const sourceUrl = opts.sourceUrl ?? product?.sourceUrl ?? product?.inputUrl;
   const sku = buildSkuProfile(product, kind, sourceUrl);
   const pricing = buildPricing(product, sku.selectedSkuDecision);
@@ -2706,17 +2770,23 @@ export function buildProductProcurementProfile(
         14,
       ),
       likelySensitiveCargoIssues: uniq(
-        kind === "mini_washer" ||
+        [
+          ...aiContent.cargoSensitiveIssues,
+          ...(kind === "mini_washer" ||
           kind === "small_appliance" ||
           kind === "usb_device"
-          ? [
-              "питание/вилка/напряжение",
-              "аккумулятор или батарейка — уточнить",
-              "сертификаты для техники",
-            ]
-          : [],
+            ? [
+                "питание/вилка/напряжение",
+                "аккумулятор или батарейка — уточнить",
+                "сертификаты для техники",
+              ]
+            : []),
+        ],
         6,
       ),
+      whatToRequest: aiContent.cargoWhatToRequest,
+      cargoNature: aiContent.cargoNature || undefined,
+      packagingNotes: aiContent.cargoPackagingNotes || undefined,
     },
     content: {
       seoAllowedClaims: uniq(
@@ -2761,6 +2831,13 @@ export function buildProductProcurementProfile(
         ],
         7,
       ),
+      seoDescription: aiContent.seoDescription || undefined,
+      seoBullets: aiContent.seoBullets.length
+        ? aiContent.seoBullets
+        : undefined,
+      seoKeywords: aiContent.seoKeywords.length
+        ? aiContent.seoKeywords
+        : undefined,
     },
     dataQuality: {
       missingCriticalFields: missing,
@@ -3003,6 +3080,8 @@ export function buildMainReportFromProfile(
       const line = volumetricWeightLine(
         p.logistics?.dimensionsCm ?? null,
         p.logistics?.volumetricWeightKg ?? null,
+        "• ",
+        typeof weight === "number" ? weight : null,
       );
       return line ? escapeHtml(line) : null;
     })(),
@@ -3394,6 +3473,7 @@ export function buildCargoBriefFromProfile(
     dims,
     p.logistics?.volumetricWeightKg ?? null,
     "",
+    typeof weight === "number" ? weight : null,
   );
   return [
     "# ТЗ карго",
@@ -3405,15 +3485,12 @@ export function buildCargoBriefFromProfile(
     `Цена: ${formatPriceForDisplay(p.pricing)}`,
     "",
     "## Что нужно запросить для доставки",
-    ...list(p.cargo.mustAsk, 16),
+    // Product-specific requests (LLM) first, then the base logistics questions.
+    ...list(uniq([...(p.cargo.whatToRequest ?? []), ...p.cargo.mustAsk], 18), 18),
     "",
     ...(volLine ? ["## Объёмный вес (предварительно)", volLine, ""] : []),
     "## Дополнительно по этому товару",
-    ...(p.cargo.likelySensitiveCargoIssues.length
-      ? list(p.cargo.likelySensitiveCargoIssues, 8)
-      : [
-          "- специальных ограничений не найдено, но ограничения по перевозке нужно подтвердить у карго",
-        ]),
+    ...cargoAdditionalLines(p),
     "",
     "## Текущий статус",
     `Вес: ${weight ? `${String(weight).replace(".", ",")} кг — подтвердить, нужен вес с упаковкой` : "не указан"}`,
@@ -3423,6 +3500,40 @@ export function buildCargoBriefFromProfile(
     "## Важно",
     "Карго не рассчитывается точно без веса и габаритов выбранного SKU.",
   ].join("\n");
+}
+
+// Per-cargo-nature standard cautions, added when the LLM reports a known nature.
+const CARGO_NATURE_CAUTIONS: Record<string, string> = {
+  inflatable:
+    "надувной товар — уточните, перевозится ли в сдутом виде; проверьте клапан и упаковку от проколов",
+  battery:
+    "аккумулятор/батарея — уточните правила перевозки и маркировку опасного груза",
+  liquid: "жидкость — возможны ограничения по перевозке, уточните у карго",
+  aerosol: "аэрозоль — возможны ограничения по перевозке, уточните у карго",
+  fragile: "хрупкий товар — уточните защитную упаковку и допустимую нагрузку",
+  oversized:
+    "негабаритный товар — уточните габариты упаковки и тариф по объёмному весу",
+  powder: "порошок/сыпучее — возможны ограничения, уточните у карго",
+};
+
+function cargoAdditionalLines(p: ProductProcurementProfile): string[] {
+  const nature = (p.cargo.cargoNature ?? "").toLowerCase().trim();
+  const items: string[] = [
+    ...p.cargo.likelySensitiveCargoIssues,
+    ...(p.cargo.packagingNotes ? [p.cargo.packagingNotes] : []),
+  ];
+  for (const [key, caution] of Object.entries(CARGO_NATURE_CAUTIONS)) {
+    if (nature.includes(key)) items.push(caution);
+  }
+  const deduped = uniq(items, 10);
+  if (deduped.length) return list(deduped, 10);
+  // Only show the generic filler when truly nothing is known and nature is absent.
+  if (!nature || nature === "none") {
+    return [
+      "- специальных ограничений не найдено, но ограничения по перевозке нужно подтвердить у карго",
+    ];
+  }
+  return ["- уточните ограничения по перевозке этого товара у карго"];
 }
 
 export function buildSampleChecklistFromProfile(
@@ -3486,51 +3597,51 @@ export function buildSeoDraftFromProfile(
     ? p.identity.useCases.join(", ")
     : "повседневного использования";
   const material = p.identity.materials.join(", ");
-  const isDishRack =
-    p.identity.productKind === "dish_rack" ||
-    p.identity.productKind === "kitchen_storage_rack";
-  const balaclava =
-    p.identity.productKind === "clothing" &&
-    /балаклав|подшлемник/i.test(
-      `${p.identity.titleForReport} ${p.identity.titleForSeo} ${p.identity.coreObject}`,
-    );
-  const bullets = isDishRack
-    ? [
-        "Настольная сушилка для посуды и кухонного хранения",
-        "Варианты на 2 или 3 яруса зависят от выбранного SKU",
-        "Подходит для тарелок, чашек, стаканов и столовых приборов",
-        "Материал каркаса и покрытие нужно подтвердить у поставщика",
-        "Перед продажей проверьте устойчивость, сборку и упаковку",
-      ]
-    : balaclava
-      ? [
-          "Лёгкая балаклава для велосипеда, туризма и активного отдыха",
-          "Закрывает голову, лицо и шею от ветра, пыли и солнца",
-          "Сетчатая зона для более комфортного дыхания",
-          p.sku.colors.length
-            ? `Несколько цветов в карточке 1688: ${p.sku.colors.join(", ")}`
-            : "Несколько вариантов в карточке 1688",
-          "Перед продажей подтвердите состав, размер и УФ-защиту",
-        ]
+
+  // Bullets: prefer LLM selling points, else a customer-facing deterministic set.
+  // Internal advice ("SKU в карточке: N", "проверьте образец") is NOT a selling
+  // point and belongs to "Что уточнить", not here.
+  const objectForBullet = p.identity.shortTitle || p.identity.coreObject || title;
+  const llmBullets = filterDangerousBullets(p.content.seoBullets ?? [], p);
+  const bullets = (
+    llmBullets.length >= 3
+      ? llmBullets
       : uniq(
           [
-            `${p.identity.shortTitle || title} для ${useCases}`,
+            `${objectForBullet} для ${useCases}`,
             material && !/уточнить/.test(material)
               ? `Материал: ${material}${/подтверд/i.test(material) ? "" : " — подтвердите у поставщика"}`
-              : "Материал нужно подтвердить у поставщика",
+              : `Продуманная конструкция для ${useCases}`,
             p.sku.colors.length
-              ? `Доступные цвета: ${p.sku.colors.join(", ")}`
-              : "Цвет и SKU выберите по карточке 1688",
-            p.sku.skuSummary
-              ? `SKU в карточке: ${p.sku.skuSummary}`
-              : "SKU нужно уточнить перед закупкой",
-            "Перед продажей проверьте образец, вес и упаковку",
+              ? `Несколько цветов на выбор: ${p.sku.colors.join(", ")}`
+              : "Универсальный дизайн под разные интерьеры и стили",
+            p.identity.visibleFeatures.length
+              ? capitalizeRu(p.identity.visibleFeatures[0])
+              : "Компактный и удобный в повседневном использовании",
+            "Продуманная упаковка — удобно дарить и хранить",
           ],
           5,
-        ).slice(0, 5);
+        )
+  ).slice(0, 5);
   while (bullets.length < 5)
-    bullets.push("Характеристику нужно подтвердить перед публикацией");
+    bullets.push(`${objectForBullet} для ${useCases}`);
   const characteristics = seoCharacteristics(p);
+
+  // Keywords: prefer LLM deduped set, else a deterministic set (dropping the giant
+  // title as a keyword and de-duplicating near-identical entries).
+  const rawKeywords = (p.content.seoKeywords ?? []).length
+    ? p.content.seoKeywords!
+    : [
+        p.identity.coreObject,
+        p.identity.shortTitle,
+        ...p.identity.useCases,
+        ...p.sku.colors.map((c) => `${p.identity.coreObject} ${c}`),
+      ];
+  const keywords = dedupKeywords(
+    filterDangerousList(rawKeywords, p),
+    12,
+  ).join(", ");
+
   const out = [
     "# SEO-черновик карточки товара",
     "",
@@ -3549,16 +3660,7 @@ export function buildSeoDraftFromProfile(
     ...characteristics.map((c) => `| ${c.name} | ${c.value} | ${c.status} |`),
     "",
     "## Ключевые слова",
-    uniq(
-      [
-        title,
-        p.identity.coreObject,
-        p.identity.shortTitle,
-        ...p.identity.useCases,
-        ...p.sku.colors.map((c) => `${p.identity.coreObject} ${c}`),
-      ],
-      12,
-    ).join(", "),
+    keywords,
     "",
     "## Что уточнить перед публикацией",
     ...list(
@@ -3576,44 +3678,95 @@ export function buildSeoDraftFromProfile(
     ...p.content.infographicIdeas
       .slice(0, 6)
       .map((idea, i) => `${i + 1}. ${idea}`),
-  ].join("\n");
+  ]
+    .map((line) => fixGluedFallback(line))
+    .join("\n");
   return sanitizeUserFacingText(out);
 }
 
+const SEO_DISCLAIMER =
+  "Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.";
+
 function seoDescription(p: ProductProcurementProfile, title: string): string {
-  if (
-    p.identity.productKind === "dish_rack" ||
-    p.identity.productKind === "kitchen_storage_rack"
-  ) {
-    return "Настольная многоярусная сушилка помогает сушить и хранить тарелки, чашки, стаканы и столовые приборы рядом с мойкой. Перед публикацией нужно подтвердить материал каркаса, тип покрытия, размеры выбранного SKU, комплектацию, вес, упаковку и реальные фото у поставщика.";
+  // Prefer a real benefit-driven paragraph from the LLM canonicalizer. It must be
+  // a proper sentence (>= ~40 chars, not a bare noun), pass the dangerous-claim
+  // filter, and always carries the disclaimer as a separate trailing sentence.
+  const llm = (p.content.seoDescription ?? "").trim();
+  if (llm.length >= 40 && !dangerousClaims(llm).length) {
+    const base = /[.!?]$/.test(llm) ? llm : `${llm}.`;
+    return `${base} ${SEO_DISCLAIMER}`;
   }
-  if (
-    p.identity.productKind === "clothing" &&
-    /балаклав|подшлемник/i.test(
-      `${p.identity.titleForReport} ${p.identity.titleForSeo} ${p.identity.coreObject}`,
-    )
-  ) {
-    return "Лёгкая балаклава из полиэстера подходит для поездок на велосипеде, туризма, прогулок и защиты лица от ветра, пыли и солнца. Сетчатая зона помогает легче дышать при активном движении. Перед публикацией подтвердите состав ткани, размеры, упаковку и заявленную УФ-защиту у поставщика.";
-  }
-  if (p.identity.productKind === "umbrella") {
-    return "Складной автоматический зонт с крючком и чехлом подходит для повседневного использования в дороге, на прогулке и в поездках. Перед публикацией подтвердите размер, материал купола и спиц, механизм, комплектацию и заявленную защиту от солнца.";
-  }
-  if (p.identity.productKind === "fake_security_camera") {
-    return "Муляж камеры видеонаблюдения — декоративная имитация настоящей камеры для визуального эффекта дома, в офисе или магазине. Это не рабочая камера: она не ведёт запись, не подключается к сети и не обнаруживает движение. Перед публикацией подтвердите питание светодиода, комплектацию, размеры, вес и реальные фото у поставщика.";
-  }
+
+  // Deterministic fallback — a full sentence, never a bare-noun opener like "шорты.".
   const objectName = safeTitle(
     p.identity.coreObject,
     p.identity.shortTitle,
     title,
   );
+  const useCases = p.identity.useCases.length
+    ? p.identity.useCases.slice(0, 3).join(", ")
+    : "повседневного использования";
   const materialPart =
-    p.identity.materials.length && p.identity.materials[0] !== "уточнить у поставщика"
+    p.identity.materials.length &&
+    p.identity.materials[0] !== "уточнить у поставщика"
       ? ` Материал: ${p.identity.materials.slice(0, 2).join(", ")}.`
       : "";
-  const useCasePart = p.identity.useCases.length
-    ? ` Подходит для: ${p.identity.useCases.slice(0, 3).join(", ")}.`
-    : "";
-  return `${objectName}.${useCasePart}${materialPart} Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.`;
+  const sentence = `${capitalizeRu(objectName)} подходит для ${useCases}.${materialPart}`;
+  return `${sentence} ${SEO_DISCLAIMER}`;
+}
+
+function capitalizeRu(s: string): string {
+  const t = (s || "").trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+
+/**
+ * Guard against the glue bug: a numeric spec value concatenated directly with a
+ * weight/price fallback (e.g. "нагрузка 12вес не указан"). Show the number OR the
+ * fallback, never glued. Applied to every user-facing SEO line.
+ */
+function fixGluedFallback(s: string): string {
+  return (s || "").replace(
+    /(\d)\s*(вес не указан|вес с упаковкой не указан|цена не указана|не указан[оаы]?)/gi,
+    "$1",
+  );
+}
+
+function filterDangerousBullets(
+  bullets: string[],
+  _p: ProductProcurementProfile,
+): string[] {
+  return bullets
+    .map((b) => fixGluedFallback(clean(b)))
+    .filter((b) => b && !dangerousClaims(b).length);
+}
+
+function filterDangerousList(
+  items: Array<string | null | undefined>,
+  _p: ProductProcurementProfile,
+): string[] {
+  return items
+    .map((i) => fixGluedFallback(clean(i)))
+    .filter((i) => i && !dangerousClaims(i).length);
+}
+
+/** Dedup keywords case-insensitively, dropping near-duplicate substrings. */
+function dedupKeywords(items: string[], limit: number): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of items) {
+    const k = raw.trim();
+    if (!k) continue;
+    const key = k.toLowerCase();
+    if (seen.has(key)) continue;
+    // skip if it's a substring of an already-kept keyword or vice versa
+    if (out.some((o) => o.toLowerCase().includes(key) || key.includes(o.toLowerCase())))
+      continue;
+    seen.add(key);
+    out.push(k);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 function seoCharacteristics(

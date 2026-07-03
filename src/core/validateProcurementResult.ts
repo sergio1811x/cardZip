@@ -392,6 +392,146 @@ export function validateProcurementResult(
     }
   }
 
+  // ---- Doc-value quality: SEO (05_) and cargo (03_) template detection ----
+  const seoFile = files.find((f) => /^05_/.test(f.name) || /(^|\/)05_/.test(f.name));
+  if (seoFile) {
+    const label = seoFile.name;
+    const seoText = seoFile.content ?? "";
+
+    // Rule 1 (ERROR): glued spec + fallback, e.g. "максимальная нагрузка 12вес не указан".
+    if (
+      /\d+\s*вес не указан/.test(seoText) ||
+      /нагрузк\w*\s*\d+вес/i.test(seoText) ||
+      /\d+вес не указан/.test(seoText)
+    ) {
+      errors.push(`[${label}] glued spec+fallback ("<digits>вес не указан")`);
+    }
+
+    // Rule 2 (WARNING): internal advice used as a customer selling bullet under "## Буллеты".
+    {
+      const lines = seoText.split("\n");
+      let inBullets = false;
+      const internalAdviceRe =
+        /провер(ьте|ить)\s+образец|перед\s+продажей|SKU\s+в\s+карточке/i;
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (/^#{1,6}\s*Буллеты/i.test(line)) {
+          inBullets = true;
+          continue;
+        }
+        if (inBullets && /^#{1,6}\s/.test(line)) {
+          inBullets = false;
+        }
+        if (inBullets && /^(\d+[.)]|[•\-*])\s*\S/.test(line) && internalAdviceRe.test(line)) {
+          warnings.push(`[${label}] internal advice in selling bullets`);
+          break;
+        }
+      }
+    }
+
+    // Rule 4 (WARNING): keyword soup — "## Ключевые слова" line contains the full
+    // long title verbatim OR has >= 2 exact duplicate comma-tokens.
+    {
+      const lines = seoText.split("\n");
+      // Title/Название text for the "contains full title verbatim" check.
+      // The title may be inline ("Название: X") or on the line after a "## Название" header.
+      const trimmed = lines.map((l) => l.trim());
+      const titleIdx = trimmed.findIndex(
+        (l) => /^#{1,6}\s*Название/i.test(l) || /^Название\s*:/i.test(l),
+      );
+      let titleText = "";
+      if (titleIdx >= 0) {
+        const inline = trimmed[titleIdx]
+          .replace(/^#{1,6}\s*Название\s*:?\s*/i, "")
+          .replace(/^Название\s*:?\s*/i, "")
+          .trim();
+        titleText = inline || (trimmed.slice(titleIdx + 1).find((l) => l.length > 0) ?? "");
+      }
+
+      let inKeywords = false;
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (/^#{1,6}\s*Ключевые\s+слова/i.test(line)) {
+          inKeywords = true;
+          continue;
+        }
+        if (inKeywords && /^#{1,6}\s/.test(line)) {
+          inKeywords = false;
+          continue;
+        }
+        if (inKeywords && line.length > 0) {
+          let bad = false;
+          if (titleText.length >= 20 && line.includes(titleText)) bad = true;
+          const tokens = line
+            .split(",")
+            .map((t) => t.trim().toLowerCase())
+            .filter(Boolean);
+          const seen = new Set<string>();
+          let dupes = 0;
+          for (const t of tokens) {
+            if (seen.has(t)) dupes++;
+            else seen.add(t);
+          }
+          if (dupes >= 2) bad = true;
+          if (bad) {
+            warnings.push(`[${label}] low-quality keywords`);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  const cargoFile = files.find((f) => /^03_/.test(f.name) || /(^|\/)03_/.test(f.name));
+  if (cargoFile) {
+    const label = cargoFile.name;
+    const cargoText = cargoFile.content ?? "";
+    const cargoLines = cargoText.split("\n");
+
+    // Rule 5 (WARNING): generic-only cargo — the "## Дополнительно" section contains
+    // ONLY the filler "специальных ограничений не найдено".
+    {
+      let inSection = false;
+      let hasFiller = false;
+      let hasOther = false;
+      for (const rawLine of cargoLines) {
+        const line = rawLine.trim();
+        if (/^#{1,6}\s*Дополнительно/i.test(line)) {
+          inSection = true;
+          continue;
+        }
+        if (inSection && /^#{1,6}\s/.test(line)) break;
+        if (inSection && line.length > 0) {
+          const body = line.replace(/^(\d+[.)]|[•\-*])\s*/, "").trim();
+          if (!body) continue;
+          if (/специальных\s+ограничений\s+не\s+найдено/i.test(body)) hasFiller = true;
+          else hasOther = true;
+        }
+      }
+      if (hasFiller && !hasOther) {
+        warnings.push(`[${label}] cargo brief has no product-specific considerations`);
+      }
+    }
+
+    // Rule 6 (WARNING): implausible volumetric weight (> 50 kg) without a package caveat.
+    {
+      const caveatRe = /упаковк|сложенном|товара, а не/i;
+      const hasCaveat = caveatRe.test(cargoText);
+      for (const rawLine of cargoLines) {
+        const m = rawLine.match(/Объёмный вес[^\n]*?(\d+(?:[.,]\d+)?)/i);
+        if (m) {
+          const kg = parseFloat(m[1].replace(",", "."));
+          if (kg > 50 && !hasCaveat) {
+            warnings.push(
+              `[${label}] volumetric weight likely from product not package dims, missing caveat`,
+            );
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // ---- Warnings (non-blocking) ----
   // Weight conflict: "вес не указан" while a numeric kg value appears elsewhere.
   const allText = userFacingBlobs.map((b) => b.text).join("\n");

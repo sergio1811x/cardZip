@@ -307,6 +307,85 @@ function normalizeLogistics(rawLogistics: unknown): NormalizedLogistics {
   };
 }
 
+const CARGO_NATURES = [
+  "inflatable",
+  "liquid",
+  "aerosol",
+  "battery",
+  "powder",
+  "fragile",
+  "oversized",
+  "textile",
+  "food_contact",
+  "none",
+] as const;
+
+type NormalizedDomainSeo = {
+  description: string;
+  sellingBullets: string[];
+  keywords: string[];
+};
+
+type NormalizedDomainCargo = {
+  cargoNature: (typeof CARGO_NATURES)[number];
+  sensitiveIssues: string[];
+  whatToRequest: string[];
+  packagingNotes: string;
+};
+
+function normalizeDomainSeo(value: unknown): NormalizedDomainSeo | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const obj = value as Record<string, unknown>;
+
+  const description = safeRu(obj.description, "");
+  const sellingBullets = uniqueStrings(obj.sellingBullets, 6)
+    .map((v) => stripChineseFromRussianField(v))
+    .filter(Boolean);
+  const keywords = uniqueStrings(obj.keywords, 15)
+    .map((v) => stripChineseFromRussianField(v))
+    .filter(Boolean);
+
+  if (!description && !sellingBullets.length && !keywords.length)
+    return undefined;
+
+  return {
+    description: description ? truncate(description, 600) : "",
+    sellingBullets,
+    keywords,
+  };
+}
+
+function normalizeDomainCargo(value: unknown): NormalizedDomainCargo | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
+  const obj = value as Record<string, unknown>;
+
+  const natureRaw = safeString(obj.cargoNature).toLowerCase();
+  const cargoNature = CARGO_NATURES.includes(natureRaw as any)
+    ? (natureRaw as NormalizedDomainCargo["cargoNature"])
+    : "none";
+
+  const sensitiveIssues = uniqueStrings(obj.sensitiveIssues, 8)
+    .map((v) => stripChineseFromRussianField(v))
+    .filter(Boolean);
+  const whatToRequest = uniqueStrings(obj.whatToRequest, 8)
+    .map((v) => stripChineseFromRussianField(v))
+    .filter(Boolean);
+  const packagingRaw = safeRu(obj.packagingNotes, "");
+  const packagingNotes = packagingRaw ? truncate(packagingRaw, 300) : "";
+
+  if (
+    cargoNature === "none" &&
+    !sensitiveIssues.length &&
+    !whatToRequest.length &&
+    !packagingNotes
+  )
+    return undefined;
+
+  return { cargoNature, sensitiveIssues, whatToRequest, packagingNotes };
+}
+
 function cleanJson(raw: string): string {
   return raw
     .replace(/^\uFEFF/, "")
@@ -754,6 +833,19 @@ const CANONICALIZER_PROMPT = `Ты — старший закупщик 1688/Taob
       "titleWarnings": ["что не добавлять в title"],
       "infographicIdeas": ["5-7 идей слайдов под этот товар"]
     },
+    "domainRules": {
+      "seo": {
+        "description": "2–3 предложения, продающее описание для карточки WB/Ozon, конкретно про ЭТОТ товар, грамотный русский, без выдуманных характеристик",
+        "sellingBullets": ["5 буллетов — выгоды/применение для покупателя, НЕ внутренние советы, НЕ 'SKU в карточке', НЕ 'проверьте образец'"],
+        "keywords": ["8–15 релевантных поисковых запросов, без дублей, без гигантской строки-заголовка"]
+      },
+      "cargo": {
+        "cargoNature": "one of: inflatable | liquid | aerosol | battery | powder | fragile | oversized | textile | food_contact | none",
+        "sensitiveIssues": ["конкретные для этого товара карго-риски"],
+        "whatToRequest": ["что запросить у поставщика/карго ИМЕННО для этого товара, помимо базового веса/габаритов"],
+        "packagingNotes": "короткая заметка про упаковку/перевозку этого товара, или пусто"
+      }
+    },
     "logistics": {
       "weightKg": "число в кг (вес единицы, нетто/брутто) если явно указано в карточке/атрибутах, иначе null",
       "weightSource": "card|attribute|unknown",
@@ -811,6 +903,12 @@ const CANONICALIZER_PROMPT = `Ты — старший закупщик 1688/Taob
 33. logistics.weightKg: заполняй ТОЛЬКО если вес единицы явно указан в карточке или атрибутах (重量/毛重/净重/вес). Переводи граммы в килограммы (2650 г → 2.65). Никогда не выдумывай вес. Если указан только вес короба/партии или вес с упаковкой — всё равно захвати его в weightKg и напиши это в packageNote (например "указан вес короба, а не единицы" или "вес с упаковкой не указан"). weightSource: card — вес виден в основной карточке/на фото данных, attribute — из атрибута/характеристик, unknown — если веса нет.
 34. logistics.dimensionsCm: заполняй ТОЛЬКО если внешние габариты указаны (尺寸/规格/外形/размер). Нормализуй в формат "N×N×N" в сантиметрах (ДхШхВ). Если единицы явно миллиметры — переведи мм→см. Используй разделитель × (НЕ * и НЕ х). Если габаритов нет — null.
 35. НЕ клади вес и габариты в поля materials, sku или в свободный текст. Только в logistics.
+36. domainRules.seo и domainRules.cargo делают SEO-черновик и ТЗ карго уникальными под ЭТОТ товар. Заполняй их конкретно, а не шаблонно.
+37. domainRules.seo.description — продающее описание для карточки: выгоды покупателю, грамотный русский, правильные падежи после предлогов ("для йоги, фитнеса, бега"). Без голого существительного в начале, без выдуманных характеристик (состав в %, нагрузка, напряжение) — если не знаешь, говори обобщённо или опусти.
+38. domainRules.seo.sellingBullets — 5 буллетов о выгодах/сценариях/ощущении материала/универсальности для ПОКУПАТЕЛЯ. НЕ внутренние советы по закупке/QA, НЕ "проверьте образец/вес", НЕ "SKU в карточке: N".
+39. domainRules.seo.keywords — реальные поисковые фразы покупателя, 8–15 штук, без дублей, без огромной строки-заголовка.
+40. domainRules.cargo.cargoNature — честно классифицируй: inflatable | liquid | aerosol | battery | powder | fragile | oversized | textile | food_contact | none. Если товар надувной/содержит жидкость/батарею/аэрозоль/порошок/хрупкий/негабаритный/текстильный — укажи это, это управляет карго-предупреждениями дальше по пайплайну.
+41. domainRules.cargo.sensitiveIssues и whatToRequest должны быть СПЕЦИФИЧНЫ под товар (надувной → клапан, ножной насос, перевозка в сдутом виде, защита от проколов, макс. нагрузка; текстиль → влага, сжатие, состав; батарея → маркировка/правила перевозки). НЕ выдавай один и тот же обобщённый список для всех товаров. Никогда не выдумывай сертификаты и характеристики.
 `;
 
 const SYSTEM_MSG =
@@ -1139,10 +1237,33 @@ function normalizeContext(
   };
 
   const logistics = normalizeLogistics(profileDraft.logistics);
+
+  // Нормализуем product-specific SEO/cargo под-объекты domainRules. Модель кладёт
+  // их в procurementProfile.domainRules.{seo,cargo}; downstream (procurementProfile)
+  // читает draft.domainRules, поэтому мержим сюда, не затирая остальные поля.
+  const rawDomainRules =
+    profileDraft.domainRules &&
+    typeof profileDraft.domainRules === "object" &&
+    !Array.isArray(profileDraft.domainRules)
+      ? (profileDraft.domainRules as Record<string, unknown>)
+      : {};
+  const domainSeo = normalizeDomainSeo(rawDomainRules.seo);
+  const domainCargo = normalizeDomainCargo(rawDomainRules.cargo);
+
   if (profileDraft && typeof profileDraft === "object") {
     // Гарантируем нормализованный logistics-блок внутри draft, чтобы downstream
     // (procurementProfile) читал его по стабильному пути.
     (profileDraft as Record<string, unknown>).logistics = logistics;
+
+    if (domainSeo || domainCargo) {
+      const mergedDomainRules: Record<string, unknown> = { ...rawDomainRules };
+      if (domainSeo) mergedDomainRules.seo = domainSeo;
+      else delete mergedDomainRules.seo;
+      if (domainCargo) mergedDomainRules.cargo = domainCargo;
+      else delete mergedDomainRules.cargo;
+      (profileDraft as Record<string, unknown>).domainRules = mergedDomainRules;
+    }
+
     ctx.procurementProfileDraft = profileDraft;
   }
   // Дублируем на верхний уровень контекста для удобного доступа downstream.
