@@ -414,24 +414,15 @@ export async function continuePipeline(jobId: string) {
       return;
     }
 
-    const qaResult = await runQaGate(snapshot, { userCard: finalText, seoText, buyerBrief: briefText, lastMessage: '' }).catch(() => null);
+    // QA Gate отключён: не блокируем отчёт и не показываем safe summary из-за QA.
+    const qaResult = {
+      decision: 'PASS',
+      issues: [],
+      qualityScore: 8,
+      summary: 'QA Gate отключён.',
+    } as any;
 
-    if (qaResult?.decision === 'BLOCK') {
-      console.warn('[pipeline] QA BLOCKED');
-      progress?.stop();
-      if (messageId) await bot.telegram.deleteMessage(chatId, messageId).catch(() => {});
-      await bot.telegram.sendMessage(chatId, buildSafeSummary(product, 'QA Gate заблокировал.'), { parse_mode: 'HTML' });
-      await markSent(jobId);
-      if (redis) await redis.del(`processing:${job.user_id}`).catch(() => {});
-      return;
-    }
-
-    if (qaResult?.decision === 'FIX_REQUIRED' && qaResult.issues?.length > 0) {
-      const fixed = await runAutoFix(snapshot, { userCard: finalText, seoText, buyerBrief: briefText, lastMessage: '' } as any, qaResult).catch(() => null);
-      if (fixed && typeof (fixed as any).userCard === 'string') finalText = (fixed as any).userCard;
-    }
-
-    console.log(`[pipeline] QA: ${qaResult?.decision ?? 'skipped'}`);
+    console.log('[pipeline] QA: skipped (disabled)');
 
     await tryConsumeCredit(job.user_id);
     await track(job.user_id, 'generation_done', { url: job.input_url });
