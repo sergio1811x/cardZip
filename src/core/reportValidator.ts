@@ -361,6 +361,53 @@ function getSnapshotClaimText(snapshot: Record<string, unknown>): string {
   ]).toLowerCase();
 }
 
+// Only these genuinely dangerous / unverifiable claim families may spawn a
+// destructive dynamic "неподтверждённое свойство …" replacement. Ordinary
+// descriptive adjectives (острый, прочный, классический, удобный, компактный,
+// стильный …) must NOT trigger it — otherwise a knife SKU label like
+// "острый и прочный, классический дизайн" gets shredded into doubled
+// "неподтверждённое свойство — уточнить у поставщика".
+const DANGEROUS_CLAIM_TERMS: RegExp[] = [
+  /антибактериальн/i,
+  /антимикробн/i,
+  /бактерицидн/i,
+  /медицинск/i,
+  /лечебн/i,
+  /ортопедическ/i,
+  /терапевтическ/i,
+  /сертифицирован/i,
+  /гипоаллергенн/i,
+  /безопасн[а-яё]*\s+для\s+детей/i,
+  /детск[а-яё]*\s+безопасн/i,
+  /профессиональн/i,
+  /оригинальн[а-яё]*\s+бренд/i,
+  /водонепроницаем/i,
+  /водостойк/i,
+  /влагозащищ/i,
+  /влагонепроницаем/i,
+  /UPF\s*50/i,
+  /дезинфекц/i,
+  /стерилизац/i,
+  /пищев[а-яё]*\s+силикон/i,
+  /графенов/i,
+  /защит[а-яё]*\s+от\s+перегрев/i,
+  /быстр[а-яё]*\s+нагрев/i,
+  /равномерн[а-яё]*\s+нагрев/i,
+  /энергосберегающ/i,
+  /экологичн/i,
+  /нетоксичн/i,
+  /огнеупорн/i,
+  /жаропрочн/i,
+  /термостойк/i,
+  /наноматериал/i,
+  /витамин/i,
+  /коллаген/i,
+];
+
+function isDangerousClaim(value: string): boolean {
+  return DANGEROUS_CLAIM_TERMS.some((re) => re.test(value));
+}
+
 function collectDynamicForbiddenClaims(
   snapshot: Record<string, unknown>,
 ): string[] {
@@ -377,6 +424,10 @@ function collectDynamicForbiddenClaims(
   for (const item of raw) {
     const value = item.replace(/^[-•\s]+/g, "").trim();
     if (!value || value.length < 3 || value.length > 80) continue;
+    // Only genuinely dangerous/unverifiable claims may become a destructive
+    // replacement. Neutral descriptors coming through SEO forbiddenClaims are
+    // ignored here so they don't wreck SKU labels/titles.
+    if (!isDangerousClaim(value)) continue;
     const key = value.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
@@ -610,11 +661,22 @@ function sanitizeUnconfirmedClaims(
       return fixedLine;
     });
 
+  const UNVERIFIED = "неподтверждённое свойство — уточнить у поставщика";
+  const unverifiedEsc = escapeRegExp(UNVERIFIED);
   return fixedLines
     .join("\n")
     .replace(
       /\s+—\s+уточнить у поставщика\s+—\s+уточнить у поставщика/gi,
       " — уточнить у поставщика",
+    )
+    // "X и X" (or comma) → single X, then any run of the phrase → one phrase.
+    .replace(
+      new RegExp(`${unverifiedEsc}(?:\\s*(?:и|,)\\s*${unverifiedEsc})+`, "gi"),
+      UNVERIFIED,
+    )
+    .replace(
+      new RegExp(`${unverifiedEsc}(?:\\s+${unverifiedEsc})+`, "gi"),
+      UNVERIFIED,
     )
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")

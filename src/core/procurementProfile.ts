@@ -944,16 +944,12 @@ const KIND_RULES: Record<
 };
 
 function genericRules(label: string) {
-  const isPh = isPlaceholderValue(label);
-  const forLabel = isPh ? "" : ` для товара “${label}”`;
-  const ofLabel = isPh ? "" : ` “${label}”`;
-  const atLabel = isPh ? "" : ` для “${label}”`;
   return {
     mustAskSupplier: [
-      `Подтвердите цену выбранного SKU${forLabel}.`,
-      `Укажите вес одной единицы${ofLabel} с индивидуальной упаковкой.`,
-      `Укажите габариты индивидуальной упаковки${atLabel}.`,
-      `Подтвердите основной материал и покрытие/отделку${isPh ? "" : `, если они есть у “${label}”`}.`,
+      `Подтвердите цену выбранного SKU.`,
+      `Укажите вес одной единицы с индивидуальной упаковкой.`,
+      `Укажите габариты индивидуальной упаковки.`,
+      `Подтвердите основной материал и покрытие/отделку.`,
       `Подтвердите комплектацию выбранного SKU: что входит в коробку/пакет.`,
       `Пришлите реальные фото выбранного SKU, комплектации и упаковки.`,
       `Укажите MOQ и срок отгрузки по выбранному SKU.`,
@@ -966,8 +962,8 @@ function genericRules(label: string) {
       "запросить фото товара и упаковки",
     ],
     onSample: [
-      `соответствие выбранному SKU${atLabel}`,
-      `фактический материал/покрытие${ofLabel}`,
+      `соответствие выбранному SKU`,
+      `фактический материал/покрытие`,
       `полную комплектацию выбранного SKU`,
       `фактические размеры и сборку/форму, если применимо`,
       `вес с упаковкой и состояние упаковки после доставки`,
@@ -1885,7 +1881,27 @@ function normalizeMaterials(items: string[], limit = 2): string[] {
       out.push(part);
     }
   }
-  const result = out.slice(0, limit);
+  // Drop bogus fragments: a material that is only a substring/token-prefix of
+  // another material (e.g. "3" split out of the steel grade "3CR13") is noise.
+  // Steel grade codes like 3CR13 / 4CR13 / 5CR15 must survive intact as one
+  // token, so we only prune entries that are a proper fragment of a longer one.
+  const deduped = out.filter((item, idx) => {
+    const norm = item.toLowerCase().replace(/\s+/g, " ").trim();
+    return !out.some((other, j) => {
+      if (j === idx) return false;
+      const otherNorm = other.toLowerCase().replace(/\s+/g, " ").trim();
+      if (otherNorm.length <= norm.length) return false;
+      // fragment if `item` appears as a substring inside a longer material and
+      // is bounded by a non-space (i.e. glued into a token like the "3" of "3cr13")
+      const at = otherNorm.indexOf(norm);
+      if (at < 0) return false;
+      const before = at > 0 ? otherNorm[at - 1] : " ";
+      const after =
+        at + norm.length < otherNorm.length ? otherNorm[at + norm.length] : " ";
+      return before !== " " || after !== " ";
+    });
+  });
+  const result = deduped.slice(0, limit);
   return result.length ? result : ["уточнить у поставщика"];
 }
 
@@ -2069,13 +2085,42 @@ function renderStructuredVariant(v: StructuredSkuVariant): string {
  * raw label instead of number-soup like `68800M 80 _10 -`.
  */
 function cleanRawSkuLabel(label: string): string {
-  return clean(label)
+  const cleaned = clean(label)
     .replace(/[_·\-–—/]+\s*$/g, "")
     .replace(/\s*[_·\-–—/]{2,}\s*/g, " · ")
     .replace(/\s+_\s+/g, " ")
     .replace(/\s{2,}/g, " ")
     .replace(/[_\-–—]+$/g, "")
     .trim();
+  return collapseRepeatedSkuFragments(cleaned);
+}
+
+/**
+ * Collapses echoed fragments in a composed SKU label so we never ship
+ * "X неподтверждённое свойство и неподтверждённое свойство Y" or "X и X".
+ * - splits on " · " and " и " boundaries, dedups identical segments;
+ * - collapses an immediate "phrase и phrase" repetition to a single phrase.
+ */
+function collapseRepeatedSkuFragments(text: string): string {
+  if (!text) return text;
+  // Collapse "<phrase> и <same phrase>" (case-insensitive) → "<phrase>".
+  let out = text.replace(
+    /(\S[^·]*?\S)\s+и\s+\1(?=\s|$|·)/gi,
+    "$1",
+  );
+  // Dedup identical " · "-separated segments, preserving order.
+  const seen = new Set<string>();
+  out = out
+    .split(/\s*·\s*/)
+    .filter((seg) => {
+      const key = seg.trim().toLowerCase();
+      if (!key) return false;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(" · ");
+  return out.replace(/\s{2,}/g, " ").trim();
 }
 
 function buildSkuProfile(
@@ -3213,42 +3258,33 @@ export function validateCnQuestions(
     errors.push("language mix");
   if (/\d+,\d+\s*元/.test(joined)) errors.push("comma decimal");
   if (/\d+[.)]\s*\d+[.)]/.test(joined)) errors.push("nested numbering");
+  if (/该问题中的相关产品信息/.test(joined)) errors.push("meta CN");
+  if (/接水盘|支架|挂钩|层架|伞骨/.test(joined))
+    errors.push("wrong-product accessory term");
   return { ok: errors.length === 0, errors };
 }
 
+// Deterministic CN is used ONLY as a faithful literal translation of the truly
+// generic supplier lines (price/weight/dimensions/material/photos/MOQ/sample).
+// It NEVER synthesizes product-specific accessory terms (接水盘/支架/挂钩/层架/伞骨)
+// or meta-garbage (该问题中的相关产品信息). Anything it cannot translate faithfully
+// returns "" so the caller can fall back to RU-only.
 function translateQuestionToCn(q: string): string {
   const lower = q.toLowerCase();
   const price = q.match(/(\d+(?:[,.]\d+)?)\s*¥/)?.[1]?.replace(",", ".");
-  const params = q
-    .match(/SKU\s+([\d\s/]+)/i)?.[1]
-    ?.replace(/\s+/g, " ")
-    .trim();
   if (/цен/.test(lower))
     return `请确认所选SKU的价格${price ? `：${price} 元` : ""}。`;
-  if (/ярус|собранном виде/.test(lower))
-    return "请提供所选SKU的层数，以及组装后的长、宽、高尺寸。";
-  if (/43\/53|43\s*см|53\s*см/.test(lower))
-    return "请说明43/53厘米指的是长度、宽度还是其他尺寸参数。";
-  if (/материал.*покрыт|покрыт.*материал|каркас/.test(lower))
-    return "请确认框架材质和表面涂层类型。";
-  if (/полный комплект|комплектац/.test(lower))
-    return "请确认“完整套装”包含哪些配件：接水盘、支架、挂钩、层架等。";
-  if (/поддон/.test(lower)) return "请确认是否包含可拆卸接水盘。";
-  if (/реальн.*фото|фото.*комплектац|фото.*упаков/.test(lower))
-    return "请发送所选SKU、完整配件和包装的实拍照片。";
   if (/вес/.test(lower)) return "请提供所选SKU单件含独立包装的重量。";
   if (/габарит|размер.*упаков/.test(lower)) return "请提供单件独立包装尺寸。";
-  if (/параметр/.test(lower))
-    return `请说明SKU参数${params ? ` ${params}` : ""}分别代表什么：尺寸、容量、数量规格还是其他参数？`;
-  if (/длин/.test(lower)) return "请提供产品折叠后或收纳状态的长度。";
-  if (/диаметр/.test(lower)) return "请提供展开后的尺寸或直径。";
-  if (/материал/.test(lower)) return "请确认产品材料和关键部件材料。";
-  if (/спиц/.test(lower)) return "请确认所选SKU的伞骨数量。";
-  if (/чехол/.test(lower))
-    return "是否包含收纳套？请发送产品打开、折叠状态和包装的实拍图。";
-  if (/moq|минимальн/.test(lower)) return "请确认最小起订量和发货时间。";
-  if (/образец/.test(lower)) return "是否可以先购买1-2件样品？";
-  return "请确认该问题中的相关产品信息。";
+  if (/материал/.test(lower)) return "请确认产品的主要材质和表面涂层/处理。";
+  if (/комплектац/.test(lower))
+    return "请确认所选SKU的配置：包装盒/袋内包含哪些内容。";
+  if (/реальн.*фото|фото.*комплектац|фото.*упаков|пришлите.*фото/.test(lower))
+    return "请发送所选SKU、配置和包装的实拍照片。";
+  if (/moq|минимальн|срок отгрузки/.test(lower))
+    return "请确认所选SKU的最小起订量和发货时间。";
+  if (/образец/.test(lower)) return "下单前是否可以先购买1-2件样品？";
+  return "";
 }
 
 export function buildSupplierQuestionsFromProfile(
@@ -3262,8 +3298,16 @@ export function buildSupplierQuestionsFromProfile(
     Array.isArray(profile.supplierQuestionsCn)
       ? profile.supplierQuestionsCn
       : [];
-  const cn =
-    savedCn.length === ru.length ? savedCn : ru.map(translateQuestionToCn);
+  // Prefer LLM CN saved upstream. Only fall back to deterministic CN if every
+  // line translates faithfully (no empties); otherwise emit RU-only rather than
+  // wrong-product/meta CN.
+  let cn: string[];
+  if (savedCn.length === ru.length) {
+    cn = savedCn;
+  } else {
+    const det = ru.map(translateQuestionToCn);
+    cn = det.every((s) => s.trim().length > 0) ? det : [];
+  }
   const cnCheck = validateCnQuestions(ru, cn);
   const label = cnCheck.ok
     ? "💬 Вопросы поставщику RU/CN"
@@ -3348,7 +3392,9 @@ export async function translateSupplierQuestionsRuToCn(
   ru: string[],
 ): Promise<string[]> {
   const cleanRu = uniq(ru, 10).slice(0, 10);
-  const fallback = cleanRu.map(translateQuestionToCn);
+  // Deterministic fallback only if it fully covers every line; otherwise RU-only.
+  const det = cleanRu.map(translateQuestionToCn);
+  const fallback: string[] = det.every((s) => s.trim().length > 0) ? det : [];
   const g: any = globalThis as any;
   const apiKey = g.process?.env?.OPENROUTER_API_KEY;
   if (!apiKey || typeof g.fetch !== "function" || !g.AbortSignal)

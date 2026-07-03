@@ -90,6 +90,61 @@ export function validateProcurementResult(
     }
   }
 
+  // ---- Knife/template/placeholder defect rules over user-facing blobs ----
+  // Rule 1 (ERROR): category label injected as product name.
+  const categoryAsNameNameRe =
+    /для\s+товара\s*[«"“][^»"”]*(товар|техник|аксессуар|издели)/i;
+  const categoryLabelQuotedRe =
+    /[«"“](кухонный товар|малая техника|аксессуар|USB-товар)[»"”]/i;
+  // Rule 4 (ERROR): doubled "неподтверждённое свойство".
+  const doubledUnconfirmedRe =
+    /неподтверждённое свойство[^\n]*неподтверждённое свойство/;
+  const doubledUnconfirmedGluedRe =
+    /(неподтверждённое свойство — уточнить[^\n]*)\bи\b\s*\1/i;
+  // Rule 5 (WARNING): material fragment duplicated, e.g. "3CR13 …, 3 нержавеющая сталь".
+  const materialFragmentDupRe = /(\dCR\d{2})[^\n,]*,\s*\d\s+нержавеющ/i;
+  // Rule 2 (ERROR): wrong-product / meta CN tokens (fixed list).
+  const wrongProductCnRe = /接水盘|层架|挂钩|伞骨|该问题中的相关产品信息/;
+
+  for (const blob of userFacingBlobs) {
+    if (categoryAsNameNameRe.test(blob.text) || categoryLabelQuotedRe.test(blob.text)) {
+      errors.push(`[${blob.label}] category label injected as product name`);
+    }
+    if (doubledUnconfirmedRe.test(blob.text) || doubledUnconfirmedGluedRe.test(blob.text)) {
+      errors.push(`[${blob.label}] doubled 'неподтверждённое свойство' in SKU/line`);
+    }
+    if (materialFragmentDupRe.test(blob.text)) {
+      warnings.push(`[${blob.label}] material fragment duplicated`);
+    }
+  }
+
+  // Rule 2 (ERROR) + Rule 3 (WARNING): CN questions file checks.
+  for (const f of files) {
+    const isCnQuestions = /(^|\/)01_/.test(f.name) || /Вопрос/i.test(f.name);
+    if (!isCnQuestions) continue;
+    const content = f.content ?? "";
+    if (wrongProductCnRe.test(content)) {
+      errors.push(`[${f.name}] wrong-product or meta CN question`);
+    }
+    // Duplicate CN line within the file (lines containing Han characters).
+    const cnLines = content
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /[一-鿿]/.test(l) && l.length > 0);
+    const seenCn = new Set<string>();
+    let cnDupFound = false;
+    for (const l of cnLines) {
+      if (seenCn.has(l)) {
+        cnDupFound = true;
+        break;
+      }
+      seenCn.add(l);
+    }
+    if (cnDupFound) {
+      warnings.push(`[${f.name}] duplicate CN question`);
+    }
+  }
+
   // ---- Per-file structural checks ----
   for (const f of files) {
     const content = f.content ?? "";

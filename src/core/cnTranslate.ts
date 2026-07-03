@@ -120,3 +120,79 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
     return localTranslated;
   }
 }
+
+// ─── RU→CN faithful translation of supplier questions ──────────────────────
+//
+// Translates the ACTUAL supplier questions for THIS product 1:1 into
+// professional procurement Chinese. No fixed phrasebook, no substituted or
+// product-mismatched content. Returns a CN array the same length as the input,
+// or an empty array on any failure (caller decides RU-only fallback).
+
+function hasCyrillic(text: string): boolean {
+  return /[а-яё]/i.test(text);
+}
+
+/**
+ * Faithfully translate a list of Russian supplier questions to Chinese.
+ * - 1:1 count and order with the input.
+ * - Preserves steel grades, model codes, units and numbers verbatim.
+ * - No added, dropped or product-mismatched content; no meta lines.
+ * Returns [] if translation cannot be produced reliably (caller falls back to RU-only).
+ */
+export async function translateQuestionsToCn(ruQuestions: string[]): Promise<string[]> {
+  const questions = (ruQuestions ?? [])
+    .map((q) => String(q ?? '').trim())
+    .filter(Boolean);
+  if (questions.length === 0) return [];
+
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return [];
+
+  const prompt = `Ты профессиональный переводчик закупочных сообщений RU→CN для чата с поставщиком на 1688/Taobao/Tmall.
+Тебе дают массив вопросов поставщику на русском ИМЕННО про конкретный товар. Переведи их на деловой закупочный китайский.
+
+Строгие правила:
+- Переводи РОВНО эти вопросы, ничего не добавляй и не выбрасывай. Никакого фиксированного шаблона и никаких вопросов «из другого товара».
+- Ровно один китайский перевод на каждый вход, тот же порядок, длина массива = длине входа (${questions.length}).
+- Сохраняй без искажений: марки/сорта стали (например 9Cr18MoV, HRC 58), коды моделей, артикулы, числа и единицы (10kg, 5L, 300ml, HRC).
+- Стандарты питания: US→美规, EU→欧规, UK→英规, JP→日规, KR→韩规, AU→澳规, CN→国标.
+- Профессиональный, вежливый закупочный тон. Никаких мета-фраз вроде «уточните информацию из этого вопроса», никаких пояснений, никакой нумерации внутри строки.
+- Не подставляй содержание, которого нет в русском вопросе (нельзя превратить вопрос про нож в вопрос про сушилку для посуды).
+- Если вопрос трудно перевести уверенно — переведи его буквально по смыслу, но НЕ заменяй на несвязанный текст.
+- Десятичный разделитель — точка (12.5), не запятая.
+
+Верни ТОЛЬКО JSON-массив строк на китайском, без markdown, без пояснений.
+
+Вход: ${JSON.stringify(questions)}`;
+
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-lite-preview-09-2025',
+        max_tokens: 1200,
+        temperature: 0,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
+
+    if (!res.ok) return [];
+    const data = await res.json() as any;
+    const raw = data.choices?.[0]?.message?.content ?? '';
+    const translated = tryParseStringArray(raw);
+
+    if (!translated || translated.length !== questions.length) return [];
+
+    const out = translated.map((s) => String(s ?? '').trim());
+    // Faithfulness guards: every line must be non-empty, contain Chinese,
+    // and carry no leftover Cyrillic (that would signal a broken / partial translation).
+    if (out.some((s) => !s || !hasChinese(s) || hasCyrillic(s))) return [];
+
+    return out;
+  } catch (e) {
+    console.log('[cnTranslate] RU→CN translation skipped:', (e as Error).message);
+    return [];
+  }
+}
