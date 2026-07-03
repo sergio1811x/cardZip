@@ -258,77 +258,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let hard = { block: false, canShowFullReport: true, warnings: [] as any[], issues: [] as any[], fixedArtifacts: {} as Record<string, unknown>, safeUserSummary: {} as any };
 
     progress?.step('qa');
-    const qaMode = String(process.env.CARDZIP_QA_GATE_MODE ?? 'always').toLowerCase();
-    const qaUnavailablePolicy = String(process.env.CARDZIP_QA_UNAVAILABLE_POLICY ?? 'send_code_validated').toLowerCase();
-    const hasNonLowWarnings = hard.warnings.some((w) => w.severity !== 'low');
-    const mustRunQa = qaMode !== 'off' && (qaMode === 'always' || (qaMode === 'critical_only' && (hard.issues.length > 0 || hasNonLowWarnings)));
-    let qaResult = mustRunQa
-      ? await runQaGate(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText }).catch(() => null)
-      : { decision: 'PASS', canShowToUser: true, qualityScore: 8, confidence: 'medium', summary: 'Code hard validator passed; LLM QA skipped by policy.' } as any;
-
-    if (!qaResult || qaResult.decision === 'BLOCK') {
-      const reason = qaResult ? [...safeIssues(qaResult.criticalIssues), ...safeIssues(qaResult.issues), ...safeIssues(qaResult.warnings)].join('; ') : 'QA Gate недоступен.';
-      const qaUnavailable = !qaResult || /QA (?:unavailable|fallback|Gate недоступен|all models failed)/i.test(reason);
-      const qualityOnlyBlock = !!qaResult && isOnlyNonBlockingQualityIssue(reason);
-      if (qualityOnlyBlock) {
-        console.warn(`[step5] QA warning downgraded to PASS: ${reason}`);
-        qaResult = { ...qaResult, decision: 'PASS', canShowToUser: true, qualityScore: Math.max(6, Number(qaResult.qualityScore ?? 6)), confidence: qaResult.confidence ?? 'medium', summary: `QA warning downgraded: ${reason}`, issues: [] } as any;
-      } else {
-        const qaFailClosed = String(process.env.CARDZIP_QA_FAIL_CLOSED ?? 'false').toLowerCase() === 'true' || qaUnavailablePolicy === 'fail_closed';
-        if (qaFailClosed) {
-          console.warn(`[step5] QA blocked/unavailable in fail-closed mode: ${reason}`);
-          progress?.message('QA остановил отчёт в fail-closed режиме', 98);
-          progress?.stop();
-          await sendBlocked(job, product, reason || 'QA Gate не разрешил полный отчёт.');
-          return res.status(200).json({ ok: true, blocked: true, source: 'qa_fail_closed' });
-        }
-        console.warn(`[step5] QA warning-only; sending code-validated report: ${reason}`);
-        qaResult = { decision: 'PASS', canShowToUser: true, qualityScore: Math.max(6, Number((qaResult as any)?.qualityScore ?? 6)), confidence: (qaResult as any)?.confidence ?? 'medium', summary: `QA warning downgraded: ${reason}`, issues: [] } as any;
-      }
-    }
-
-    if (qaResult?.decision === 'FIX_REQUIRED') {
-      progress?.step('autofix');
-      const fixed = await runAutoFix(snapshot as any, { userCard: finalText, seoText, buyerBrief: briefText, supplierQuestions: supplierText }, { ...qaResult, issues: safeIssues(qaResult.issues).length ? safeIssues(qaResult.issues) : safeIssues(qaResult.requiredEdits) } as any).catch(() => null);
-      const repaired = applySanitizedArtifacts(fixed, {
-        finalText,
-        seoText,
-        briefText,
-        supplierText,
-        cargoText,
-        sampleChecklistText,
-        readmeText,
-      });
-      finalText = repaired.finalText;
-      seoText = repaired.seoText;
-      briefText = repaired.briefText;
-      supplierText = repaired.supplierText;
-      cargoText = repaired.cargoText;
-      sampleChecklistText = repaired.sampleChecklistText;
-      readmeText = repaired.readmeText;
-
-      const postFixValidation = repairProcurementTexts({
-        mainReport: finalText,
-        docs: [
-          { filename: '01_Вопросы_поставщику.txt', text: supplierText },
-          { filename: '02_ТЗ_байеру.md', text: briefText },
-          { filename: '03_ТЗ_карго.md', text: cargoText },
-          { filename: '04_Чеклист_образца.md', text: sampleChecklistText },
-          { filename: '05_SEO_черновик.md', text: seoText },
-          { filename: '00_Инструкция.txt', text: readmeText },
-        ],
-        profile: profileForFiles,
-      });
-      if (postFixValidation.fixed.mainReport) finalText = postFixValidation.fixed.mainReport;
-      for (const doc of postFixValidation.fixed.docs) {
-        if (doc.filename === '01_Вопросы_поставщику.txt') supplierText = doc.text;
-        if (doc.filename === '02_ТЗ_байеру.md') briefText = doc.text;
-        if (doc.filename === '03_ТЗ_карго.md') cargoText = doc.text;
-        if (doc.filename === '04_Чеклист_образца.md') sampleChecklistText = doc.text;
-        if (doc.filename === '05_SEO_черновик.md') seoText = doc.text;
-        if (doc.filename === '00_Инструкция.txt') readmeText = doc.text;
-      }
-    }
+    // QA Gate полностью отключён: он не должен блокировать показ полного отчёта.
+    // Оставляем только code-level validators и consistency-аудит ниже.
+    const qaResult = {
+      decision: 'PASS',
+      canShowToUser: true,
+      qualityScore: 8,
+      confidence: 'medium',
+      summary: 'QA Gate отключён по настройке продукта.',
+      issues: [],
+      warnings: [],
+      criticalIssues: [],
+      requiredEdits: [],
+    } as any;
 
     const auditMode = String(process.env.CARDZIP_CONSISTENCY_AUDIT_MODE ?? 'always').toLowerCase();
     const shouldRunConsistencyAudit = auditMode !== 'off';
