@@ -3,8 +3,8 @@ import type { QaResult, GeneratedArtifacts } from '../types';
 import { QaGateResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const QA_MODELS = [
-  'deepseek/deepseek-v4-pro',
-  'deepseek/deepseek-chat-v3.2',
+  'deepseek/deepseek-v4-flash',
+  'openai/gpt-5-mini',
   'qwen/qwen3-235b-a22b',
 ];
 

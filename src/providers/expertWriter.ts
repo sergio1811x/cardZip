@@ -2,8 +2,8 @@ import type { AnalysisSnapshot } from '../core/analysisSnapshot';
 import { ExpertWriterResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const WRITER_MODELS = [
-  "deepseek/deepseek-v4-pro",
-  "deepseek/deepseek-chat-v3.2",
+  "deepseek/deepseek-v4-flash",
+  "openai/gpt-5-mini",
   "qwen/qwen3-235b-a22b",
 ];
 

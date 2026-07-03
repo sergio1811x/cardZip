@@ -87,17 +87,16 @@ const DEFAULT_VISION_MODELS = [
 ];
 
 const DEFAULT_TEXT_MODELS = [
-  "deepseek/deepseek-chat-v3.1",
-  "qwen/qwen3-32b",
-  "google/gemini-2.5-flash-lite",
+  "deepseek/deepseek-v4-flash",
   "openai/gpt-5-mini",
+  "google/gemini-2.5-flash-lite",
 ];
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const DEFAULT_TIMEOUT_MS = 25_000;
-const DEFAULT_IMAGE_TIMEOUT_MS = 7_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_IMAGE_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_IMAGE_BYTES = 1_200_000;
-const DEFAULT_MAX_TOKENS = 3500;
+const DEFAULT_MAX_TOKENS = 8000;
 const DEFAULT_TEMPERATURE = 0.15;
 
 const CATEGORY_TYPES = [
