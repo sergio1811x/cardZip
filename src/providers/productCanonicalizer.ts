@@ -1331,6 +1331,9 @@ async function runVisionCanonicalizer(
     }
   }
 
+  console.warn(
+    `[canonicalizer] all vision models failed (${VISION_MODELS.join(", ")})`,
+  );
   return null;
 }
 
@@ -1355,6 +1358,9 @@ async function runTextCanonicalizer(
     }
   }
 
+  console.warn(
+    `[canonicalizer] all text models failed (${TEXT_MODELS.join(", ")})`,
+  );
   return null;
 }
 

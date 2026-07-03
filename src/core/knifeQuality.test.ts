@@ -160,6 +160,106 @@ describe('knife quality — CLEAN fixture, zero errors', () => {
     expect(res.errors).toEqual([]);
   });
 
+  it('generic-smell knife fixture flags each new warning', () => {
+    const badReport = pad(
+      [
+        '📦 Кухонный нож из нержавеющей стали 3CR13',
+        'Источник: 1688',
+        '📌 Товар',
+        '• Выбранный SKU: кухонный нож из нержавеющей стали для готовки нож',
+        '• SKU: 1 вариант · вариант',
+      ].join('\n'),
+      20,
+    );
+    const badQuestions = pad(
+      [
+        '01_Вопросы_поставщику.txt',
+        '1. Подтвердите цену выбранного SKU: кухонный нож из нержавеющей стали для готовки — 5,01 ¥',
+        '2. Материал лезвия?',
+      ].join('\n'),
+    );
+    const badSeo = pad(
+      [
+        '## Название',
+        'Кухонный нож 420',
+        '',
+        '## Буллеты',
+        '1. универсальный дизайн под разные интерьеры',
+        '2. удобно дарить и хранить',
+      ].join('\n'),
+      45,
+    );
+    const res = validateProcurementResult(
+      baseInput({
+        productKind: 'knife',
+        productDetailsText: badReport,
+        mainReportText: badReport,
+        seoDraftMd: badSeo,
+        files: [{ name: '01_Вопросы_поставщику.txt', content: badQuestions }],
+      }),
+    );
+    expect(res.warnings.some((w) => /steel grade leaked into title/.test(w))).toBe(true);
+    expect(
+      res.warnings.some((w) => /SKU echoes product title, not a real variant/.test(w)),
+    ).toBe(true);
+    expect(
+      res.warnings.some((w) => /price question embeds oversized SKU string/.test(w)),
+    ).toBe(true);
+    expect(
+      res.warnings.some((w) => /meaningless single-variant SKU label/.test(w)),
+    ).toBe(true);
+    expect(
+      res.warnings.some((w) =>
+        /generic filler bullets for a specific product kind/.test(w),
+      ),
+    ).toBe(true);
+  });
+
+  it('clean knife fixture fires none of the new warnings and zero errors', () => {
+    const goodReport = pad(
+      [
+        '📦 Кухонный нож из нержавеющей стали',
+        'Источник: 1688',
+        '📌 Товар',
+        '• Выбранный SKU: единственный вариант',
+        '• Материал: нержавеющая сталь — подтвердить',
+      ].join('\n'),
+      20,
+    );
+    const goodQuestions = pad(
+      [
+        '01_Вопросы_поставщику.txt',
+        '1. Подтвердите цену выбранного SKU — 5,01 ¥.',
+        '2. Из какой стали изготовлено лезвие?',
+      ].join('\n'),
+    );
+    const goodSeo = pad(
+      [
+        '## Название',
+        'Кухонный нож из нержавеющей стали',
+        '',
+        '## Буллеты',
+        '1. Сталь клинка держит заточку при повседневной готовке.',
+        '2. Клинок и рукоять удобны для нарезки овощей и мяса.',
+      ].join('\n'),
+      45,
+    );
+    const res = validateProcurementResult(
+      baseInput({
+        productKind: 'knife',
+        productDetailsText: goodReport,
+        mainReportText: goodReport,
+        seoDraftMd: goodSeo,
+        selectedSkuText: 'единственный вариант',
+        files: [{ name: '01_Вопросы_поставщику.txt', content: goodQuestions }],
+      }),
+    );
+    expect(res.errors).toEqual([]);
+    const newWarnRe =
+      /steel grade leaked into title|SKU echoes product title|price question embeds oversized SKU string|meaningless single-variant SKU label|generic filler bullets/;
+    expect(res.warnings.some((w) => newWarnRe.test(w))).toBe(false);
+  });
+
   it('legit "Название CN:" title does not trip wrong-product rule', () => {
     const cn = pad(
       [

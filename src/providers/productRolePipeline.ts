@@ -32,7 +32,14 @@ function mergeContexts(
   fallback: ProductContext | null,
 ): ProductContext | null {
   if (primary && fallback) {
-    return {
+    const primaryRec = primary as unknown as Record<string, unknown>;
+    const fallbackRec = fallback as unknown as Record<string, unknown>;
+    const primaryDraft = primaryRec.procurementProfileDraft;
+    const fallbackDraft = fallbackRec.procurementProfileDraft;
+    const primaryLogistics = primaryRec.logistics;
+    const fallbackLogistics = fallbackRec.logistics;
+
+    const merged = {
       ...fallback,
       ...primary,
       identity: { ...fallback.identity, ...primary.identity },
@@ -48,7 +55,17 @@ function mergeContexts(
       },
       riskTags: primary.riskTags?.length ? primary.riskTags : fallback.riskTags,
       dataQuality: { ...fallback.dataQuality, ...primary.dataQuality },
-    };
+    } as ProductContext & Record<string, unknown>;
+
+    // Explicitly carry through the product-specific procurement draft (domainRules,
+    // buyerMustCheck, etc.). The role-based primary context does not produce it, so
+    // without this the LLM-derived draft could be lost on any future merge change.
+    const carriedDraft = primaryDraft ?? fallbackDraft;
+    if (carriedDraft !== undefined) merged.procurementProfileDraft = carriedDraft;
+    const carriedLogistics = primaryLogistics ?? fallbackLogistics;
+    if (carriedLogistics !== undefined) merged.logistics = carriedLogistics;
+
+    return merged;
   }
 
   return primary ?? fallback;
@@ -62,12 +79,30 @@ export async function runProductRolePipeline(
   const policy = buildCanonicalizerPolicyInput(raw);
 
   const [canonicalizerFallbackContext, factSheet, categoryPolicy, classificationOutput, skuResolutionOutput, policyOutput] = await Promise.all([
-    runLegacyCanonicalizerFallback(raw).catch(() => null),
-    extractProductFacts(raw as any).catch(() => null),
-    classifyProductCapabilities(raw as any).catch(() => null),
-    runCanonicalizerClassification(raw).catch(() => null),
-    runCanonicalizerSkuResolution(raw).catch(() => null),
-    runCanonicalizerPolicyGuard(raw).catch(() => null),
+    runLegacyCanonicalizerFallback(raw).catch((e) => {
+      console.error('[role-pipeline] legacy canonicalizer failed:', (e as Error)?.message);
+      return null;
+    }),
+    extractProductFacts(raw as any).catch((e) => {
+      console.error('[role-pipeline] fact extractor failed:', (e as Error)?.message);
+      return null;
+    }),
+    classifyProductCapabilities(raw as any).catch((e) => {
+      console.error('[role-pipeline] capability classifier failed:', (e as Error)?.message);
+      return null;
+    }),
+    runCanonicalizerClassification(raw).catch((e) => {
+      console.error('[role-pipeline] canonicalizer classification failed:', (e as Error)?.message);
+      return null;
+    }),
+    runCanonicalizerSkuResolution(raw).catch((e) => {
+      console.error('[role-pipeline] canonicalizer sku resolution failed:', (e as Error)?.message);
+      return null;
+    }),
+    runCanonicalizerPolicyGuard(raw).catch((e) => {
+      console.error('[role-pipeline] canonicalizer policy guard failed:', (e as Error)?.message);
+      return null;
+    }),
   ]);
 
   const roleBasedContext = buildContextFromRoleOutputs(raw, {
@@ -79,6 +114,20 @@ export async function runProductRolePipeline(
   const primarySource: ProductRolePipelineResult['primarySource'] = roleBasedContext
     ? 'role_outputs'
     : 'canonicalizer_fallback';
+
+  // Diagnostic: surface the exact case that shipped a knife with generic questions —
+  // the LLM layer produced no product-specific domainRules, so downstream builders
+  // silently fall back to generic templates. Make this visible in Railway logs.
+  const resolvedDraft = (resolvedContext as unknown as Record<string, unknown> | null)
+    ?.procurementProfileDraft as
+    | { domainRules?: { buyerMustCheck?: unknown[] } }
+    | undefined;
+  if (!resolvedDraft?.domainRules?.buyerMustCheck?.length) {
+    console.warn(
+      '[role-pipeline] no LLM domainRules.buyerMustCheck — report will use generic fallback',
+      { primarySource },
+    );
+  }
 
   return {
     productContext: resolvedContext,

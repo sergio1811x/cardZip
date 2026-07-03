@@ -587,6 +587,66 @@ export function validateProcurementResult(
     }
   }
 
+  // ---- Generic-fallback / oversized-SKU smells over user-facing blobs ----
+  // Rule 1 (WARNING): a bare steel grade leaked into a title / Название line.
+  const steelGradeTailRe = /(\b\d?CR\d{2}\b|\b(?:304|430|420)\b)\s*$/i;
+  // Rule 5 (WARNING): generic filler bullets for a specific productKind.
+  const genericFillerBulletRe =
+    /универсальный дизайн под разные интерьеры|удобно дарить и хранить|компактный и удобный в повседневном/i;
+
+  for (const blob of userFacingBlobs) {
+    const lines = blob.text.split("\n");
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+
+      // Rule 1: title / Название line whose value ends with a bare steel grade.
+      const isTitleLine =
+        /^#{1,6}\s*Название\b/i.test(line) ||
+        /^Название\s*:/i.test(line) ||
+        /^📦\s*\S/.test(line);
+      if (isTitleLine) {
+        const value = line
+          .replace(/^#{1,6}\s*Название\s*:?\s*/i, "")
+          .replace(/^Название\s*:?\s*/i, "")
+          .replace(/^📦\s*/, "")
+          .trim();
+        if (value.length > 0 && steelGradeTailRe.test(value)) {
+          warnings.push(`[${blob.label}] steel grade leaked into title`);
+        }
+      }
+
+      // Rule 2: "Выбранный SKU:" value that echoes the whole product title.
+      const skuMatch = line.match(/Выбранный\s+SKU\s*:\s*(.+)$/i);
+      if (skuMatch) {
+        const value = skuMatch[1].trim();
+        const words = value.split(/\s+/).filter(Boolean);
+        if (value.length > 40 && words.length >= 4) {
+          warnings.push(`[${blob.label}] SKU echoes product title, not a real variant`);
+        }
+      }
+
+      // Rule 3: supplier price question embedding a giant SKU string.
+      if (/Подтвердите цену выбранного SKU:[^\n]{40,}—\s*[\d.,]+\s*[¥₽]/.test(line)) {
+        warnings.push(`[${blob.label}] price question embeds oversized SKU string`);
+      }
+
+      // Rule 4: meaningless single-variant SKU label.
+      if (/SKU:\s*1\s*вариант\s*·\s*вариант/i.test(line)) {
+        warnings.push(`[${blob.label}] meaningless single-variant SKU label`);
+      }
+    }
+
+    // Rule 4 (alt form): "• SKU нужно уточнить" co-occurring with "1 вариант".
+    if (/^•?\s*SKU нужно уточнить\s*$/im.test(blob.text) && /1\s*вариант/i.test(blob.text)) {
+      warnings.push(`[${blob.label}] meaningless single-variant SKU label`);
+    }
+
+    // Rule 5: generic filler bullets for a specific product kind.
+    if (input.productKind === "knife" && genericFillerBulletRe.test(blob.text)) {
+      warnings.push(`[${blob.label}] generic filler bullets for a specific product kind`);
+    }
+  }
+
   // ---- Warnings (non-blocking) ----
   // Weight conflict: "вес не указан" while a numeric kg value appears elsewhere.
   const allText = userFacingBlobs.map((b) => b.text).join("\n");

@@ -32,6 +32,7 @@ export type ProductKind =
   | "small_appliance"
   | "heating_food_mat"
   | "kitchen_tool"
+  | "knife"
   | "bag_accessory"
   | "fake_security_camera"
   | "generic_product";
@@ -936,6 +937,82 @@ const KIND_RULES: Record<
       "консистенция",
     ],
   },
+  knife: {
+    mustAskSupplier: [
+      "Подтвердите цену выбранного SKU.",
+      "Укажите марку и твёрдость стали (например 3CR13/4CR13/5CR15, значение HRC).",
+      "Укажите длину и толщину клинка.",
+      "Уточните тип и угол заточки, заточен ли нож с завода.",
+      "Подтвердите материал рукояти и способ крепления (заклёпки/литьё).",
+      "Клинок цельный (сквозной хвостовик) или накладной?",
+      "Есть ли антикоррозийная обработка или покрытие клинка?",
+      "Укажите вес и баланс ножа.",
+      "Что входит в комплектацию: чехол, коробка, заточка?",
+      "Укажите вес одной единицы с упаковкой.",
+    ],
+    beforeSample: [
+      "подтвердить марку стали и HRC",
+      "подтвердить геометрию клинка (длина, толщина, заточка)",
+      "получить вес и габариты с упаковкой",
+      "запросить реальные фото клинка, острия и хвостовика",
+    ],
+    onSample: [
+      "фактическую остроту из коробки",
+      "удержание кромки после теста реза",
+      "ровность и качество спусков",
+      "отсутствие люфта рукояти",
+      "коррозию после мойки и контакта с влагой",
+      "баланс и удобство хвата",
+      "качество заклёпок и стыка рукоять–клинок",
+      "заусенцы и дефекты режущей кромки",
+      "упаковку и защиту лезвия",
+    ],
+    cargo: [
+      "вес и габариты с упаковкой",
+      "как защищено лезвие при перевозке (чехол/блистер)",
+      "острые/режущие предметы — уточнить у карго ограничения и требования к упаковке",
+      "количество и вес транспортной коробки",
+      "фото упаковки",
+    ],
+    redFlags: [
+      "не подтверждена марка/твёрдость стали",
+      "неизвестна геометрия клинка",
+      "риск коррозии дешёвой стали",
+      "люфт рукояти",
+      "нет реальных фото",
+      "острый предмет — требования к перевозке и упаковке не подтверждены",
+    ],
+    seoAllowed: [
+      "кухонный нож",
+      "нож для нарезки/шинковки",
+      "клинок из нержавеющей стали (марку указывать только подтверждённую)",
+      "эргономичная рукоять (после подтверждения)",
+    ],
+    seoForbidden: [
+      "хирургическая сталь",
+      "профессиональная заточка без подтверждения",
+      "не тупится",
+      "вечная острота",
+      "дамасская сталь без подтверждения",
+      "японская сталь без подтверждения",
+      ...DANGEROUS_CLAIMS,
+    ],
+    infographic: [
+      "Нож общий вид",
+      "Клинок и марка стали",
+      "Рукоять и хвостовик",
+      "Размеры",
+      "Упаковка и защита лезвия",
+    ],
+    forbiddenCategoryWords: [
+      "напряжение",
+      "мощность",
+      "тип вилки",
+      "подошва",
+      "стелька",
+      "срок годности",
+    ],
+  },
   usb_device: genericRules("USB-товар"),
   small_appliance: genericRules("малая техника"),
   kitchen_tool: genericRules("кухонный товар"),
@@ -1644,7 +1721,7 @@ function normalizeProductKind(value: unknown): ProductKind | null {
     .toLowerCase();
   if (!raw) return null;
   const direct = raw.match(
-    /footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|dish_rack|kitchen_storage_rack|passive_insect_trap|usb_device|heating_food_mat|small_appliance|kitchen_tool|bag_accessory|fake_security_camera|generic_product/,
+    /footwear|clothing|towel_kilt|umbrella|sleep_mask|mini_washer|dish_rack|kitchen_storage_rack|passive_insect_trap|usb_device|heating_food_mat|small_appliance|kitchen_tool|knife|bag_accessory|fake_security_camera|generic_product/,
   )?.[0];
   if (direct && direct in KIND_RULES) return direct as ProductKind;
   if (
@@ -1683,6 +1760,13 @@ function normalizeProductKind(value: unknown): ProductKind | null {
     )
   )
     return "dish_rack";
+  if (
+    /\bнож[аи]?\b|нож[- ]?топорик|кухонн\w*\s+нож|菜刀|切片刀|斩切|切肉刀|厨师刀|cleaver|chef'?s?\s*knife|kitchen\s*knife|paring\s*knife|butcher\s*knife|刀具/i.test(
+      raw,
+    ) &&
+    !/ножниц|подножк/i.test(raw)
+  )
+    return "knife";
   if (/кухон|kitchen/.test(raw)) return "kitchen_tool";
   if (/сумк|bag|кошел|брелок/.test(raw)) return "bag_accessory";
   if (/электр|220v|вилка|мощность|appliance|прибор/.test(raw))
@@ -2248,8 +2332,11 @@ function buildSkuProfile(
   }
   if (!dims.length && variants.length > 1) dims.push("вариант");
   const count = variants.length || labels.length;
+  const dimsSummary = dims.filter((d) => d && d !== "вариант").join(" × ");
   const skuSummary = count
-    ? `${count} ${pluralRu(count, "вариант", "варианта", "вариантов")} · ${dims.join(" × ") || "вариант"}`
+    ? dimsSummary
+      ? `${count} ${pluralRu(count, "вариант", "варианта", "вариантов")} · ${dimsSummary}`
+      : `${count} ${pluralRu(count, "вариант", "варианта", "вариантов")}`
     : "SKU нужно уточнить";
   const normalizedExamples = hasStructured
     ? uniq(
@@ -2348,6 +2435,27 @@ function buildSkuProfile(
   };
 }
 
+/**
+ * A single-variant SKU whose "name" is just the product title (or a long
+ * descriptive marketing string) carries no real SKU distinction. Detect this so
+ * the report shows a clean "единственный вариант" instead of echoing the title.
+ */
+function isSingleVariantNoise(skuText: string, productTitle: string): boolean {
+  const norm = (s: string) =>
+    String(s ?? "")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const s = norm(skuText);
+  if (!s) return true;
+  const t = norm(productTitle);
+  if (t && (s === t || t.includes(s) || s.includes(t))) return true;
+  // Very long "SKU" strings are descriptive titles, not variant labels.
+  if (skuText.trim().length > 40) return true;
+  return false;
+}
+
 export function makeSelectedSkuDecision(
   product: any,
   variants = collectSkuVariants(product),
@@ -2390,8 +2498,16 @@ export function makeSelectedSkuDecision(
   if (variants.length === 1) {
     const raw = rawNameOf(variants[0]);
     const name = skuName(variants[0]);
+    // When the single variant "name" is basically the product title (or a very
+    // long descriptive string), it's noise, not a real SKU distinction. Show a
+    // clean placeholder instead of echoing the whole title.
+    const productTitle = String(
+      product?.titleRu ?? product?.titleEn ?? product?.titleCn ?? "",
+    );
+    const skuTextRaw = electricalText(raw, name || "единственный вариант");
+    const isTitleNoise = isSingleVariantNoise(skuTextRaw, productTitle);
     return {
-      selectedSkuText: electricalText(raw, name || "единственный SKU"),
+      selectedSkuText: isTitleNoise ? "единственный вариант" : skuTextRaw,
       selectedPriceYuan: skuPrice(variants[0]),
       selectedPlugStandard: plugOf(raw),
       reliable: true,
@@ -2503,14 +2619,22 @@ function buildQuestions(
   const priceValue = profileBase.pricing.selectedPriceYuan
     ? cny(profileBase.pricing.selectedPriceYuan)
     : "";
-  const selectedSku = profileBase.sku.selectedSkuText
+  const selectedSkuRaw = profileBase.sku.selectedSkuText
     ? fixMixedRuTypos(profileBase.sku.selectedSkuText)
     : "";
+  // Do not embed a giant SKU string (title/placeholder/very long) into the
+  // price question — it makes the question unreadable.
+  const skuIsNoise =
+    !selectedSkuRaw ||
+    selectedSkuRaw.trim().length > 40 ||
+    /^единственный вариант$/i.test(selectedSkuRaw.trim()) ||
+    isSingleVariantNoise(selectedSkuRaw, profileBase.identity.titleForReport);
+  const selectedSku = skuIsNoise ? "" : selectedSkuRaw;
   const priceQuestion =
     selectedSku && priceValue
       ? `Подтвердите цену выбранного SKU: ${selectedSku} — ${priceValue}.`
       : priceValue
-        ? `Подтвердите цену выбранного SKU: ${priceValue}.`
+        ? `Подтвердите цену выбранного SKU — ${priceValue}.`
         : "Подтвердите цену выбранного SKU.";
   const params = profileBase.sku.ambiguousParams;
   const base = rules.mustAskSupplier.map((q) =>
@@ -2648,10 +2772,12 @@ export function buildProductProcurementProfile(
       cleanTitles.titleForSeo,
     ],
   });
-  const titleForReport = selectedTitles.titleForReport;
-  const titleForSeo = safeSeoTitle(
-    safeRu(draftIdentity.titleForSeo || selectedTitles.titleForSeo),
-    kind,
+  const titleForReport = cleanDisplayTitle(selectedTitles.titleForReport);
+  const titleForSeo = cleanDisplayTitle(
+    safeSeoTitle(
+      safeRu(draftIdentity.titleForSeo || selectedTitles.titleForSeo),
+      kind,
+    ),
   );
   const missing = uniq(
     [
@@ -3014,6 +3140,25 @@ export function preprocessMainImageForProductIntelligence(product: any): {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Strip a bare trailing material/steel grade (3CR13, 4CR13, 5CR15, 304, 430,
+ * 201, 440C, etc.) that leaked into a display title, and capitalize the first
+ * letter. The grade belongs in the Материал field, not the product name.
+ */
+export function cleanDisplayTitle(title: unknown): string {
+  let out = clean(title)
+    // Trailing bare steel/material grade tokens: 3CR13 / 4Cr13 / 440C / 304 / 430 / 201 / 18/10.
+    .replace(
+      /[\s,;·—-]*\b(?:[2-9]?cr\s?\d{2,3}[a-z]?|\d{3}[a-z]?|18\/1\d)\b\s*$/i,
+      "",
+    )
+    .replace(/[\s,;·—-]+$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!out) return "";
+  return out.charAt(0).toUpperCase() + out.slice(1);
 }
 
 function safeSeoTitle(title: string, kind: ProductKind): string {
