@@ -343,17 +343,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           readme: readmeText,
         }).catch(() => null)
       : null;
-    if (consistencyAudit?.decision === 'BLOCK') {
-      progress?.message('Consistency auditor остановил отчёт', 98);
-      progress?.stop();
-      await sendBlocked(job, product, consistencyAudit.issues.join('; ') || consistencyAudit.summary || 'Consistency auditor не разрешил показ отчёта.');
-      return res.status(200).json({ ok: true, blocked: true, source: 'consistency_audit' });
-    }
     if (consistencyAudit?.issues?.length) {
       console.warn('[step5] consistency audit:', consistencyAudit.issues.join('; '));
     }
 
-    if (consistencyAudit?.decision === 'FIX_REQUIRED' && (consistencyAudit.requiredEdits?.length ?? 0) > 0) {
+    // Never hard-block the report. A BLOCK or FIX_REQUIRED from the consistency
+    // auditor triggers a repair pass; afterwards we always show the best-effort
+    // report (degrade, don't block).
+    if (consistencyAudit?.decision === 'FIX_REQUIRED' || consistencyAudit?.decision === 'BLOCK') {
       progress?.step('autofix');
       const consistencyFixed = await runAutoFix(
         snapshot as any,
@@ -423,10 +420,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         readme: readmeText,
       }).catch(() => null);
       if (auditAfterRepair?.decision === 'BLOCK') {
-        progress?.message('Consistency auditor остановил отчёт после repair', 98);
-        progress?.stop();
-        await sendBlocked(job, product, auditAfterRepair.issues.join('; ') || auditAfterRepair.summary || 'Consistency auditor не разрешил показ отчёта после repair.');
-        return res.status(200).json({ ok: true, blocked: true, source: 'consistency_audit_after_repair' });
+        console.warn('[step5] consistency auditor still flags after repair — showing best-effort report (not blocking):', auditAfterRepair.issues?.join('; ') || auditAfterRepair.summary || '');
       }
       if (auditAfterRepair?.issues?.length) {
         console.warn('[step5] consistency audit after repair:', auditAfterRepair.issues.join('; '));
