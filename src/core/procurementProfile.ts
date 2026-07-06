@@ -3917,7 +3917,10 @@ export function buildSeoDraftFromProfile(
       if (
         !value ||
         value.length < 2 ||
-        /^(?:см|мм|м|кг|г|мл|л|вт|в|°|шт|hrc)\.?$/i.test(value)
+        /^(?:см|мм|м|кг|г|мл|л|вт|в|°|шт|hrc)\.?$/i.test(value) ||
+        // Hedged/estimated numbers ("более 60°", "около 5 см", "примерно") are
+        // guesses the LLM invented — not a confirmed fact from the card.
+        /^(?:более|около|примерно|приблизительно|порядка|~|до|от)\s*\d/i.test(value)
       ) {
         value = "уточнить";
         status = "подтвердить";
