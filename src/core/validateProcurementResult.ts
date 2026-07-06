@@ -143,6 +143,13 @@ export function validateProcurementResult(
     if (cnDupFound) {
       warnings.push(`[${f.name}] duplicate CN question`);
     }
+
+    // Empty Chinese supplier questions (WARNING): the "## Китайская версия" section
+    // contains only the "не сформирована" fallback. RU-only is honest, but flag it
+    // so we know CN coverage dropped.
+    if (/Китайская версия не сформирована/i.test(content)) {
+      warnings.push(`[${f.name}] CN supplier questions empty (LLM translation missing)`);
+    }
   }
 
   // ---- Per-file structural checks ----
@@ -670,6 +677,41 @@ export function validateProcurementResult(
             `[${label}] cargo lacks product-specific considerations for a hazard-bearing kind`,
           );
         }
+      }
+    }
+
+    // Cargo self-contradiction (WARNING): the "## Дополнительно" section says
+    // "специальных ограничений не найдено" WHILE the "## Что нужно запросить"
+    // section requests hazard-specific items (blade / battery / liquid / etc).
+    {
+      const hazardHintRe =
+        /лезви|остриё|остр(ый|ые|ого)|аккумулятор|батаре|жидкост|аэрозол|магнит|порош|хрупк/i;
+
+      const sectionBody = (headerRe: RegExp): string => {
+        let inSection = false;
+        const body: string[] = [];
+        for (const rawLine of cargoLines) {
+          const line = rawLine.trim();
+          if (headerRe.test(line)) {
+            inSection = true;
+            continue;
+          }
+          if (inSection && /^#{1,6}\s/.test(line)) break;
+          if (inSection && line.length > 0) body.push(line);
+        }
+        return body.join('\n');
+      };
+
+      const dopBody = sectionBody(/^#{1,6}\s*Дополнительно/i);
+      const requestBody = sectionBody(/^#{1,6}\s*Что\s+нужно\s+запросить/i);
+
+      const dopSaysNone = /специальных\s+ограничений\s+не\s+найдено/i.test(dopBody);
+      const requestHasHazard = hazardHintRe.test(requestBody);
+
+      if (dopSaysNone && requestHasHazard) {
+        warnings.push(
+          `[${label}] cargo 'Дополнительно' says no restrictions while requesting hazard-specific items`,
+        );
       }
     }
 

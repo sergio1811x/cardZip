@@ -19,6 +19,9 @@ import { runQaGate } from '../src/providers/expertQaGate';
 import { runAutoFix } from '../src/providers/autoFix';
 import { runConsistencyAuditor } from '../src/providers/consistencyAuditor';
 import { buildProductFactSheet } from '../src/core/factSheet';
+import { generateSupplierQuestions, type GeneratorInput } from '../src/providers/supplierQuestionsGenerator';
+import { generateSeoCard } from '../src/providers/seoCardGenerator';
+import { generateCargoBrief } from '../src/providers/cargoBriefGenerator';
 import { buildQualityMetricsPayload, summarizeQualityMetrics } from '../src/core/qualityMetrics';
 import type { ProductWithContent } from '../src/types';
 
@@ -102,6 +105,97 @@ function formatConsistencyIssuesForRepair(audit: {
   return [...issues, ...editIssues];
 }
 
+function toArray(v: any): any[] {
+  return Array.isArray(v) ? v : [];
+}
+
+/** Build the GeneratorInput for the focused LLM generators from the product. */
+function buildGeneratorInput(product: any): GeneratorInput {
+  const identity = (product?.productContext?.identity ?? {}) as Record<string, any>;
+  const intelId = (product?.intelligence?.productIdentity ?? {}) as Record<string, any>;
+  const attrsRaw = toArray(product?.attributes ?? product?.normalized1688?.attributes);
+  const attributes = attrsRaw
+    .map((a: any) => ({ name: String(a?.name ?? ''), value: String(a?.value ?? '') }))
+    .filter((a) => a.name || a.value)
+    .slice(0, 30);
+  const skuNames = toArray(product?.skus ?? product?.normalized1688?.skuVariants)
+    .map((s: any) => String(s?.name ?? s?.raw ?? s?.label ?? '').trim())
+    .filter(Boolean)
+    .slice(0, 30);
+  const priceNum = Number(
+    product?.priceYuan ?? product?.minPriceYuan ?? intelId?.priceYuan,
+  );
+  return {
+    titleRu: product?.titleRu || product?.titleEn || undefined,
+    titleCn: product?.titleCn || undefined,
+    priceYuan: Number.isFinite(priceNum) && priceNum > 0 ? priceNum : null,
+    attributes,
+    skuNames,
+    coreObject: identity.coreObject || intelId.coreObject || undefined,
+    categoryType: identity.categoryType || intelId.categoryType || product?.categoryName || undefined,
+    useCases: toArray(identity.useCases ?? intelId.useCases).map(String).filter(Boolean),
+    materials: toArray(identity.materials ?? intelId.materials).map(String).filter(Boolean),
+  };
+}
+
+/**
+ * Run the three focused, independently-failing LLM generators in parallel and
+ * merge whatever each returned into the product's procurementProfileDraft.domainRules
+ * — the SAME path aiDomainRules/aiDomainContent already consume. Each generator
+ * returns null on failure; on null we leave the existing canonicalizer output /
+ * honest-generic floor untouched. Returns a one-line success summary for logging.
+ */
+async function populateDomainRulesFromGenerators(product: any): Promise<string> {
+  const input = buildGeneratorInput(product);
+  const [questions, seo, cargo] = await Promise.all([
+    generateSupplierQuestions(input).catch(() => null),
+    generateSeoCard(input).catch(() => null),
+    generateCargoBrief(input).catch(() => null),
+  ]);
+
+  product.productContext = product.productContext ?? {};
+  const draft = (product.productContext.procurementProfileDraft =
+    product.productContext.procurementProfileDraft ?? {});
+  const domainRules = (draft.domainRules = draft.domainRules ?? {});
+
+  if (questions && Array.isArray(questions.ru) && questions.ru.length) {
+    domainRules.buyerMustCheck = questions.ru;
+  }
+
+  if (seo) {
+    domainRules.seo = {
+      ...(domainRules.seo ?? {}),
+      title: seo.title || (domainRules.seo?.title ?? undefined),
+      description: seo.description || (domainRules.seo?.description ?? undefined),
+      sellingBullets: Array.isArray(seo.bullets) && seo.bullets.length
+        ? seo.bullets
+        : domainRules.seo?.sellingBullets,
+      keywords: Array.isArray(seo.keywords) && seo.keywords.length
+        ? seo.keywords
+        : domainRules.seo?.keywords,
+      characteristics: Array.isArray(seo.characteristics) && seo.characteristics.length
+        ? seo.characteristics
+        : domainRules.seo?.characteristics,
+    };
+  }
+
+  if (cargo) {
+    domainRules.cargo = {
+      ...(domainRules.cargo ?? {}),
+      sensitiveIssues: Array.isArray(cargo.considerations) && cargo.considerations.length
+        ? cargo.considerations
+        : domainRules.cargo?.sensitiveIssues,
+      whatToRequest: Array.isArray(cargo.whatToRequest) && cargo.whatToRequest.length
+        ? cargo.whatToRequest
+        : domainRules.cargo?.whatToRequest,
+      cargoNature: cargo.cargoNature || (domainRules.cargo?.cargoNature ?? undefined),
+      packagingNotes: domainRules.cargo?.packagingNotes ?? '',
+    };
+  }
+
+  return `supplierQuestions=${questions ? 'ok' : 'null'} seoCard=${seo ? 'ok' : 'null'} cargoBrief=${cargo ? 'ok' : 'null'}`;
+}
+
 async function sendPaymentRequired(job: any) {
   if (job.tg_message_id) await bot.telegram.deleteMessage(job.tg_chat_id, job.tg_message_id).catch(() => {});
   await bot.telegram.sendMessage(job.tg_chat_id, '💳 Недостаточно кредитов для отправки полного отчёта. Пополните баланс и запустите анализ заново — полный отчёт без списания не отправлен.', {
@@ -151,6 +245,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       sourceUrl: job.input_url,
       analysisSnapshot: result.analysisSnapshot,
     } as ProductWithContent & Record<string, any>;
+    // Resilient LLM layer: three focused generators repopulate the
+    // procurementProfileDraft.domainRules path that the profile builders consume.
+    // Each fails independently (returns null) → existing floor survives.
+    try {
+      const genSummary = await populateDomainRulesFromGenerators(product);
+      console.log(`[step5] focused generators: ${genSummary}`);
+    } catch (e) {
+      console.warn('[step5] focused generators failed entirely (using floor):', e instanceof Error ? e.message : e);
+    }
+
     const profile = ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
     const profileValidation = validateProfile(profile);
     if (!profileValidation.ok) console.warn('[step5] profile validator:', profileValidation.errors.join('; '));

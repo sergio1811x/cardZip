@@ -134,6 +134,8 @@ export type ProductProcurementProfile = {
     seoDescription?: string;
     seoBullets?: string[];
     seoKeywords?: string[];
+    seoTitle?: string;
+    seoCharacteristics?: Array<{ name: string; value: string; status: string }>;
   };
   dataQuality: {
     missingCriticalFields: string[];
@@ -1116,6 +1118,8 @@ function aiDomainContent(product: any): {
   cargoSensitiveIssues: string[];
   cargoNature: string;
   cargoPackagingNotes: string;
+  seoTitle: string;
+  seoCharacteristics: Array<{ name: string; value: string; status: string }>;
 } {
   const draft = record(
     product?.productProcurementProfileDraft ??
@@ -1140,6 +1144,14 @@ function aiDomainContent(product: any): {
       .filter(Boolean),
     cargoNature: safeRu(cargo.cargoNature),
     cargoPackagingNotes: safeRu(cargo.packagingNotes),
+    seoTitle: safeRu(seo.title),
+    seoCharacteristics: array<any>(seo.characteristics)
+      .map((c) => ({
+        name: safeRu(c?.name),
+        value: safeRu(c?.value),
+        status: safeRu(c?.status) || "подтвердить у поставщика",
+      }))
+      .filter((c) => c.name && c.value),
   };
 }
 
@@ -3009,6 +3021,10 @@ export function buildProductProcurementProfile(
       seoKeywords: aiContent.seoKeywords.length
         ? aiContent.seoKeywords
         : undefined,
+      seoTitle: aiContent.seoTitle || undefined,
+      seoCharacteristics: aiContent.seoCharacteristics.length
+        ? aiContent.seoCharacteristics
+        : undefined,
     },
     dataQuality: {
       missingCriticalFields: missing,
@@ -3794,8 +3810,12 @@ export function buildSeoDraftFromProfile(
   opts: { sourceUrl?: string } = {},
 ): string {
   const p = ensureProductProcurementProfile(product, opts);
+  // Prefer the LLM-generated SEO title when present — always through the
+  // safeSeoTitle guard (strips WB/Ozon, dangerous claims, cross-border junk) —
+  // else keep the deterministic identity-derived title.
+  const llmTitle = (p.content.seoTitle ?? "").trim();
   const title = safeSeoTitle(
-    safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
+    llmTitle || safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
     p.identity.productKind,
   );
   const useCases = p.identity.useCases.length
@@ -3834,7 +3854,21 @@ export function buildSeoDraftFromProfile(
     bullets.push(
       "Характеристики уточните у поставщика перед публикацией карточки",
     );
-  const characteristics = seoCharacteristics(p);
+  // Prefer LLM-provided characteristics when present (dangerous-claim filtered),
+  // else the deterministic per-kind table.
+  const llmChars = (p.content.seoCharacteristics ?? [])
+    .map((c) => ({
+      name: clean(c.name),
+      value: fixGluedFallback(clean(c.value)),
+      status: clean(c.status) || "подтвердить у поставщика",
+    }))
+    .filter(
+      (c) =>
+        c.name &&
+        c.value &&
+        !dangerousClaims(`${c.name} ${c.value}`).length,
+    );
+  const characteristics = llmChars.length ? llmChars : seoCharacteristics(p);
 
   // Keywords: prefer LLM deduped set, else a deterministic set (dropping the giant
   // title as a keyword and de-duplicating near-identical entries).
