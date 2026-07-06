@@ -10,6 +10,17 @@ function normalizeText(value: unknown): string {
   return String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+// Comparison-normalize: makes "5,01 ¥" and "5.01" equal (decimal comma → dot,
+// strip currency/quotes/whitespace) so formatting-only differences are not
+// reported as a canonical-vs-document mismatch.
+function normalizeForCompare(value: unknown): string {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/(\d)[,](\d)/g, '$1.$2')
+    .replace(/[¥₽руб.\s«»"'()]/g, '')
+    .trim();
+}
+
 function collectDocValues(fieldLabel: string, docs: Array<{ name: string; content: string }>): string[] {
   const escaped = fieldLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const regex = new RegExp(`${escaped}\\s*[:—-]\\s*([^\\n]+)`, 'gi');
@@ -58,10 +69,10 @@ export function validateCrossDocumentConsistency(input: {
   for (const fact of input.factSheet?.facts ?? []) {
     if (fact.status === 'unknown' || fact.status === 'supplier_pending' || !fact.label) continue;
     const docValues = collectDocValues(fact.label, docs);
-    const normalizedExpected = normalizeText(fact.normalizedValue ?? fact.value);
+    const normalizedExpected = normalizeForCompare(fact.normalizedValue ?? fact.value);
     if (!normalizedExpected || docValues.length === 0) continue;
     const hasMismatch = docValues.some((value) => {
-      const normalized = normalizeText(value);
+      const normalized = normalizeForCompare(value);
       return normalized && normalized !== normalizedExpected && !normalized.includes(normalizedExpected) && !normalizedExpected.includes(normalized);
     });
     if (hasMismatch) {

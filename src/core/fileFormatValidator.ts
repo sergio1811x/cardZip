@@ -33,7 +33,14 @@ export function validateFileFormatting(fileName: string, content: string): strin
   }
 
   if (fileName.endsWith('.md')) {
-    if (/#{1,6}[^\n]*#{1,6}\s/.test(content)) errors.push(`${fileName}: multiple headings on one line`);
+    // Two SEPARATE heading tokens on one physical line. A heading token is a run
+    // of #'s at line start or after whitespace, followed by a space. (The old
+    // /#{1,6}[^\n]*#{1,6}/ falsely matched a normal "## Заголовок" because the two
+    // #'s of `##` each satisfied a separate `#{1,6}`.)
+    const twoHeadingsOnLine = content
+      .split('\n')
+      .some((line) => (line.match(/(?:^|\s)#{1,6}\s/g) ?? []).length >= 2);
+    if (twoHeadingsOnLine) errors.push(`${fileName}: multiple headings on one line`);
     if (!/^#{1,6}\s/m.test(content)) errors.push(`${fileName}: no heading on its own line`);
   }
 
