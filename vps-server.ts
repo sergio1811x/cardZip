@@ -9,6 +9,8 @@ import { canonicalizeProduct } from './src/providers/productCanonicalizer';
 import { generateSupplierQuestions, type GeneratorInput } from './src/providers/supplierQuestionsGenerator';
 import { generateSeoCard } from './src/providers/seoCardGenerator';
 import { generateCargoBrief } from './src/providers/cargoBriefGenerator';
+import { buildProductProcurementProfile } from './src/core/procurementProfile';
+import { translateQuestionsToCn } from './src/core/cnTranslate';
 import { rankCandidates } from './src/core/wbSimilarity';
 import { filterWbData } from './src/core/wbFilter';
 import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from './src/core/economicsCalc';
@@ -393,6 +395,27 @@ export async function continuePipeline(jobId: string) {
       productContext,
       ...(wb429 ? { wb429: true } : {}),
     };
+
+    // Translate the final supplier questions to Chinese so the ZIP questions file
+    // ships a valid CN version (the buyer sends it to the 1688 supplier). Uses the
+    // SAME resolved RU list the doc builder will render. RU-only stays as the safe
+    // fallback if translation fails.
+    try {
+      const cnProfile = buildProductProcurementProfile(product);
+      const ruQuestions = (cnProfile.procurement.mustAskSupplier ?? []).slice(0, 10);
+      if (ruQuestions.length) {
+        const cnQuestions = await translateQuestionsToCn(ruQuestions).catch(() => []);
+        if (Array.isArray(cnQuestions) && cnQuestions.length === ruQuestions.length) {
+          product.supplierQuestionsCn = cnQuestions;
+          product.supplierQuestionsCnValid = true;
+          console.log(`[cn-translate] supplier questions RU→CN: ${cnQuestions.length}`);
+        } else {
+          console.log('[cn-translate] supplier questions RU→CN failed — RU-only');
+        }
+      }
+    } catch (e: any) {
+      console.error('[cn-translate] failed:', e?.message);
+    }
 
     // ─── STEP 4: Writer ─────────────────────────────────────────────────
     progress?.step('writer');

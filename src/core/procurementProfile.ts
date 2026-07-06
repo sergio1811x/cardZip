@@ -3057,10 +3057,16 @@ export function buildProductProcurementProfile(
     },
     classifier,
     intelligenceImages: images,
+    // CN questions must keep their Chinese characters (do NOT run through safeRu,
+    // which strips CJK). Read the translation + its validity from the draft or the
+    // product, populated upstream by the RU→CN translator.
     supplierQuestionsCn: array<string>(
-      record(draftProcurement).supplierQuestionsCn,
-    ).map(safeRu),
-    supplierQuestionsCnValid: false,
+      record(draftProcurement).supplierQuestionsCn ?? product?.supplierQuestionsCn,
+    ),
+    supplierQuestionsCnValid: Boolean(
+      record(draftProcurement).supplierQuestionsCnValid ??
+        product?.supplierQuestionsCnValid,
+    ),
   };
 }
 
