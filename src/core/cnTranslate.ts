@@ -171,7 +171,7 @@ export async function translateQuestionsToCn(ruQuestions: string[]): Promise<str
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
-        max_tokens: 1200,
+        max_tokens: 1600,
         temperature: 0,
         messages: [{ role: 'user', content: prompt }],
       }),

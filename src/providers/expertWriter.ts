@@ -127,7 +127,7 @@ export async function runExpertWriter(
         },
         body: JSON.stringify({
           model,
-          max_tokens: Number(process.env.EXPERT_WRITER_MAX_TOKENS ?? 2800),
+          max_tokens: Number(process.env.EXPERT_WRITER_MAX_TOKENS ?? 5000),
           temperature: 0.2,
           messages: [
             {

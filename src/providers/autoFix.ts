@@ -92,7 +92,7 @@ export async function runAutoFix(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 1500,
+          max_tokens: 4000,
           temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — автокорректор CardZip. Верни СТРОГО JSON с исправленными полями.' },

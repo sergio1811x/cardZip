@@ -533,7 +533,7 @@ async function callProvider(
       },
       body: JSON.stringify({
         model,
-        max_tokens: Number(process.env.AI_TEXT_MAX_TOKENS ?? 3000),
+        max_tokens: Number(process.env.AI_TEXT_MAX_TOKENS ?? 4000),
         temperature: Number(process.env.AI_TEXT_TEMPERATURE ?? 0.25),
         response_format: { type: "json_object" },
         messages: [
