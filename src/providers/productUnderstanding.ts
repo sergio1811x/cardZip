@@ -75,7 +75,7 @@ export interface FullProductAnalysis {
 // ─── LLM Call with Fallback ──────────────────────────────────────────────────
 
 const SEARCH_MODELS = [
-  'google/gemini-2.5-flash-lite',
+  'google/gemini-2.5-flash',
   'deepseek/deepseek-v4-flash',
   'meta-llama/llama-4-scout',
 ];
@@ -341,7 +341,7 @@ ${info}`;
 // ─── Product Intelligence ───────────────────────────────────────────────────
 
 const VISION_MODELS = [
-  'google/gemini-2.5-flash-lite',
+  'google/gemini-2.5-flash',
   'google/gemini-2.0-flash-001',
 ];
 

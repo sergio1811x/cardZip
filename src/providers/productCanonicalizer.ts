@@ -83,11 +83,11 @@ export type CanonicalizerModelResult = Partial<ProductContext> & {
 // дальше идут быстрые дешёвые модели как fallback.
 const DEFAULT_VISION_MODELS = [
   "google/gemini-2.5-flash",
-  "google/gemini-2.5-flash-lite",
+  "google/gemini-2.5-flash",
 ];
 
 const DEFAULT_TEXT_MODELS = [
-  "google/gemini-2.5-flash-lite",
+  "google/gemini-2.5-flash",
   "google/gemini-2.5-flash",
   "deepseek/deepseek-v4-flash",
 ];

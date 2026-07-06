@@ -3577,7 +3577,7 @@ export async function translateSupplierQuestionsRuToCn(
       body: JSON.stringify({
         model:
           g.process?.env?.CARDZIP_CN_TRANSLATOR_MODEL ||
-          "google/gemini-2.5-flash-lite",
+          "google/gemini-2.5-flash",
         max_tokens: 900,
         temperature: 0,
         messages: [

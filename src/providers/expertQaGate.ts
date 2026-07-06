@@ -4,7 +4,7 @@ import { QaGateResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const QA_MODELS = [
   'google/gemini-2.5-flash',
-  'google/gemini-2.5-flash-lite',
+  'google/gemini-2.5-flash',
   'deepseek/deepseek-v4-flash',
 ];
 

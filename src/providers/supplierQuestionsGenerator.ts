@@ -6,7 +6,7 @@
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_MODELS = [
-  "google/gemini-2.5-flash-lite",
+  "google/gemini-2.5-flash",
   "google/gemini-2.5-flash",
   "deepseek/deepseek-v4-flash",
 ];
