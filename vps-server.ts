@@ -6,6 +6,9 @@ import { redis } from './src/lib/redis';
 import { productImporter } from './src/providers/productImporter';
 import { normalizeCnText } from './src/core/cnNormalize';
 import { canonicalizeProduct } from './src/providers/productCanonicalizer';
+import { generateSupplierQuestions, type GeneratorInput } from './src/providers/supplierQuestionsGenerator';
+import { generateSeoCard } from './src/providers/seoCardGenerator';
+import { generateCargoBrief } from './src/providers/cargoBriefGenerator';
 import { rankCandidates } from './src/core/wbSimilarity';
 import { filterWbData } from './src/core/wbFilter';
 import { calcEconomics, calcBudgetScenarios, calcMaxPurchasePrice } from './src/core/economicsCalc';
@@ -177,6 +180,41 @@ export async function continuePipeline(jobId: string) {
       price: raw.priceYuan, priceRange: raw.priceRange, weightKg: raw.weightKg,
       mainImageUrl: raw.mainImageUrl, sold: raw.sold, stock: raw.stock,
     }).catch(() => null);
+
+    // ─── Focused, independently-failing LLM document generators ─────────
+    // Populate the product-specific procurement content (supplier questions,
+    // SEO, cargo) via small resilient generators. Each returns null on failure;
+    // whatever succeeds is merged into procurementProfileDraft.domainRules — the
+    // exact path the profile builders (buildSupplierQuestionsFromProfile /
+    // buildSeoDraftFromProfile / buildCargoBriefFromProfile) consume as PRIMARY.
+    if (productContext) {
+      try {
+        const genInput: GeneratorInput = {
+          titleRu: productContext.titles?.cleanRu || raw.titleEn || undefined,
+          titleCn: raw.titleCn || undefined,
+          priceYuan: Number.isFinite(raw.priceYuan) && raw.priceYuan > 0 ? raw.priceYuan : null,
+          attributes: Array.isArray(raw.attributes) ? raw.attributes.slice(0, 30) : [],
+          skuNames: Array.isArray(raw.skus) ? raw.skus.map((s: any) => String(s?.name ?? s?.raw ?? '').trim()).filter(Boolean).slice(0, 30) : [],
+          coreObject: productContext.identity?.coreObject || undefined,
+          categoryType: productContext.identity?.categoryType || raw.categoryName || undefined,
+          useCases: Array.isArray(productContext.identity?.useCases) ? productContext.identity.useCases.map(String) : [],
+          materials: Object.entries(productContext.facts ?? {}).filter(([k]) => k.includes('материал')).map(([, v]) => String(v)),
+        };
+        const [genQ, genSeo, genCargo] = await Promise.all([
+          generateSupplierQuestions(genInput).catch(() => null),
+          generateSeoCard(genInput).catch(() => null),
+          generateCargoBrief(genInput).catch(() => null),
+        ]);
+        const draft: any = ((productContext as any).procurementProfileDraft = (productContext as any).procurementProfileDraft ?? {});
+        const dr: any = (draft.domainRules = draft.domainRules ?? {});
+        if (genQ?.ru?.length) dr.buyerMustCheck = genQ.ru;
+        if (genSeo) dr.seo = { title: genSeo.title, description: genSeo.description, sellingBullets: genSeo.bullets, keywords: genSeo.keywords, characteristics: genSeo.characteristics };
+        if (genCargo) dr.cargo = { cargoNature: genCargo.cargoNature, sensitiveIssues: genCargo.considerations, whatToRequest: genCargo.whatToRequest, packagingNotes: '' };
+        console.log(`[doc-generators] questions:${genQ?.ru?.length ?? 0} seo:${genSeo ? 'ok' : 'none'} cargo:${genCargo?.cargoNature ?? 'none'}`);
+      } catch (e: any) {
+        console.error('[doc-generators] failed:', e?.message);
+      }
+    }
 
     const fallbackQuery = raw?.titleEn || raw?.categoryName || raw?.titleCn || '';
     const wbCoreQuery = productContext?.wbSearch?.coreQuery || fallbackQuery;
