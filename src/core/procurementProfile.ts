@@ -1677,12 +1677,23 @@ function normalizeDedupKey(value: string): string {
   return key;
 }
 
+function significantWords(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/ё/g, "е")
+      .replace(/[^а-яa-z0-9\s]/gi, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 4),
+  );
+}
+
 export function dedupNormalizedList(
   list: Array<string | null | undefined>,
   limit = 30,
 ): string[] {
   const seen = new Set<string>();
-  const out: string[] = [];
+  const exact: string[] = [];
   for (const raw of list) {
     const text = fixMixedRuTypos(clean(raw))
       .replace(/^\s*(?:[-•]|\d+[.)])\s*/, "")
@@ -1691,10 +1702,38 @@ export function dedupNormalizedList(
     const key = normalizeDedupKey(text);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    out.push(text);
+    exact.push(text);
+  }
+  // Second pass: collapse NEAR-duplicates. If every significant word of one line
+  // is contained in another, the shorter is redundant (e.g. "оценить баланс ножа"
+  // ⊂ "оценить баланс ножа и удобство хвата"). Keep the more complete line.
+  const out: string[] = [];
+  for (const item of exact) {
+    const wi = significantWords(item);
+    if (wi.size < 2) {
+      out.push(item);
+      continue;
+    }
+    let redundant = false;
+    for (let j = 0; j < out.length; j++) {
+      const wj = significantWords(out[j]);
+      if (wj.size < 2) continue;
+      const iInJ = [...wi].every((w) => wj.has(w));
+      const jInI = [...wj].every((w) => wi.has(w));
+      if (iInJ) {
+        redundant = true;
+        break;
+      }
+      if (jInI) {
+        out[j] = item; // replace the shorter kept line with the fuller one
+        redundant = true;
+        break;
+      }
+    }
+    if (!redundant) out.push(item);
     if (out.length >= limit) break;
   }
-  return out;
+  return out.slice(0, limit);
 }
 
 function uniq(list: Array<string | null | undefined>, limit = 30): string[] {
@@ -3869,11 +3908,22 @@ export function buildSeoDraftFromProfile(
   // Prefer LLM-provided characteristics when present (dangerous-claim filtered),
   // else the deterministic per-kind table.
   const llmChars = (p.content.seoCharacteristics ?? [])
-    .map((c) => ({
-      name: clean(c.name),
-      value: fixGluedFallback(clean(c.value)),
-      status: clean(c.status) || "подтвердить у поставщика",
-    }))
+    .map((c) => {
+      let value = fixGluedFallback(clean(c.value));
+      let status = clean(c.status) || "подтвердить у поставщика";
+      // A value that is empty or just a bare unit/symbol ("см", "°", "мм")
+      // carries no real info — the LLM left it blank. Show "уточнить" instead of
+      // a dangling unit like "Длина лезвия | см".
+      if (
+        !value ||
+        value.length < 2 ||
+        /^(?:см|мм|м|кг|г|мл|л|вт|в|°|шт|hrc)\.?$/i.test(value)
+      ) {
+        value = "уточнить";
+        status = "подтвердить";
+      }
+      return { name: clean(c.name), value, status };
+    })
     .filter(
       (c) =>
         c.name &&

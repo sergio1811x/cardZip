@@ -331,11 +331,26 @@ export function validateProcurementResult(
     // Duplicate material: two material labels in the same blob, OR a Cyrillic
     // material value alongside a Han material value.
     if (/Материал[:\s][^\n]*\n?[^\n]*Материал[:\s]/i.test(blob.text)) {
-      const materialLines = lines.filter((l) => /материал[:\s]/i.test(l));
-      const hasCyr = materialLines.some((l) => /материал[:\s].*[А-Яа-яЁё]/i.test(l));
-      const hasHan = materialLines.some((l) => /материал[:\s].*[一-鿿]/i.test(l));
+      const materialLines = lines.filter((l) => /материал[:\s|]/i.test(l));
+      const hasCyr = materialLines.some((l) => /материал[:\s|].*[А-Яа-яЁё]/i.test(l));
+      const hasHan = materialLines.some((l) => /материал[:\s|].*[一-鿿]/i.test(l));
+      // Normalize the material value to its CORE before comparing: the same
+      // material legitimately appears in the description, a bullet and the
+      // characteristics table with different trailing context ("— подтвердите",
+      // a full sentence, "| статус"). Strip label + trailing qualifiers so
+      // identical materials don't count as "different values".
+      const materialCore = (l: string): string =>
+        l
+          .replace(/^[^:|]*[:|]/, "")
+          .replace(/[|].*$/, "")
+          .replace(/[—(].*$/, "")
+          .replace(/\.\s.*$/, "")
+          .replace(/(?:—\s*)?(?:подтверд|уточн|нужно|проверить)[а-яё\s].*$/i, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
       const distinctValues = new Set(
-        materialLines.map((l) => l.replace(/^[^:]*:/, "").trim()).filter(Boolean),
+        materialLines.map(materialCore).filter(Boolean),
       );
       if ((hasCyr && hasHan) || distinctValues.size >= 2) {
         errors.push(`[${blob.label}] duplicate material with different values`);
