@@ -484,6 +484,91 @@ export function validateProcurementResult(
       }
     }
 
+    // Rule 6 (WARNING): generic "water" filler bullet under "## Буллеты".
+    {
+      const lines = seoText.split("\n");
+      let inBullets = false;
+      const fillerBulletRe =
+        /универсальн\w+ дизайн под разные интерьеры|удобно дарить и хранить|компактн\w+ и удобн\w+ в повседневн|для повседневного использования\s*$/i;
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (/^#{1,6}\s*Буллеты/i.test(line)) {
+          inBullets = true;
+          continue;
+        }
+        if (inBullets && /^#{1,6}\s/.test(line)) {
+          inBullets = false;
+        }
+        if (inBullets && /^(\d+[.)]|[•\-*])\s*\S/.test(line) && fillerBulletRe.test(line)) {
+          warnings.push(`[${label}] generic filler SEO bullet`);
+          break;
+        }
+      }
+    }
+
+    // Rule 7 (WARNING): water description — the "## Описание" paragraph is
+    // essentially "{X} подходит для повседневного использования" with no other
+    // substance. Guard: only fire when the section body is short/thin.
+    {
+      const lines = seoText.split("\n");
+      let inSection = false;
+      const sectionBody: string[] = [];
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (/^#{1,6}\s*Описание/i.test(line)) {
+          inSection = true;
+          const inline = line.replace(/^#{1,6}\s*Описание\s*:?\s*/i, "").trim();
+          if (inline) sectionBody.push(inline);
+          continue;
+        }
+        if (inSection && /^#{1,6}\s/.test(line)) break;
+        if (inSection && line.length > 0) sectionBody.push(line);
+      }
+      const bodyText = sectionBody.join(" ").trim();
+      // Only "water" if the phrase is present AND the description is thin:
+      // short overall and no sentence that isn't just the filler phrase.
+      if (/подходит для повседневного использования/i.test(bodyText)) {
+        const withoutFiller = bodyText
+          .replace(/[^.]*подходит для повседневного использования[^.]*\.?/gi, "")
+          .trim();
+        const substantiveWords = withoutFiller
+          .replace(/[.,;:!?—-]/g, " ")
+          .split(/\s+/)
+          .filter((w) => w.length >= 3).length;
+        if (bodyText.length < 160 && substantiveWords < 6) {
+          warnings.push(`[${label}] water SEO description`);
+        }
+      }
+    }
+
+    // Rule 8 (WARNING): thin keywords — "## Ключевые слова" line has <= 1
+    // comma-separated token (just the title, no real keyword expansion).
+    {
+      const lines = seoText.split("\n");
+      let inKw = false;
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (/^#{1,6}\s*Ключевые\s+слова/i.test(line)) {
+          inKw = true;
+          continue;
+        }
+        if (inKw && /^#{1,6}\s/.test(line)) {
+          inKw = false;
+          continue;
+        }
+        if (inKw && line.length > 0) {
+          const tokens = line
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean);
+          if (tokens.length <= 1) {
+            warnings.push(`[${label}] thin SEO keywords (title only)`);
+          }
+          break;
+        }
+      }
+    }
+
     // Rule 4 (WARNING): keyword soup — "## Ключевые слова" line contains the full
     // long title verbatim OR has >= 2 exact duplicate comma-tokens.
     {
@@ -565,6 +650,26 @@ export function validateProcurementResult(
       }
       if (hasFiller && !hasOther) {
         warnings.push(`[${label}] cargo brief has no product-specific considerations`);
+
+        // Rule 7 (WARNING): for a hazard-bearing productKind, generic-only cargo
+        // means the brief is missing the product-specific caution it must carry.
+        const hazardKinds = new Set([
+          "knife",
+          "bladed",
+          "food_warmer",
+          "small_appliance",
+          "mini_washer",
+          "usb_device",
+          "battery",
+          "powered",
+          "liquid",
+          "aerosol",
+        ]);
+        if (input.productKind && hazardKinds.has(input.productKind)) {
+          warnings.push(
+            `[${label}] cargo lacks product-specific considerations for a hazard-bearing kind`,
+          );
+        }
       }
     }
 

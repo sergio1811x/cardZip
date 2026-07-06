@@ -3705,9 +3705,23 @@ const CARGO_NATURE_CAUTIONS: Record<string, string> = {
   oversized:
     "негабаритный товар — уточните габариты упаковки и тариф по объёмному весу",
   powder: "порошок/сыпучее — возможны ограничения, уточните у карго",
+  bladed:
+    "острый режущий предмет: уточните у карго требования к упаковке лезвия (чехол/блистер/жёсткая коробка) и ограничения/таможенные требования на перевозку ножей; лезвие должно быть защищено от повреждения упаковки и травм при вскрытии",
+  sharp:
+    "острый режущий предмет: уточните у карго требования к упаковке лезвия (чехол/блистер/жёсткая коробка) и ограничения/таможенные требования на перевозку ножей; лезвие должно быть защищено от повреждения упаковки и травм при вскрытии",
+  powered:
+    "электротовар — уточните у карго требования к перевозке техники, маркировку и совместимость с РФ/ЕАЭС по питанию",
 };
 
+/**
+ * Derive a cargo nature from the product kind when the LLM did not supply one.
+ * Keeps the per-nature cautions firing for kinds that clearly imply a nature
+ * (a knife is always a bladed/sharp item) instead of falling to generic filler.
+ */
 function cargoAdditionalLines(p: ProductProcurementProfile): string[] {
+  // cargoNature is LLM-driven (dynamic per product); the caution dictionary fires
+  // on whatever nature the LLM classified. No category-derived guessing here — when
+  // the LLM gave nothing, the floor honestly defers to the freight forwarder.
   const nature = (p.cargo.cargoNature ?? "").toLowerCase().trim();
   const items: string[] = [
     ...p.cargo.likelySensitiveCargoIssues,
@@ -3794,28 +3808,32 @@ export function buildSeoDraftFromProfile(
   // point and belongs to "Что уточнить", not here.
   const objectForBullet = p.identity.shortTitle || p.identity.coreObject || title;
   const llmBullets = filterDangerousBullets(p.content.seoBullets ?? [], p);
-  const bullets = (
-    llmBullets.length >= 3
-      ? llmBullets
-      : uniq(
-          [
-            `${objectForBullet} для ${useCases}`,
-            material && !/уточнить/.test(material)
-              ? `Материал: ${material}${/подтверд/i.test(material) ? "" : " — подтвердите у поставщика"}`
-              : `Продуманная конструкция для ${useCases}`,
-            p.sku.colors.length
-              ? `Несколько цветов на выбор: ${p.sku.colors.join(", ")}`
-              : "Универсальный дизайн под разные интерьеры и стили",
-            p.identity.visibleFeatures.length
-              ? capitalizeRu(p.identity.visibleFeatures[0])
-              : "Компактный и удобный в повседневном использовании",
-            "Продуманная упаковка — удобно дарить и хранить",
-          ],
-          5,
-        )
-  ).slice(0, 5);
+  // Product-specific selling points come from the LLM (p.content.seoBullets).
+  // When the LLM gave nothing, the deterministic floor is HONEST-GENERIC: it states
+  // only what we actually know from the LLM-extracted identity (object, use cases,
+  // material, colors) and openly defers the rest to the supplier — no fabricated
+  // selling points, no category-specific claims.
+  const materialBullet =
+    material && !/уточнить/.test(material)
+      ? `Материал: ${material}${/подтверд/i.test(material) ? "" : " — подтвердите у поставщика"}`
+      : "Материал уточните у поставщика перед закупкой";
+  const deterministicBullets = uniq(
+    [
+      p.identity.useCases.length
+        ? `${objectForBullet} — ${p.identity.useCases.slice(0, 3).join(", ")}`
+        : objectForBullet,
+      materialBullet,
+      p.sku.colors.length ? `Цвета на выбор: ${p.sku.colors.join(", ")}` : undefined,
+      "Точные размеры и характеристики уточните у поставщика перед закупкой",
+      "Заявленные свойства проверьте на образце до партии",
+    ].filter((b): b is string => Boolean(b && String(b).trim())),
+    6,
+  );
+  const bullets = (llmBullets.length >= 3 ? llmBullets : deterministicBullets).slice(0, 5);
   while (bullets.length < 5)
-    bullets.push(`${objectForBullet} для ${useCases}`);
+    bullets.push(
+      "Характеристики уточните у поставщика перед публикацией карточки",
+    );
   const characteristics = seoCharacteristics(p);
 
   // Keywords: prefer LLM deduped set, else a deterministic set (dropping the giant
@@ -3823,11 +3841,15 @@ export function buildSeoDraftFromProfile(
   const rawKeywords = (p.content.seoKeywords ?? []).length
     ? p.content.seoKeywords!
     : [
+        // Honest floor: only LLM-extracted identity facts, no category seeding.
         p.identity.coreObject,
         p.identity.shortTitle,
         ...p.identity.useCases,
+        p.identity.coreObject && p.identity.materials[0] && !/уточнить/.test(p.identity.materials[0])
+          ? `${p.identity.coreObject} ${p.identity.materials[0]}`
+          : "",
         ...p.sku.colors.map((c) => `${p.identity.coreObject} ${c}`),
-      ];
+      ].filter(Boolean);
   const keywords = dedupKeywords(
     filterDangerousList(rawKeywords, p),
     12,
@@ -3896,13 +3918,19 @@ function seoDescription(p: ProductProcurementProfile, title: string): string {
   );
   const useCases = p.identity.useCases.length
     ? p.identity.useCases.slice(0, 3).join(", ")
-    : "повседневного использования";
+    : "";
   const materialPart =
     p.identity.materials.length &&
     p.identity.materials[0] !== "уточнить у поставщика"
       ? ` Материал: ${p.identity.materials.slice(0, 2).join(", ")}.`
       : "";
-  const sentence = `${capitalizeRu(objectName)} подходит для ${useCases}.${materialPart}`;
+  // Honest-generic floor (used only when the LLM gave no description): state the
+  // object and its use cases if known, otherwise openly defer to the supplier —
+  // never the filler "подходит для повседневного использования", never category
+  // guesses. The real, product-specific description comes from the LLM above.
+  const sentence = useCases
+    ? `${capitalizeRu(objectName)} — ${useCases}.${materialPart}`
+    : `${capitalizeRu(objectName)}.${materialPart} Полное описание и характеристики уточните у поставщика перед публикацией.`;
   return `${sentence} ${SEO_DISCLAIMER}`;
 }
 
