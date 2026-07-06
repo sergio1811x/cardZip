@@ -2,7 +2,7 @@ import type { ProductContext, AiContentResult } from '../types';
 
 const SYNTHESIS_MODELS = [
   'deepseek/deepseek-v4-flash',
-  'google/gemini-2.5-flash-lite-preview-09-2025',
+  'google/gemini-2.5-flash-lite',
 ];
 
 type MarketInput = {
@@ -458,7 +458,7 @@ async function callOpenRouter(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(25_000),
   });
 
   if (!res.ok) return null;

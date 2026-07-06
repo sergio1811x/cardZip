@@ -92,7 +92,7 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-lite-preview-09-2025',
+        model: 'google/gemini-2.5-flash-lite',
         max_tokens: 300,
         temperature: 0,
         messages: [{ role: 'user', content: prompt }],
@@ -170,7 +170,7 @@ export async function translateQuestionsToCn(ruQuestions: string[]): Promise<str
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-lite-preview-09-2025',
+        model: 'google/gemini-2.5-flash-lite',
         max_tokens: 1200,
         temperature: 0,
         messages: [{ role: 'user', content: prompt }],

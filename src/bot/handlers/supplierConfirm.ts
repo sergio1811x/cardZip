@@ -292,7 +292,7 @@ interface ExtractedData {
 
 const EXTRACT_MODELS = [
   { base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-flash', key: 'OPENROUTER_API_KEY' },
-  { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite-preview-09-2025', key: 'OPENROUTER_API_KEY' },
+  { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash-lite', key: 'OPENROUTER_API_KEY' },
   { base: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-4-scout', key: 'OPENROUTER_API_KEY' },
   { base: 'https://api.fireworks.ai/inference/v1', model: 'accounts/fireworks/models/deepseek-v4-flash', key: 'FIREWORKS_API_KEY' },
 ];

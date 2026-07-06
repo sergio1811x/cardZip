@@ -84,7 +84,7 @@ export async function runCanonicalizerPolicyGuard(
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };
