@@ -1814,10 +1814,16 @@ export function classifyProductKindConsensus(
     acc[k] = (acc[k] ?? 0) + 1;
     return acc;
   }, {});
+  // A SPECIFIC kind (anything other than generic_product) must not be overridden
+  // by weak/generic LLM votes: when the title/rules clearly identify the object
+  // (e.g. "нож" → knife) but the LLM classifiers only returned "generic/other",
+  // the specific kind should win. Only fall back to generic when there is no
+  // specific vote at all.
+  const tallyEntries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+  const specificEntries = tallyEntries.filter(([k]) => k !== "generic_product");
   const winner =
-    (Object.entries(tally).sort(
-      (a, b) => b[1] - a[1],
-    )[0]?.[0] as ProductKind) || rulesKind;
+    ((specificEntries[0]?.[0] ?? tallyEntries[0]?.[0]) as ProductKind) ||
+    rulesKind;
   const agree = tally[winner] ?? 1;
   const disagreement = new Set(votes).size > 1;
   const confidence = Math.max(
