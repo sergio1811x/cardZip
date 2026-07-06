@@ -6,9 +6,9 @@
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_MODELS = [
-  "deepseek/deepseek-v4-flash",
-  "openai/gpt-5-mini",
   "google/gemini-2.5-flash-lite",
+  "google/gemini-2.5-flash",
+  "deepseek/deepseek-v4-flash",
 ];
 const DEFAULT_TIMEOUT_MS = 40_000;
 const DEFAULT_MAX_TOKENS = 2000;

@@ -87,9 +87,9 @@ const DEFAULT_VISION_MODELS = [
 ];
 
 const DEFAULT_TEXT_MODELS = [
-  "deepseek/deepseek-v4-flash",
-  "openai/gpt-5-mini",
   "google/gemini-2.5-flash-lite",
+  "google/gemini-2.5-flash",
+  "deepseek/deepseek-v4-flash",
 ];
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";

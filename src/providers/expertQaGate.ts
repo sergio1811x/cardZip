@@ -3,9 +3,9 @@ import type { QaResult, GeneratedArtifacts } from '../types';
 import { QaGateResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const QA_MODELS = [
+  'google/gemini-2.5-flash',
+  'google/gemini-2.5-flash-lite',
   'deepseek/deepseek-v4-flash',
-  'openai/gpt-5-mini',
-  'qwen/qwen3-235b-a22b',
 ];
 
 const QA_GATE_PROMPT = `CardZip QA Gate.

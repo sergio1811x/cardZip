@@ -2,9 +2,9 @@ import type { AnalysisSnapshot } from '../core/analysisSnapshot';
 import { ExpertWriterResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const WRITER_MODELS = [
+  "google/gemini-2.5-flash",
+  "google/gemini-2.5-flash-lite",
   "deepseek/deepseek-v4-flash",
-  "openai/gpt-5-mini",
-  "qwen/qwen3-235b-a22b",
 ];
 
 export interface ExpertWriterResult {
