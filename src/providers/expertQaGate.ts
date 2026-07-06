@@ -108,14 +108,14 @@ export async function runQaGate(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 1200,
+          max_tokens: 1500,
           temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — QA-ревьюер CardZip. Верни СТРОГО JSON.' },
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(32_000),
       });
       if (!res.ok) {
         console.log(`[qa-gate] ${model} HTTP ${res.status}`);

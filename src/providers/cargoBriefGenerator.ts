@@ -10,8 +10,8 @@ const DEFAULT_MODELS = [
   "google/gemini-2.5-flash",
   "deepseek/deepseek-v4-flash",
 ];
-const DEFAULT_TIMEOUT_MS = 40_000;
-const DEFAULT_MAX_TOKENS = 1500;
+const DEFAULT_TIMEOUT_MS = 50_000;
+const DEFAULT_MAX_TOKENS = 2000;
 const DEFAULT_TEMPERATURE = 0.2;
 
 const CARGO_NATURES = [

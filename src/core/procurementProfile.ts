@@ -3584,7 +3584,7 @@ export async function translateSupplierQuestionsRuToCn(
         model:
           g.process?.env?.CARDZIP_CN_TRANSLATOR_MODEL ||
           "google/gemini-2.5-flash",
-        max_tokens: 900,
+        max_tokens: 1200,
         temperature: 0,
         messages: [
           {
@@ -3595,7 +3595,7 @@ export async function translateSupplierQuestionsRuToCn(
           { role: "user", content: JSON.stringify({ questionsRu: cleanRu }) },
         ],
       }),
-      signal: g.AbortSignal.timeout(12_000),
+      signal: g.AbortSignal.timeout(15_000),
     });
     if (!res.ok) return fallback;
     const data = (await res.json()) as any;

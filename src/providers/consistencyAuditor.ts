@@ -75,14 +75,14 @@ export async function runConsistencyAuditor(
         },
         body: JSON.stringify({
           model,
-          max_tokens: 1200,
+          max_tokens: 1500,
           temperature: 0,
           messages: [
             { role: 'system', content: 'Ты — consistency auditor CardZip. Верни строго JSON.' },
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(32_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };

@@ -322,13 +322,13 @@ async function extractSupplierData(text: string): Promise<ExtractedData | null> 
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: cfg.model, max_tokens: 500, temperature: 0,
+          model: cfg.model, max_tokens: 650, temperature: 0,
           messages: [
             { role: 'system', content: 'Извлеки данные из ответа поставщика. ТОЛЬКО JSON.' },
             { role: 'user', content: `${EXTRACT_PROMPT}\n\nТекст: ${text.slice(0, 2000)}` },
           ],
         }),
-        signal: AbortSignal.timeout(12_000),
+        signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as any;

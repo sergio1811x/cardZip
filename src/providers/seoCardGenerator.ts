@@ -10,11 +10,11 @@ const DEFAULT_MODELS = [
   "google/gemini-2.5-flash",
   "deepseek/deepseek-v4-flash",
 ];
-const DEFAULT_TIMEOUT_MS = 45_000;
+const DEFAULT_TIMEOUT_MS = 55_000;
 // The SEO card JSON is large (title + description + 5 bullets + 8–15 keywords +
 // 4–8 characteristics objects). At 2000 tokens it truncated mid-JSON → parse
 // failed → null → the doc fell to the generic floor on every run.
-const DEFAULT_MAX_TOKENS = 4000;
+const DEFAULT_MAX_TOKENS = 5000;
 const DEFAULT_TEMPERATURE = 0.2;
 
 export interface GeneratorInput {

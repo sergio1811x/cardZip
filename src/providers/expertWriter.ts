@@ -127,7 +127,7 @@ export async function runExpertWriter(
         },
         body: JSON.stringify({
           model,
-          max_tokens: Number(process.env.EXPERT_WRITER_MAX_TOKENS ?? 5000),
+          max_tokens: Number(process.env.EXPERT_WRITER_MAX_TOKENS ?? 6500),
           temperature: 0.2,
           messages: [
             {
@@ -138,7 +138,7 @@ export async function runExpertWriter(
             { role: "user", content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(40_000),
       });
       if (!res.ok) {
         console.log(`[expert-writer] ${model} HTTP ${res.status}`);

@@ -92,14 +92,14 @@ export async function runAutoFix(
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          max_tokens: 4000,
+          max_tokens: 5000,
           temperature: 0.0,
           messages: [
             { role: 'system', content: 'Ты — автокорректор CardZip. Верни СТРОГО JSON с исправленными полями.' },
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(26_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };

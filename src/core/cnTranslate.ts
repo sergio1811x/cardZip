@@ -93,11 +93,11 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
-        max_tokens: 300,
+        max_tokens: 400,
         temperature: 0,
         messages: [{ role: 'user', content: prompt }],
       }),
-      signal: AbortSignal.timeout(8_000),
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!res.ok) return localTranslated;
@@ -171,11 +171,11 @@ export async function translateQuestionsToCn(ruQuestions: string[]): Promise<str
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
-        max_tokens: 1600,
+        max_tokens: 2000,
         temperature: 0,
         messages: [{ role: 'user', content: prompt }],
       }),
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(16_000),
     });
 
     if (!res.ok) return [];

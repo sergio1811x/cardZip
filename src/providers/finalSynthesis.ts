@@ -432,7 +432,7 @@ async function callOpenRouter(
 ): Promise<RawSeoResult | null> {
   const body: Record<string, unknown> = {
     model,
-    max_tokens: 2000,
+    max_tokens: 2500,
     temperature: 0.2,
     messages: [
       {
@@ -458,7 +458,7 @@ async function callOpenRouter(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(32_000),
   });
 
   if (!res.ok) return null;

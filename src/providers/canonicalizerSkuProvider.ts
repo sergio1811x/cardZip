@@ -80,14 +80,14 @@ export async function runCanonicalizerSkuResolution(
         },
         body: JSON.stringify({
           model,
-          max_tokens: 700,
+          max_tokens: 900,
           temperature: 0,
           messages: [
             { role: 'system', content: 'Ты SKU Resolution Role. Верни строго JSON.' },
             { role: 'user', content: prompt },
           ],
         }),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(38_000),
       });
       if (!res.ok) continue;
       const data = await res.json() as { choices?: { message?: { content?: string } }[] };
