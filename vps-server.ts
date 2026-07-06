@@ -386,6 +386,11 @@ export async function continuePipeline(jobId: string) {
       seoContent, wbData, wbFiltered, riskFlags, economics, budgets,
       maxPurchasePrice, conclusion, similarityData, marketDecision,
       wbCoreQuery, categoryType, intelligence,
+      // Carry the canonicalizer context (incl. procurementProfileDraft.domainRules
+      // populated by the focused generators) so the ZIP document builders in
+      // detailButtons — which read result_json.product — get the product-specific
+      // supplier questions / SEO / cargo instead of the generic floor.
+      productContext,
       ...(wb429 ? { wb429: true } : {}),
     };
 
