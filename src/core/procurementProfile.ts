@@ -3317,6 +3317,49 @@ const DANGEROUS_CLAIM_RES = DANGEROUS_CLAIMS.map(claimToRegex);
 function dangerousClaims(text: string): string[] {
   return DANGEROUS_CLAIMS.filter((_c, i) => DANGEROUS_CLAIM_RES[i].test(text));
 }
+/** Public: does the text assert any dangerous claim (stem-tolerant)? */
+export function textHasDangerousClaim(text: string): boolean {
+  return dangerousClaims(text).length > 0;
+}
+/** Public: does the text contain evaluative puffery water? */
+export function textHasPuffery(text: string): boolean {
+  return hasPuffery(text);
+}
+
+// Evaluative "puffery" — quality claims asserted as fact with no proof. Unlike
+// DANGEROUS_CLAIMS these aren't legally risky, but they read as generated water
+// ("высококачественный", "эффективная нарезка", "обеспечивает точность") and are
+// the main thing keeping SEO drafts at ~5/10. Category-agnostic: matched by stem.
+const PUFFERY_STEMS = [
+  "высококачествен", "качествен", "идеальн", "эффективн", "незаменим",
+  "долговечн", "премиальн", "превосходн", "непревзойден", "совершенн",
+  "первоклассн", "наилучш", "великолепн", "отличн", "прекрасн", "лучш",
+  "надежн", "прочн", "острейш", "сверхостр", "гарантиру", "обеспечива",
+  "легко и просто", "на долгие годы", "прослужит", "порадует",
+];
+const PUFFERY_RE = new RegExp(
+  PUFFERY_STEMS.map((s) =>
+    /[а-яё]$/i.test(s) && !/\s/.test(s) ? `${s}[а-яё]*` : s,
+  ).join("|"),
+  "i",
+);
+function hasPuffery(text: string): boolean {
+  return PUFFERY_RE.test(text);
+}
+// Drop puffery/claim sentences from an LLM paragraph, keeping the honest ones.
+// Better than rejecting the whole description to the generic floor: we salvage
+// the concrete, factual sentences (what it is / what it's for / material).
+function stripPufferySentences(text: string): string {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const kept = sentences.filter(
+    (s) => !hasPuffery(s) && !dangerousClaims(s).length,
+  );
+  return kept.join(" ").replace(/\s{2,}/g, " ").trim();
+}
+
 function pluralRu(n: number, one: string, few: string, many: string): string {
   const v = Math.abs(n) % 100;
   const v1 = v % 10;
@@ -3778,6 +3821,12 @@ export function buildCargoBriefFromProfile(
   product: any,
   opts: { sourceUrl?: string } = {},
 ): string {
+  // Prefer the LLM-polished document when the writer produced a validated one
+  // (stashed on the product during the pipeline). Falls through to the
+  // deterministic template otherwise.
+  const polished = product?.polishedDocs?.cargo;
+  if (typeof polished === "string" && polished.trim().length > 200)
+    return sanitizeUserFacingText(polished.trim());
   const p = ensureProductProcurementProfile(product, opts);
   const weight = p.logistics?.weightKg ?? extractWeightKg(product);
   const dims = p.logistics?.dimensionsCm ?? null;
@@ -3866,6 +3915,9 @@ export function buildSampleChecklistFromProfile(
   product: any,
   opts: { sourceUrl?: string } = {},
 ): string {
+  const polished = product?.polishedDocs?.checklist;
+  if (typeof polished === "string" && polished.trim().length > 200)
+    return sanitizeUserFacingText(polished.trim());
   const p = ensureProductProcurementProfile(product, opts);
   const measure = uniq(
     [
@@ -3942,23 +3994,28 @@ export function buildSeoDraftFromProfile(
     material && !/уточнить/.test(material)
       ? `Материал: ${material}${/подтверд/i.test(material) ? "" : " — подтвердите у поставщика"}`
       : "Материал уточните у поставщика перед закупкой";
-  const deterministicBullets = uniq(
+  // Honest customer-facing pool: only facts from the LLM-extracted identity.
+  // NO internal procurement advice ("проверьте образец", "уточните у поставщика")
+  // — that is not a selling point and lives in "Что уточнить".
+  const honestBulletPool = uniq(
     [
       p.identity.useCases.length
         ? `${objectForBullet} — ${p.identity.useCases.slice(0, 3).join(", ")}`
         : objectForBullet,
       materialBullet,
       p.sku.colors.length ? `Цвета на выбор: ${p.sku.colors.join(", ")}` : undefined,
-      "Точные размеры и характеристики уточните у поставщика перед закупкой",
-      "Заявленные свойства проверьте на образце до партии",
+      p.sku.normalizedExamples.length > 1 || p.sku.models.length > 1
+        ? "Несколько вариантов в карточке — выберите подходящий"
+        : undefined,
+      "Компактный формат — удобно хранить и использовать каждый день",
     ].filter((b): b is string => Boolean(b && String(b).trim())),
     6,
   );
-  const bullets = (llmBullets.length >= 3 ? llmBullets : deterministicBullets).slice(0, 5);
+  // Keep the LLM's concrete selling points and top them up from the honest pool
+  // (instead of discarding all LLM bullets when a few were dropped as puffery).
+  const bullets = uniq([...llmBullets, ...honestBulletPool], 5).slice(0, 5);
   while (bullets.length < 5)
-    bullets.push(
-      "Характеристики уточните у поставщика перед публикацией карточки",
-    );
+    bullets.push("Универсальный вариант для дома и в подарок");
   // Prefer LLM-provided characteristics when present (dangerous-claim filtered),
   // else the deterministic per-kind table.
   const llmChars = (p.content.seoCharacteristics ?? [])
@@ -4072,8 +4129,11 @@ function seoDescription(p: ProductProcurementProfile, title: string): string {
   // Prefer a real benefit-driven paragraph from the LLM canonicalizer. It must be
   // a proper sentence (>= ~40 chars, not a bare noun), pass the dangerous-claim
   // filter, and always carries the disclaimer as a separate trailing sentence.
-  const llm = (p.content.seoDescription ?? "").trim();
-  if (llm.length >= 40 && !dangerousClaims(llm).length) {
+  // Salvage the factual sentences from the LLM paragraph, dropping puffery and
+  // dangerous-claim sentences rather than discarding the whole thing. Only if
+  // enough concrete text survives do we use it; else fall to the honest floor.
+  const llm = stripPufferySentences((p.content.seoDescription ?? "").trim());
+  if (llm.length >= 40) {
     const base = /[.!?]$/.test(llm) ? llm : `${llm}.`;
     return `${base} ${SEO_DISCLAIMER}`;
   }
@@ -4125,7 +4185,7 @@ function filterDangerousBullets(
 ): string[] {
   return bullets
     .map((b) => fixGluedFallback(clean(b)))
-    .filter((b) => b && !dangerousClaims(b).length);
+    .filter((b) => b && !dangerousClaims(b).length && !hasPuffery(b));
 }
 
 function filterDangerousList(

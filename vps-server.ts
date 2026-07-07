@@ -9,7 +9,8 @@ import { canonicalizeProduct } from './src/providers/productCanonicalizer';
 import { generateSupplierQuestions, type GeneratorInput } from './src/providers/supplierQuestionsGenerator';
 import { generateSeoCard } from './src/providers/seoCardGenerator';
 import { generateCargoBrief } from './src/providers/cargoBriefGenerator';
-import { buildProductProcurementProfile } from './src/core/procurementProfile';
+import { buildProductProcurementProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile } from './src/core/procurementProfile';
+import { writeDocument, type DocWriterInput } from './src/providers/documentWriter';
 import { translateQuestionsToCn } from './src/core/cnTranslate';
 import { rankCandidates } from './src/core/wbSimilarity';
 import { filterWbData } from './src/core/wbFilter';
@@ -415,6 +416,51 @@ export async function continuePipeline(jobId: string) {
       }
     } catch (e: any) {
       console.error('[cn-translate] failed:', e?.message);
+    }
+
+    // ─── LLM document writer ────────────────────────────────────────────
+    // Turn the deterministic cargo/checklist TEMPLATE drafts into polished,
+    // prioritized documents. The writer may only reorganize the profile facts;
+    // its output is safety-validated and, on any failure, we keep the template.
+    try {
+      const profile = buildProductProcurementProfile(product);
+      const base: Omit<DocWriterInput, 'docType' | 'draftMd'> = {
+        titleRu: profile.identity.titleForReport,
+        coreObject: profile.identity.coreObject,
+        categoryType: profile.identity.categoryType,
+        productKind: profile.identity.productKind,
+        useCases: profile.identity.useCases ?? [],
+        materials: profile.identity.materials ?? [],
+        selectedSku: profile.sku.selectedSkuText,
+        priceText: profile.pricing.displayPriceText,
+        sourceUrl: job.input_url,
+        supplierType: profile.supplier.displayType,
+        cargoNature: profile.cargo.cargoNature ?? 'none',
+        weightKnown: typeof profile.logistics?.weightKg === 'number',
+        dimsKnown: !!profile.logistics?.dimensionsCm,
+        mustAskSupplier: profile.procurement.mustAskSupplier ?? [],
+        mustCheckBeforeSample: profile.procurement.mustCheckBeforeSample ?? [],
+        mustCheckOnSample: profile.procurement.mustCheckOnSample ?? [],
+        redFlags: profile.procurement.redFlags ?? [],
+        cargoWhatToRequest: profile.cargo.whatToRequest ?? [],
+        cargoConsiderations: profile.cargo.likelySensitiveCargoIssues ?? [],
+      };
+      const forbidden = profile.content.seoForbiddenClaims ?? [];
+      const cargoDraft = buildCargoBriefFromProfile(product, { sourceUrl: job.input_url });
+      const checklistDraft = buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url });
+      const [cargoMd, checklistMd] = await Promise.all([
+        writeDocument({ ...base, docType: 'cargo', draftMd: cargoDraft }, forbidden).catch(() => null),
+        writeDocument({ ...base, docType: 'checklist', draftMd: checklistDraft }, forbidden).catch(() => null),
+      ]);
+      if (cargoMd || checklistMd) {
+        product.polishedDocs = {
+          ...(cargoMd ? { cargo: cargoMd } : {}),
+          ...(checklistMd ? { checklist: checklistMd } : {}),
+        };
+      }
+      console.log(`[doc-writer] cargo:${cargoMd ? 'ok' : 'floor'} checklist:${checklistMd ? 'ok' : 'floor'}`);
+    } catch (e: any) {
+      console.error('[doc-writer] failed:', e?.message);
     }
 
     // ─── STEP 4: Writer ─────────────────────────────────────────────────
