@@ -3,9 +3,9 @@ import type { QaResult } from '../types';
 import { AutoFixResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const FIX_MODELS = [
-  'deepseek/deepseek-v4-pro',
   'google/gemini-3.1-flash-lite',
   'openai/gpt-5-mini',
+  'deepseek/deepseek-v4-pro',
 ];
 
 const AUTO_FIX_PROMPT = `CardZip Auto-Fix.

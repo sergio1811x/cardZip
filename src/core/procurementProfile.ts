@@ -17,6 +17,7 @@ import {
 import { selectBestProductTitle, isBadTitleCandidate } from "./titleSelection";
 import { sanitizeUserFacingText } from "./userFacingSanitizer";
 import { isPlaceholderValue, safeTitle } from "./placeholderGuard";
+import { applyUniversalGaps } from "./gapEngine";
 
 export type ProductKind =
   | "footwear"
@@ -2941,21 +2942,40 @@ export function buildProductProcurementProfile(
     pricing,
   } as Pick<ProductProcurementProfile, "identity" | "sku" | "pricing">;
   const draftProcurement = record(aiDraft.procurement);
-  const mustAskSupplierAll = uniq(
+  const domainQuestions = uniq(
     [
       ...array<string>(draftProcurement.mustAskSupplier).map(safeRu),
       ...buildQuestions(baseProfile, rules),
     ],
-    14,
+    20,
   );
-  // Universal completeness guarantee (any product): packaging dimensions + weight
-  // are always needed to price cargo. If the LLM/rules never asked for them, add
-  // the ask so it isn't squeezed out of the capped list.
-  if (!mustAskSupplierAll.some((q) => /габарит[а-яё]*\s+(?:индивидуальн|упаков)|размер[а-яё]*\s+упаков/i.test(q)))
-    mustAskSupplierAll.push(
-      "Укажите вес и габариты индивидуальной упаковки (длина × ширина × высота).",
-    );
-  const mustAskSupplier = uniq(mustAskSupplierAll, 12).slice(0, 10);
+  // Universal, category-agnostic gap engine: guarantees the procurement basics
+  // (packed weight, package/carton dims, exact material grade, sharp/fragile/
+  // battery transport, compliance) are present and ranked above niche detail,
+  // whatever the LLM happened to ask. Detection is keyword-based, not a category
+  // enum, so it generalizes to any 1688 product. See gapEngine.ts.
+  const gapText = [
+    baseProfile.identity.coreObject,
+    baseProfile.identity.titleForReport,
+    product?.titleRu,
+    product?.titleEn,
+    product?.titleCn,
+    product?.categoryName,
+    ...baseProfile.identity.materials,
+    ...baseProfile.identity.visibleFeatures,
+    ...baseProfile.identity.claimedFeatures,
+    ...baseProfile.identity.useCases,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const mustAskSupplier = applyUniversalGaps(domainQuestions, {
+    productText: gapText,
+    materials: baseProfile.identity.materials,
+    weightKgKnown: extractWeightKg(product) != null,
+    packageDimsKnown: extractDimensionsCm(product) != null,
+    priceReliable: pricing.priceReliable,
+    selectedSkuReliable: sku.selectedSkuReliable,
+  }).slice(0, 10);
   const images = collectProductIntelligenceImages(product, 3);
   const supplierRaw =
     product?.supplierType ??
@@ -3719,7 +3739,7 @@ export async function translateSupplierQuestionsRuToCn(
       body: JSON.stringify({
         model:
           g.process?.env?.CARDZIP_CN_TRANSLATOR_MODEL ||
-          "deepseek/deepseek-v4-pro",
+          "google/gemini-2.5-flash",
         max_tokens: 1200,
         temperature: 0,
         messages: [

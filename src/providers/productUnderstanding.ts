@@ -75,9 +75,9 @@ export interface FullProductAnalysis {
 // ─── LLM Call with Fallback ──────────────────────────────────────────────────
 
 const SEARCH_MODELS = [
-  'deepseek/deepseek-v4-pro',
   'google/gemini-3.1-flash-lite',
   'google/gemini-2.5-flash',
+  'deepseek/deepseek-v4-pro',
   'meta-llama/llama-4-scout',
 ];
 

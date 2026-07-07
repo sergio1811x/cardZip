@@ -6,9 +6,9 @@
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_MODELS = [
-  "deepseek/deepseek-v4-pro",
   "google/gemini-3.1-flash-lite",
   "google/gemini-2.5-flash",
+  "deepseek/deepseek-v4-pro",
 ];
 const DEFAULT_TIMEOUT_MS = 55_000;
 // The SEO card JSON is large (title + description + 5 bullets + 8–15 keywords +

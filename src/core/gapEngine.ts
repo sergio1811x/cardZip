@@ -1,0 +1,206 @@
+/**
+ * Universal procurement Gap Engine — category-agnostic.
+ *
+ * Problem it solves: previously the supplier questions shown in the main report
+ * were a merge of LLM output + hardcoded per-category KIND_RULES, ranked by a
+ * brittle regex list. When the LLM produced only niche questions (e.g. for a
+ * knife: HRC hardness, spine thickness), the *universal procurement basics*
+ * (packed weight, package/carton dimensions, exact material grade, sharp-object
+ * transport protection) were pushed out of the top-N and never reached the user.
+ *
+ * The engine encodes what EVERY physical 1688 import needs confirmed as a small
+ * set of universal "slots". It does NOT know product categories — transport and
+ * compliance needs are detected from keyword signals in the raw product text, so
+ * it generalizes to any product. The LLM still supplies category-specific detail;
+ * the engine only *guarantees coverage + priority* of the universal basics.
+ */
+
+export type GapSlotId =
+  | "price"
+  | "selected_variant"
+  | "material"
+  | "dimensions"
+  | "unit_weight_packed"
+  | "package_dims"
+  | "carton"
+  | "transport_constraint"
+  | "compliance";
+
+/** Lower number → shown first. Universal procurement basics rank above
+ * category-specific detail. Category-specific questions (no slot) get
+ * {@link CATEGORY_SPECIFIC_PRIORITY}, so they survive but rank after basics. */
+const SLOT_PRIORITY: Record<GapSlotId, number> = {
+  price: 0,
+  selected_variant: 1,
+  material: 2,
+  dimensions: 3,
+  unit_weight_packed: 4,
+  package_dims: 5,
+  carton: 6,
+  transport_constraint: 7,
+  compliance: 8,
+};
+
+const CATEGORY_SPECIFIC_PRIORITY = 40;
+
+export interface GapEngineContext {
+  /** All product text (titles, category, materials, features) lowercased for
+   * signal detection. */
+  productText: string;
+  materials: string[];
+  weightKgKnown: boolean;
+  packageDimsKnown: boolean;
+  priceReliable: boolean;
+  selectedSkuReliable: boolean;
+}
+
+/** Detects whether an existing question already covers a universal slot, so the
+ * engine does not add a duplicate ask. Keyed by slot. */
+const SLOT_COVERAGE: Record<GapSlotId, RegExp> = {
+  price: /цен[ауы9е]|стоимост|оптов/i,
+  selected_variant: /как(ой|ому)\s+(именно\s+)?(вариант|sku|цвет|модел)|уточните\s+выбранн|какой\s+sku/i,
+  material:
+    /состав(?!\s|$)|состав\s+(ткани|материал)|марк[аиуе]\s*(стали|металл|материал|пластик)|из\s+какого\s+материал|материал\s+(лезви|корпус|издели|товара|ручк|верх|подошв)/i,
+  // The dimensions slot is only "covered" by a question asking for the full
+  // dimensional picture (2+ axes) or an explicit size grid — a single-axis ask
+  // (e.g. only spine thickness) does not close it.
+  dimensions:
+    /размерн(ая|ую|ой)\s+сетк|(длин[ауы]).*(ширин|высот|диаметр)|(ширин[ауы]).*(длин|высот|диаметр)|габаритн[а-яё]+\s+размер/i,
+  unit_weight_packed: /вес.*(с\s+упаковк|с\s+индивидуальн|брутто|в\s+упаковк)/i,
+  package_dims:
+    /габарит[а-яё]*\s*(индивидуальн|упаковк)|размер[а-яё]*\s*(индивидуальн|упаковк)/i,
+  carton:
+    /короб|карт[оа]н|транспортн[а-яё]*\s*(упаковк|коробк|короб)|шт[а-яё.]*\s*в\s*короб|в\s+коробке\s+штук/i,
+  transport_constraint:
+    /перевозк|защищен[оа].*(лезви|остри|стекл)|блистер|обрешёт|обрешет|герметичн|защит[аы].*(от\s+боя|при\s+транспорт)/i,
+  compliance:
+    /сертификат|деклараци|соответстви[ея]|регламент|\beac\b|росс[а-яё]*\s+стандарт|маркировк[аи]\s+соответств/i,
+};
+
+/**
+ * Transport constraints detected from raw text (not a category enum). Returns an
+ * extra question tailored to the physical hazard, or null if none apply.
+ */
+function detectTransportConstraint(text: string): string | null {
+  if (/нож|лезви|клинок|ножниц|резак|топор|секатор|тесак|бритв|шило|\bигл[аоы]/i.test(text))
+    return "Острый предмет: как защищено лезвие/остриё в индивидуальной упаковке (чехол, блистер) и подходит ли упаковка для перевозки острых предметов сборным грузом?";
+  if (/стекл|керамик|фарфор|хрупк|зеркал|лампочк|стеклянн/i.test(text))
+    return "Хрупкий товар: как защищён от боя при транспортировке, есть ли усиленная/противоударная упаковка?";
+  if (/аккумулятор|батаре|литиев|powerbank|power\s*bank|18650|li-?ion|литий/i.test(text))
+    return "Литиевые батареи в товаре: какие документы и ограничения для перевозки (MSDS, отдельная маркировка, авиа/сборный груз)?";
+  if (/жидкост|\bмасл[оаяу]|крем|\bгель|спрей|шампун|лосьон|духи|парфюм|аэрозол|баллончик/i.test(text))
+    return "Жидкость/паста/аэрозоль: герметичность упаковки и ограничения на перевозку (в т.ч. для авиа и сборных грузов)?";
+  if (/порошок|порошков|пудр[аеы]|сыпуч/i.test(text))
+    return "Сыпучий/порошковый товар: как упакован и есть ли ограничения на перевозку?";
+  return null;
+}
+
+/**
+ * Compliance hint detected from raw text. Returns a short parenthetical hint
+ * (e.g. "контакт с пищей") or null when the product does not obviously imply a
+ * regulatory need — avoids over-asking certificates for неutral goods.
+ */
+function detectComplianceHint(text: string): string | null {
+  if (/220\s*в|электр|напряжени|мощност|зарядк|\busb\b|адаптер|розетк|вилк|электромотор|нагрев/i.test(text))
+    return "электробезопасность, декларация соответствия";
+  if (/детск|игрушк|для\s+детей|ребён|ребен|малыш/i.test(text))
+    return "детская продукция";
+  if (/кухн|посуд|для\s+еды|пищев|\bнож|тарелк|столов|разделочн|контейнер\s+для\s+(еды|продукт)|термос|бутыл[ко]/i.test(text))
+    return "контакт с пищей";
+  if (/космет|\bкрем|сыворотк|маск[аи]\s+для\s+лиц|уход\s+за\s+кож|парфюм/i.test(text))
+    return "косметика/контакт с кожей";
+  return null;
+}
+
+interface RankedQuestion {
+  text: string;
+  priority: number;
+}
+
+/** Returns the universal slot a question belongs to (for ranking), or null if it
+ * is category-specific. */
+function slotOf(question: string): GapSlotId | null {
+  for (const [slot, rx] of Object.entries(SLOT_COVERAGE) as [GapSlotId, RegExp][]) {
+    if (rx.test(question)) return slot;
+  }
+  return null;
+}
+
+function normKey(q: string): string {
+  return q
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/**
+ * Merges category-specific questions (from LLM + KIND_RULES) with universal
+ * procurement-basics, guaranteeing the basics are present and ranked first.
+ *
+ * @param existing questions already produced downstream (already RU-cleaned).
+ * @param ctx      signals about what is known from the 1688 data.
+ * @returns ordered, de-duplicated question list (caller applies the final cap).
+ */
+export function applyUniversalGaps(
+  existing: string[],
+  ctx: GapEngineContext,
+): string[] {
+  const text = ctx.productText.toLowerCase();
+  const covered = new Set<GapSlotId>();
+  for (const q of existing) {
+    const s = slotOf(q);
+    if (s) covered.add(s);
+  }
+
+  const added: RankedQuestion[] = [];
+  const addIfUncovered = (slot: GapSlotId, build: () => string) => {
+    if (!covered.has(slot)) {
+      added.push({ text: build(), priority: SLOT_PRIORITY[slot] });
+      covered.add(slot);
+    }
+  };
+
+  if (!ctx.priceReliable)
+    addIfUncovered("price", () => "Подтвердите актуальную цену выбранного SKU и цену при оптовом заказе.");
+  if (!ctx.selectedSkuReliable)
+    addIfUncovered("selected_variant", () => "Подтвердите, какой именно вариант/SKU соответствует этой цене и фото.");
+  addIfUncovered(
+    "material",
+    () => "Подтвердите точный материал и его марку (например, марку стали/пластика или состав ткани — не маркетинговое название).",
+  );
+  addIfUncovered(
+    "dimensions",
+    () => "Уточните точные габаритные размеры товара: длина, ширина, высота или диаметр (в мм/см).",
+  );
+  if (!ctx.weightKgKnown)
+    addIfUncovered("unit_weight_packed", () => "Укажите вес одной единицы с индивидуальной упаковкой (брутто).");
+  if (!ctx.packageDimsKnown)
+    addIfUncovered("package_dims", () => "Укажите габариты индивидуальной упаковки (длина × ширина × высота).");
+  addIfUncovered("carton", () => "Сколько штук в транспортном коробе, какой вес и габариты короба?");
+
+  const transport = detectTransportConstraint(text);
+  if (transport) addIfUncovered("transport_constraint", () => transport);
+
+  const compliance = detectComplianceHint(text);
+  if (compliance)
+    addIfUncovered("compliance", () => `Есть ли сертификаты/декларации соответствия (${compliance})?`);
+
+  const existingRanked: RankedQuestion[] = existing.map((q) => {
+    const s = slotOf(q);
+    return { text: q, priority: s ? SLOT_PRIORITY[s] : CATEGORY_SPECIFIC_PRIORITY };
+  });
+
+  const seen = new Set<string>();
+  return [...added, ...existingRanked]
+    .filter((q) => {
+      const k = normKey(q.text);
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    // Stable sort by priority: universal basics first, category-specific after,
+    // original relative order preserved within the same priority bucket.
+    .map((q, i) => ({ ...q, i }))
+    .sort((a, b) => a.priority - b.priority || a.i - b.i)
+    .map((q) => q.text);
+}

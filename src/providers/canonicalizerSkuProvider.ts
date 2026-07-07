@@ -2,9 +2,9 @@ import type { RawProductForCanonicalizer } from './productCanonicalizer';
 import { buildCanonicalizerSkuResolutionInput } from './canonicalizerSkuResolver';
 
 const SKU_MODELS = [
-  'deepseek/deepseek-v4-pro',
   'google/gemini-3.1-flash-lite',
   'openai/gpt-5-mini',
+  'deepseek/deepseek-v4-pro',
 ];
 
 export interface CanonicalizerSkuLlmResult {

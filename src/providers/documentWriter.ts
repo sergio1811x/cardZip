@@ -13,9 +13,9 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // so we ALWAYS get output. Fully overridable via DOC_WRITER_MODELS. NOTE: verify
 // exact slugs on the OpenRouter models page — a wrong slug just falls through.
 const DEFAULT_MODELS = [
-  "deepseek/deepseek-v4-pro",
   "google/gemini-3.1-flash-lite",
   "google/gemini-2.5-flash",
+  "deepseek/deepseek-v4-pro",
 ];
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 3000;

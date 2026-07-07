@@ -39,6 +39,17 @@ function materialsKeyboard(jobId: string) {
   ]);
 }
 
+// Shown after the ZIP has just been sent. No "Скачать ZIP" here — the file is
+// already delivered; push the user to the next step (вопросы поставщику) instead.
+// Re-download stays reachable via "Назад к пакету".
+function afterZipKeyboard(jobId: string) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('💬 Вопросы поставщику', `supplier_questions:${jobId}`)],
+    [Markup.button.callback('📦 Данные товара', `product_details:${jobId}`), Markup.button.callback('🔄 Новый товар', 'new_search')],
+    [Markup.button.callback('⬅️ Назад к пакету', `package:${jobId}`)],
+  ]);
+}
+
 function groupBackKeyboard(jobId: string) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('⬅️ Назад', `package:${jobId}`), Markup.button.callback('🏠 К отчёту', `back_main:${jobId}`)],
@@ -421,7 +432,7 @@ export async function handleMaterialsZip(ctx: Context): Promise<void> {
     zip.addFile('06_Фото_товара.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки 1688 вручную.\n', 'utf-8'));
   }
   await ctx.telegram.sendDocument(ctx.chat!.id, Input.fromBuffer(zip.toBuffer(), `${prefix}.zip`)).catch(() => {});
-  await ctx.reply('✅ ZIP отправлен. Начните с 01_Вопросы_поставщику.txt: отправьте вопросы поставщику, затем передайте ТЗ байеру и карго.', materialsKeyboard(jobId)).catch(() => {});
+  await ctx.reply('✅ ZIP отправлен. Начните с 01_Вопросы_поставщику.txt: отправьте вопросы поставщику, затем передайте ТЗ байеру и карго.', afterZipKeyboard(jobId)).catch(() => {});
 }
 
 export async function handleMaterialsList(ctx: Context): Promise<void> {
