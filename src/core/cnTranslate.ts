@@ -1,5 +1,11 @@
 // ─── CN→RU translation for SKU names, colors, sizes ────────────────────────
 
+// Translation model chain: stepfun (Chinese-strong) first, gemini-2.5-flash as the
+// proven fallback. Overridable via CN_TRANSLATE_MODELS.
+const CN_TRANSLATE_MODELS: string[] = (process.env.CN_TRANSLATE_MODELS
+  ? process.env.CN_TRANSLATE_MODELS.split(',').map((s) => s.trim()).filter(Boolean)
+  : ['stepfun/step-3.7-flash', 'google/gemini-2.5-flash']);
+
 const CN_COLORS: Record<string, string> = {
   '黑色': 'чёрный', '白色': 'белый', '红色': 'красный', '蓝色': 'синий',
   '绿色': 'зелёный', '黄色': 'жёлтый', '粉色': 'розовый', '紫色': 'фиолетовый',
@@ -77,8 +83,7 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return localTranslated;
 
-  try {
-    const prompt = `Ты переводчик SKU-вариантов товаров с 1688 (CN→RU). Это цвета, размеры, модели, комплектации или их комбинации.
+  const prompt = `Ты переводчик SKU-вариантов товаров с 1688 (CN→RU). Это цвета, размеры, модели, комплектации или их комбинации.
 Правила:
 - переводи смысл цвета/размера на русский;
 - артикулы, коды моделей и стандарты НЕ искажай: 美规→US, 欧规→EU, 英规→UK, 日规→JP, 韩规→KR, 澳规→AU, 国标→CN;
@@ -88,37 +93,43 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
 
 Вход: ${JSON.stringify(stillChinese)}`;
 
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        max_tokens: 400,
-        temperature: 0,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
+  for (const model of CN_TRANSLATE_MODELS) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          max_tokens: 400,
+          temperature: 0,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
 
-    if (!res.ok) return localTranslated;
-    const data = await res.json() as any;
-    const raw = data.choices?.[0]?.message?.content ?? '';
-    const translated = tryParseStringArray(raw);
-
-    if (!translated || translated.length !== stillChinese.length) return localTranslated;
-
-    // Merge LLM translations back
-    let llmIdx = 0;
-    return localTranslated.map(name => {
-      if (hasChinese(name) && llmIdx < translated.length) {
-        return translated[llmIdx++];
+      if (!res.ok) {
+        console.log(`[cnTranslate] SKU ${model} HTTP ${res.status}`);
+        continue;
       }
-      return name;
-    });
-  } catch (e) {
-    console.log('[cnTranslate] LLM fallback skipped:', (e as Error).message);
-    return localTranslated;
+      const data = await res.json() as any;
+      const raw = data.choices?.[0]?.message?.content ?? '';
+      const translated = tryParseStringArray(raw);
+
+      if (!translated || translated.length !== stillChinese.length) continue;
+
+      // Merge LLM translations back
+      let llmIdx = 0;
+      return localTranslated.map(name => {
+        if (hasChinese(name) && llmIdx < translated.length) {
+          return translated[llmIdx++];
+        }
+        return name;
+      });
+    } catch (e) {
+      console.log(`[cnTranslate] SKU ${model} skipped:`, (e as Error).message);
+    }
   }
+  return localTranslated;
 }
 
 // ─── RU→CN faithful translation of supplier questions ──────────────────────
@@ -165,34 +176,39 @@ export async function translateQuestionsToCn(ruQuestions: string[]): Promise<str
 
 Вход: ${JSON.stringify(questions)}`;
 
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        max_tokens: 2000,
-        temperature: 0,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-      signal: AbortSignal.timeout(16_000),
-    });
+  for (const model of CN_TRANSLATE_MODELS) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          max_tokens: 2000,
+          temperature: 0,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        signal: AbortSignal.timeout(16_000),
+      });
 
-    if (!res.ok) return [];
-    const data = await res.json() as any;
-    const raw = data.choices?.[0]?.message?.content ?? '';
-    const translated = tryParseStringArray(raw);
+      if (!res.ok) {
+        console.log(`[cnTranslate] RU→CN ${model} HTTP ${res.status}`);
+        continue;
+      }
+      const data = await res.json() as any;
+      const raw = data.choices?.[0]?.message?.content ?? '';
+      const translated = tryParseStringArray(raw);
 
-    if (!translated || translated.length !== questions.length) return [];
+      if (!translated || translated.length !== questions.length) continue;
 
-    const out = translated.map((s) => String(s ?? '').trim());
-    // Faithfulness guards: every line must be non-empty, contain Chinese,
-    // and carry no leftover Cyrillic (that would signal a broken / partial translation).
-    if (out.some((s) => !s || !hasChinese(s) || hasCyrillic(s))) return [];
+      const out = translated.map((s) => String(s ?? '').trim());
+      // Faithfulness guards: every line must be non-empty, contain Chinese,
+      // and carry no leftover Cyrillic (that would signal a broken / partial translation).
+      if (out.some((s) => !s || !hasChinese(s) || hasCyrillic(s))) continue;
 
-    return out;
-  } catch (e) {
-    console.log('[cnTranslate] RU→CN translation skipped:', (e as Error).message);
-    return [];
+      return out;
+    } catch (e) {
+      console.log(`[cnTranslate] RU→CN ${model} skipped:`, (e as Error).message);
+    }
   }
+  return [];
 }
