@@ -1677,15 +1677,35 @@ function normalizeDedupKey(value: string): string {
   return key;
 }
 
+// Light Russian stemmer: strip the most common inflectional endings so that
+// "царапины"/"царапин", "заточки"/"заточка", "долговечностью" collapse to one
+// root. Deliberately conservative (keeps >=4-char stems) — enough for dedup,
+// not a full morphological analyser. Category-agnostic.
+const RU_ENDINGS = [
+  "иями", "ями", "ами", "иях", "ях", "ами", "ов", "ев", "ей",
+  "ого", "его", "ому", "ему", "ыми", "ими", "ый", "ий", "ой",
+  "ая", "яя", "ое", "ее", "ые", "ие", "ым", "им", "ом", "ах",
+  "ью", "ия", "ю", "я", "ы", "и", "а", "о", "е", "у", "ь",
+];
+function stemRu(w: string): string {
+  for (const end of RU_ENDINGS) {
+    if (w.length - end.length >= 4 && w.endsWith(end)) {
+      return w.slice(0, w.length - end.length);
+    }
+  }
+  return w;
+}
+function stemTokens(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^а-яa-z0-9\s]/gi, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4)
+    .map(stemRu);
+}
 function significantWords(s: string): Set<string> {
-  return new Set(
-    s
-      .toLowerCase()
-      .replace(/ё/g, "е")
-      .replace(/[^а-яa-z0-9\s]/gi, " ")
-      .split(/\s+/)
-      .filter((w) => w.length >= 4),
-  );
+  return new Set(stemTokens(s));
 }
 
 export function dedupNormalizedList(
@@ -1714,6 +1734,7 @@ export function dedupNormalizedList(
       out.push(item);
       continue;
     }
+    const seqI = stemTokens(item);
     let redundant = false;
     for (let j = 0; j < out.length; j++) {
       const wj = significantWords(out[j]);
@@ -1726,6 +1747,18 @@ export function dedupNormalizedList(
       }
       if (jInI) {
         out[j] = item; // replace the shorter kept line with the fuller one
+        redundant = true;
+        break;
+      }
+      // Shared leading phrase: two items that open with the SAME >=3 significant
+      // stems ("проверить устойчивость коррозии …", "маркетинговые утверждения
+      // без подтверждения …") are the same point rephrased. Keep the fuller one.
+      const seqJ = stemTokens(out[j]);
+      let lead = 0;
+      while (lead < seqI.length && lead < seqJ.length && seqI[lead] === seqJ[lead])
+        lead++;
+      if (lead >= 3) {
+        if (wi.size > wj.size) out[j] = item;
         redundant = true;
         break;
       }
@@ -2908,13 +2941,21 @@ export function buildProductProcurementProfile(
     pricing,
   } as Pick<ProductProcurementProfile, "identity" | "sku" | "pricing">;
   const draftProcurement = record(aiDraft.procurement);
-  const mustAskSupplier = uniq(
+  const mustAskSupplierAll = uniq(
     [
       ...array<string>(draftProcurement.mustAskSupplier).map(safeRu),
       ...buildQuestions(baseProfile, rules),
     ],
-    12,
-  ).slice(0, 10);
+    14,
+  );
+  // Universal completeness guarantee (any product): packaging dimensions + weight
+  // are always needed to price cargo. If the LLM/rules never asked for them, add
+  // the ask so it isn't squeezed out of the capped list.
+  if (!mustAskSupplierAll.some((q) => /габарит[а-яё]*\s+(?:индивидуальн|упаков)|размер[а-яё]*\s+упаков/i.test(q)))
+    mustAskSupplierAll.push(
+      "Укажите вес и габариты индивидуальной упаковки (длина × ширина × высота).",
+    );
+  const mustAskSupplier = uniq(mustAskSupplierAll, 12).slice(0, 10);
   const images = collectProductIntelligenceImages(product, 3);
   const supplierRaw =
     product?.supplierType ??
@@ -3242,8 +3283,8 @@ function safeSeoTitle(title: string, kind: ProductKind): string {
     )
     .replace(/\s{2,}/g, " ")
     .trim();
-  for (const claim of DANGEROUS_CLAIMS)
-    out = out.replace(new RegExp(escapeRegExp(claim), "gi"), "").trim();
+  for (const re of DANGEROUS_CLAIM_RES)
+    out = out.replace(new RegExp(re.source, "gi"), "").trim();
   if (kind === "dish_rack" || kind === "kitchen_storage_rack")
     return "Сушилка для посуды настольная многоярусная";
   if (/балаклав|подшлемник/i.test(out))
@@ -3258,10 +3299,23 @@ function safeSeoTitle(title: string, kind: ProductKind): string {
   );
 }
 
+// Build a stem-tolerant matcher for a claim phrase. Russian is inflected, so a
+// literal "профессиональный" fails to catch "профессиональных поваров" /
+// "профессиональной кухни" — the exact leak that let forbidden claims through
+// the SEO guard. We stem each adjectival word to its root and allow any ending.
+function claimToRegex(claim: string): RegExp {
+  const parts = claim
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => {
+      const m = w.match(/^([а-яё]{5,})(ый|ий|ой|ая|яя|ое|ее|ые|ие)$/);
+      return m ? `${escapeRegExp(m[1])}[а-яё]*` : escapeRegExp(w);
+    });
+  return new RegExp(parts.join("\\s+"), "i");
+}
+const DANGEROUS_CLAIM_RES = DANGEROUS_CLAIMS.map(claimToRegex);
 function dangerousClaims(text: string): string[] {
-  return DANGEROUS_CLAIMS.filter((c) =>
-    new RegExp(escapeRegExp(c), "i").test(text),
-  );
+  return DANGEROUS_CLAIMS.filter((_c, i) => DANGEROUS_CLAIM_RES[i].test(text));
 }
 function pluralRu(n: number, one: string, few: string, many: string): string {
   const v = Math.abs(n) % 100;
@@ -3929,7 +3983,18 @@ export function buildSeoDraftFromProfile(
         value = "уточнить";
         status = "подтвердить";
       }
-      return { name: clean(c.name), value, status };
+      const name = clean(c.name);
+      // A "Цвет" whose value is a long marketing phrase / bracketed SKU title
+      // ("Домашний нож для нарезки овощей [острый и прочный]") is not a colour —
+      // the LLM mapped a variant title into the colour slot. Category-agnostic:
+      // a real colour value is short and bracket-free.
+      const looksLikeTitle =
+        /[\[\]]/.test(value) || value.split(/\s+/).filter(Boolean).length > 3;
+      if (/^цвет/i.test(name) && looksLikeTitle) {
+        value = "уточнить";
+        status = "подтвердить";
+      }
+      return { name, value, status };
     })
     .filter(
       (c) =>
