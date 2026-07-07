@@ -3914,13 +3914,17 @@ export function buildSeoDraftFromProfile(
       // A value that is empty or just a bare unit/symbol ("см", "°", "мм")
       // carries no real info — the LLM left it blank. Show "уточнить" instead of
       // a dangling unit like "Длина лезвия | см".
+      const hasDigit = /\d/.test(value);
       if (
         !value ||
         value.length < 2 ||
         /^(?:см|мм|м|кг|г|мл|л|вт|в|°|шт|hrc)\.?$/i.test(value) ||
         // Hedged/estimated numbers ("более 60°", "около 5 см", "примерно") are
         // guesses the LLM invented — not a confirmed fact from the card.
-        /^(?:более|около|примерно|приблизительно|порядка|~|до|от)\s*\d/i.test(value)
+        /^(?:более|около|примерно|приблизительно|порядка|~|до|от)\s*\d/i.test(value) ||
+        // A bare unit/symbol with NO number at all ("° и более", "см", "мм ×") is
+        // meaningless — the model left the number out.
+        (/[°]|\b(?:см|мм|кг|мл|hrc)\b/i.test(value) && !hasDigit)
       ) {
         value = "уточнить";
         status = "подтвердить";

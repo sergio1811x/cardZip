@@ -328,12 +328,18 @@ export function validateProcurementResult(
       }
     }
 
-    // Duplicate material: two material labels in the same blob, OR a Cyrillic
-    // material value alongside a Han material value.
-    if (/Материал[:\s][^\n]*\n?[^\n]*Материал[:\s]/i.test(blob.text)) {
-      const materialLines = lines.filter((l) => /материал[:\s|]/i.test(l));
-      const hasCyr = materialLines.some((l) => /материал[:\s|].*[А-Яа-яЁё]/i.test(l));
-      const hasHan = materialLines.some((l) => /материал[:\s|].*[一-鿿]/i.test(l));
+    // Duplicate material: two material DECLARATIONS in the same blob with
+    // different values, OR a Cyrillic material value alongside a Han one.
+    // A declaration is a material LABEL followed by a value: "Материал: сталь"
+    // or a table row "| Материал | сталь |". Material QUESTIONS/requests
+    // ("Материал рукоятки", "Материал и толщина лезвия — уточнить") assert no
+    // value and must NOT count — otherwise every distinctly-phrased material
+    // question in a cargo/buyer bullet list looks like a conflicting value.
+    const materialDeclRe = /материал[а-яё\s]*[:|]\s*\S/i;
+    const materialLines = lines.filter((l) => materialDeclRe.test(l));
+    if (materialLines.length >= 2) {
+      const hasCyr = materialLines.some((l) => /материал[а-яё\s]*[:|]\s*[^|]*[А-Яа-яЁё]/i.test(l));
+      const hasHan = materialLines.some((l) => /материал[а-яё\s]*[:|].*[一-鿿]/i.test(l));
       // Normalize the material value to its CORE before comparing: the same
       // material legitimately appears in the description, a bullet and the
       // characteristics table with different trailing context ("— подтвердите",
@@ -430,12 +436,19 @@ export function validateProcurementResult(
     if (isRiskOrChecklist && bulletLines.length >= 2) {
       const bulletText = (l: string): string =>
         l.replace(/^(\d+[.)]|[•\-*])\s*/, "").trim();
+      // A legitimately short checklist item ("длина стельки", "запах EVA") is
+      // NOT a defect — checklists are naturally terse. Only flag a fragment
+      // that looks TRUNCATED: ends with a dangling comma, or with a trailing
+      // preposition/conjunction that leaves the thought incomplete.
+      const danglingTailRe =
+        /(?:,$|(?:^|\s)(?:и|или|а|но|с|со|для|от|до|из|на|в|во|по|про|при|под|над|без|о|об)\.?$)/i;
       const isBareFragment = (t: string): boolean => {
         if (!t) return false;
         if (/[.!?:;…]$/.test(t)) return false; // has ending punctuation
         if (t !== t.toLowerCase()) return false; // has an uppercase char
         const words = t.split(/\s+/).filter(Boolean);
-        return words.length >= 1 && words.length <= 3;
+        if (words.length < 1 || words.length > 3) return false;
+        return danglingTailRe.test(t);
       };
       const isFullSentence = (t: string): boolean => {
         const words = t.split(/\s+/).filter(Boolean);
