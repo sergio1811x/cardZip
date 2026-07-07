@@ -3,7 +3,7 @@ import type { QaResult } from '../types';
 import { AutoFixResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const FIX_MODELS = [
-  'stepfun/step-3.7-flash',
+  'google/gemini-3.1-flash-lite',
   'openai/gpt-5-mini',
   'qwen/qwen3-235b-a22b',
 ];

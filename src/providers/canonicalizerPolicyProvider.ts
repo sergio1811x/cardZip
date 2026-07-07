@@ -2,7 +2,7 @@ import type { RawProductForCanonicalizer } from './productCanonicalizer';
 import { buildCanonicalizerPolicyInput } from './canonicalizerPolicyBuilder';
 
 const POLICY_MODELS = [
-  'stepfun/step-3.7-flash',
+  'google/gemini-3.1-flash-lite',
   'openai/gpt-5-mini',
   'qwen/qwen3-235b-a22b',
 ];

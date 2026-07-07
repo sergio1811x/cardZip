@@ -4,7 +4,7 @@ import { ConsistencyAuditResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const CONSISTENCY_AUDIT_MODELS = [
   'openai/gpt-5-mini',
-  'stepfun/step-3.7-flash',
+  'google/gemini-3.1-flash-lite',
   'qwen/qwen3-235b-a22b',
 ];
 
