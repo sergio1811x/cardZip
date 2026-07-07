@@ -236,9 +236,11 @@ export function normalizeCnText(text: string): string {
   for (const [cn, ru] of entries) {
     result = result.split(cn).join(` ${ru} `);
   }
-  // Preserve `\n`: collapse only spaces/tabs so multi-line input survives; cap blank runs.
+  // Strip only FULL-WIDTH CJK brackets — ASCII "(...)" is legitimate in Russian
+  // text ("(например, 3Cr13MoV)") and must survive so supplier questions read
+  // cleanly. Empty parens left after CJK removal are cleaned in normalizeMixedProductText.
   return result
-    .replace(/[【】（）()]/g, " ")
+    .replace(/[【】（）]/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -249,6 +251,9 @@ export function normalizeMixedProductText(input: unknown): string {
   // Preserve `\n`: collapse only spaces/tabs so multi-line input survives; cap blank runs.
   text = text
     .replace(/[一-鿿]+/g, " ")
+    // Drop parens that became empty after CJK removal ("( )", "(, )") — but keep
+    // parens that still hold Russian/latin content.
+    .replace(/\(\s*[,;:.\s]*\)/g, " ")
     .replace(/[ \t]+([,.;:!?])/g, "$1")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")

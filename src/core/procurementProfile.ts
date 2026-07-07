@@ -4082,7 +4082,7 @@ export function buildSeoDraftFromProfile(
   // — that is not a selling point and lives in "Что уточнить".
   // Don't top up with a material bullet if the LLM bullets already cover material
   // (avoids "Материал лезвия: …" + "Материал: …" appearing as two bullets).
-  const llmCoversMaterial = llmBullets.some((b) => /^материал|материал[аеуы]?\b/i.test(b));
+  const llmCoversMaterial = llmBullets.some((b) => /материал|сталь|нержавею/i.test(b));
   const honestBulletPool = uniq(
     [
       p.identity.useCases.length
