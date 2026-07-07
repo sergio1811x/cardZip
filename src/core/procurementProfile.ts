@@ -3984,7 +3984,15 @@ export function buildSeoDraftFromProfile(
   // Internal advice ("SKU в карточке: N", "проверьте образец") is NOT a selling
   // point and belongs to "Что уточнить", not here.
   const objectForBullet = p.identity.shortTitle || p.identity.coreObject || title;
-  const llmBullets = filterDangerousBullets(p.content.seoBullets ?? [], p);
+  // Prefer the LLM writer's prose (description + bullets) when it produced a
+  // validated one — it has stronger anti-water / anti-invented-number control
+  // than the generic seoCard generator.
+  const prose = product?.polishedDocs?.seoProse as
+    | { description?: string; bullets?: string[] }
+    | undefined;
+  const bulletSource =
+    prose?.bullets?.length ? prose.bullets : p.content.seoBullets ?? [];
+  const llmBullets = filterDangerousBullets(bulletSource, p);
   // Product-specific selling points come from the LLM (p.content.seoBullets).
   // When the LLM gave nothing, the deterministic floor is HONEST-GENERIC: it states
   // only what we actually know from the LLM-extracted identity (object, use cases,
@@ -4087,7 +4095,7 @@ export function buildSeoDraftFromProfile(
     title,
     "",
     "## Описание",
-    seoDescription(p, title),
+    seoDescription(p, title, prose?.description),
     "",
     "## Буллеты",
     ...bullets.map((b, i) => `${i + 1}. ${b}`),
@@ -4125,14 +4133,18 @@ export function buildSeoDraftFromProfile(
 const SEO_DISCLAIMER =
   "Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.";
 
-function seoDescription(p: ProductProcurementProfile, title: string): string {
-  // Prefer a real benefit-driven paragraph from the LLM canonicalizer. It must be
-  // a proper sentence (>= ~40 chars, not a bare noun), pass the dangerous-claim
-  // filter, and always carries the disclaimer as a separate trailing sentence.
+function seoDescription(
+  p: ProductProcurementProfile,
+  title: string,
+  proseDescription?: string,
+): string {
+  // Prefer the LLM writer's prose description; else the seoCard generator's.
   // Salvage the factual sentences from the LLM paragraph, dropping puffery and
   // dangerous-claim sentences rather than discarding the whole thing. Only if
   // enough concrete text survives do we use it; else fall to the honest floor.
-  const llm = stripPufferySentences((p.content.seoDescription ?? "").trim());
+  const llm = stripPufferySentences(
+    (proseDescription || p.content.seoDescription || "").trim(),
+  );
   if (llm.length >= 40) {
     const base = /[.!?]$/.test(llm) ? llm : `${llm}.`;
     return `${base} ${SEO_DISCLAIMER}`;
@@ -4179,13 +4191,26 @@ function fixGluedFallback(s: string): string {
   );
 }
 
+// A number followed by a physical unit — an SEO bullet must not assert these
+// (length/angle/hardness/weight/power). On 1688 they're almost never confirmed
+// and belong in the characteristics table, not marketing copy. Counts ("3 режима",
+// "5 шт") have no physical unit and are allowed.
+const BULLET_MEASUREMENT_RE =
+  /\d+(?:[.,]\d+)?\s*(?:см|мм|м\b|кг|г\b|мл|л\b|°|градус|hrc|вт|ватт|в\b|вольт|дюйм)/i;
+
 function filterDangerousBullets(
   bullets: string[],
   _p: ProductProcurementProfile,
 ): string[] {
   return bullets
     .map((b) => fixGluedFallback(clean(b)))
-    .filter((b) => b && !dangerousClaims(b).length && !hasPuffery(b));
+    .filter(
+      (b) =>
+        b &&
+        !dangerousClaims(b).length &&
+        !hasPuffery(b) &&
+        !BULLET_MEASUREMENT_RE.test(b),
+    );
 }
 
 function filterDangerousList(

@@ -10,7 +10,7 @@ import { generateSupplierQuestions, type GeneratorInput } from './src/providers/
 import { generateSeoCard } from './src/providers/seoCardGenerator';
 import { generateCargoBrief } from './src/providers/cargoBriefGenerator';
 import { buildProductProcurementProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile } from './src/core/procurementProfile';
-import { writeDocument, type DocWriterInput } from './src/providers/documentWriter';
+import { writeDocument, writeSeoProse, type DocWriterInput } from './src/providers/documentWriter';
 import { translateQuestionsToCn } from './src/core/cnTranslate';
 import { rankCandidates } from './src/core/wbSimilarity';
 import { filterWbData } from './src/core/wbFilter';
@@ -442,23 +442,40 @@ export async function continuePipeline(jobId: string) {
         mustCheckBeforeSample: profile.procurement.mustCheckBeforeSample ?? [],
         mustCheckOnSample: profile.procurement.mustCheckOnSample ?? [],
         redFlags: profile.procurement.redFlags ?? [],
+        cargoMustAsk: profile.cargo.mustAsk ?? [],
         cargoWhatToRequest: profile.cargo.whatToRequest ?? [],
         cargoConsiderations: profile.cargo.likelySensitiveCargoIssues ?? [],
       };
       const forbidden = profile.content.seoForbiddenClaims ?? [];
       const cargoDraft = buildCargoBriefFromProfile(product, { sourceUrl: job.input_url });
       const checklistDraft = buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url });
-      const [cargoMd, checklistMd] = await Promise.all([
+      // Confirmed attributes = raw card attributes with a concrete value (used to
+      // gate invented numbers in SEO bullets).
+      const confirmedAttributes = (Array.isArray(raw.attributes) ? raw.attributes : [])
+        .map((a: any) => ({ name: String(a?.name ?? '').trim(), value: String(a?.value ?? '').trim() }))
+        .filter((a: any) => a.name && a.value)
+        .slice(0, 30);
+      const [cargoMd, checklistMd, seoProse] = await Promise.all([
         writeDocument({ ...base, docType: 'cargo', draftMd: cargoDraft }, forbidden).catch(() => null),
         writeDocument({ ...base, docType: 'checklist', draftMd: checklistDraft }, forbidden).catch(() => null),
+        writeSeoProse({
+          titleRu: profile.identity.titleForSeo || profile.identity.titleForReport,
+          coreObject: profile.identity.coreObject,
+          categoryType: profile.identity.categoryType,
+          useCases: profile.identity.useCases ?? [],
+          materials: profile.identity.materials ?? [],
+          confirmedAttributes,
+          forbidden,
+        }).catch(() => null),
       ]);
-      if (cargoMd || checklistMd) {
+      if (cargoMd || checklistMd || seoProse) {
         product.polishedDocs = {
           ...(cargoMd ? { cargo: cargoMd } : {}),
           ...(checklistMd ? { checklist: checklistMd } : {}),
+          ...(seoProse ? { seoProse } : {}),
         };
       }
-      console.log(`[doc-writer] cargo:${cargoMd ? 'ok' : 'floor'} checklist:${checklistMd ? 'ok' : 'floor'}`);
+      console.log(`[doc-writer] cargo:${cargoMd ? 'ok' : 'floor'} checklist:${checklistMd ? 'ok' : 'floor'} seoProse:${seoProse ? 'ok' : 'floor'}`);
     } catch (e: any) {
       console.error('[doc-writer] failed:', e?.message);
     }

@@ -41,6 +41,10 @@ export interface DocWriterInput {
   mustCheckBeforeSample: string[];
   mustCheckOnSample: string[];
   redFlags: string[];
+  // Cargo material is LOGISTICS-only (weight/packaging/shipping) — NOT the product
+  // supplier questions (HRC, blade angle, mount type), which do not belong in a
+  // cargo brief.
+  cargoMustAsk: string[];
   cargoWhatToRequest: string[];
   cargoConsiderations: string[];
   // The deterministic template output — the guaranteed-safe reference draft.
@@ -100,8 +104,6 @@ function factSheet(input: DocWriterInput): string {
   if (input.selectedSku) lines.push(`SKU: ${input.selectedSku}`);
   if (input.priceText) lines.push(`Цена: ${input.priceText}`);
   if (input.supplierType) lines.push(`Поставщик: ${input.supplierType}`);
-  if (input.cargoNature && input.cargoNature !== "none")
-    lines.push(`Характер груза: ${input.cargoNature}`);
   lines.push(`Вес известен: ${input.weightKnown ? "да" : "нет"}`);
   lines.push(`Габариты известны: ${input.dimsKnown ? "да" : "нет"}`);
   return lines.join("\n");
@@ -110,8 +112,8 @@ function factSheet(input: DocWriterInput): string {
 function materialLists(input: DocWriterInput): string {
   if (input.docType === "cargo") {
     return [
-      "Что запросить у поставщика/карго (сырьё, переработай и приоритизируй):",
-      bullets([...input.cargoWhatToRequest, ...input.mustAskSupplier], 20),
+      "Что запросить для ДОСТАВКИ (только логистика: вес/габариты/упаковка/перевозка/таможня — сырьё, переработай и приоритизируй):",
+      bullets([...input.cargoWhatToRequest, ...input.cargoMustAsk], 16),
       "",
       "Особенности груза (сырьё):",
       bullets(input.cargoConsiderations, 12) || "- (нет)",
@@ -141,7 +143,7 @@ function buildPrompt(input: DocWriterInput): string {
 
   const docGoal =
     input.docType === "cargo"
-      ? `Это ТЗ для карго-агента (доставка из Китая). Задача — что уточнить/запросить и на что обратить внимание при перевозке ИМЕННО этого товара.`
+      ? `Это ТЗ для карго-агента (доставка из Китая). Задача — ТОЛЬКО логистика: вес, габариты, упаковка, защита при перевозке, ограничения и таможенные требования. В карго-документе НЕ должно быть вопросов о характеристиках товара (твёрдость стали, угол/тип заточки, марка материала, тип монтажа рукояти, мощность и т.п.) — это вопросы поставщику, не карго. Не выводи английские коды характера груза — пиши по-русски («острый/режущий предмет»).`
       : `Это чек-лист для проверки образца перед закупкой партии. Задача — что подтвердить до заказа, что проверить и измерить на образце, какие фото сделать, красные флаги.`;
 
   return `${docGoal}
@@ -207,6 +209,201 @@ export function validateWrittenDoc(
   if (/undefined|null\b|NaN|file:\/\/|\bseller\b|\bfactory\b/i.test(text))
     return false;
   return true;
+}
+
+// ─── SEO prose writer ───────────────────────────────────────────────────────
+// Writes ONLY the prose parts of the SEO card (description + 5 bullets). The
+// characteristics table and keywords stay deterministic (they must never carry
+// invented numbers). This is the "SEO через писатель" path — stronger anti-water
+// / anti-invented-number control than the generic seoCard generator.
+
+export interface SeoProseInput {
+  titleRu: string;
+  coreObject: string;
+  categoryType?: string;
+  useCases: string[];
+  materials: string[]; // declared (unconfirmed) materials
+  // Only values we can actually back as facts (attribute name→value the card had).
+  confirmedAttributes: Array<{ name: string; value: string }>;
+  forbidden: string[];
+}
+
+export interface SeoProseResult {
+  description: string;
+  bullets: string[];
+}
+
+// Numeric-measurement pattern: a number followed by a physical unit. SEO bullets
+// must not assert these unless the exact value is a confirmed attribute — on 1688
+// dimensions/angles/hardness are almost never reliable, and they belong in the
+// characteristics table, not in marketing bullets.
+const MEASUREMENT_RE =
+  /\d+(?:[.,]\d+)?\s*(?:см|мм|м\b|кг|г\b|мл|л\b|°|градус|hrc|вт|ватт|в\b|вольт|дюйм|")/i;
+
+function bulletHasUnbackedNumber(
+  bullet: string,
+  confirmed: Array<{ name: string; value: string }>,
+): boolean {
+  if (!MEASUREMENT_RE.test(bullet)) return false;
+  // Keep the bullet only if every number in it appears in a confirmed attribute.
+  const nums = bullet.match(/\d+(?:[.,]\d+)?/g) ?? [];
+  const confirmedText = confirmed.map((a) => a.value).join(" ").toLowerCase();
+  return !nums.every((n) => confirmedText.includes(n.toLowerCase()));
+}
+
+const SEO_PROSE_SYSTEM =
+  "Ты — SEO-редактор карточек WB/Ozon. Отвечаешь ТОЛЬКО валидным JSON-объектом, без markdown и пояснений.";
+
+function buildSeoProsePrompt(input: SeoProseInput): string {
+  const facts = [
+    `Товар: ${input.titleRu}`,
+    `Тип: ${input.coreObject}`,
+    input.categoryType ? `Категория: ${input.categoryType}` : "",
+    input.useCases.length ? `Применение: ${input.useCases.join(", ")}` : "",
+    input.materials.length
+      ? `Материалы (заявлено, не подтверждено): ${input.materials.join(", ")}`
+      : "",
+    input.confirmedAttributes.length
+      ? `Подтверждённые атрибуты: ${input.confirmedAttributes
+          .map((a) => `${a.name}: ${a.value}`)
+          .join(" | ")}`
+      : "Подтверждённых числовых характеристик нет.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return `Напиши прозу для SEO-карточки ЭТОГО товара.
+
+ЖЁСТКИЕ ПРАВИЛА:
+- description: 2–3 предложения. Конкретно: что это, для чего, из чего (материал как заявленный). БЕЗ оценочной воды («высококачественный», «эффективный», «идеальный», «прочный», «долговечный», «надёжный», «обеспечивает», «гарантирует», «профессиональный»).
+- bullets: РОВНО 5 буллетов. Конкретика и применение для ПОКУПАТЕЛЯ (что делает, из чего, форм-фактор, уход). НЕ рекламная вода, НЕ «уточните у поставщика», НЕ «SKU в карточке».
+- КАТЕГОРИЧЕСКИ НЕ придумывай числа: длину, ширину, толщину, угол заточки, HRC, вес, размеры, мощность. Если точного числа нет в «Подтверждённых атрибутах» — НЕ пиши его вообще. Лучше без числа, чем выдуманное.
+- Без китайского, без «товар» как заглушки.
+
+ФАКТЫ:
+${facts}
+
+Верни строго JSON:
+{"description":"...","bullets":["...","...","...","...","..."]}`;
+}
+
+function cleanProseLine(v: unknown): string {
+  return String(v ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/^[-•*\d.)\s]+/, "")
+    .trim();
+}
+
+export async function writeSeoProse(
+  input: SeoProseInput,
+): Promise<SeoProseResult | null> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return null;
+  const prompt = buildSeoProsePrompt(input);
+  const timeoutMs = getNumberEnv("DOC_WRITER_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+  const maxTokens = getNumberEnv("SEO_PROSE_MAX_TOKENS", 1500);
+
+  for (const model of MODELS) {
+    try {
+      const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer":
+            process.env.OPENROUTER_HTTP_REFERER ??
+            "https://github.com/sergio1811x/cardZip",
+          "X-Title": process.env.OPENROUTER_X_TITLE ?? "cardZip",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          temperature: 0.25,
+          messages: [
+            { role: "system", content: SEO_PROSE_SYSTEM },
+            { role: "user", content: prompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        console.warn(`[seoProse] ${model} HTTP ${res.status}`);
+        continue;
+      }
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const raw = data.choices?.[0]?.message?.content ?? "";
+      const jsonStr = extractJsonObject(raw);
+      if (!jsonStr) {
+        console.warn(`[seoProse] ${model} invalid JSON`);
+        continue;
+      }
+      const obj = JSON.parse(jsonStr) as Record<string, unknown>;
+      const description = cleanProseLine(obj.description);
+      let bullets = Array.isArray(obj.bullets)
+        ? obj.bullets.map(cleanProseLine).filter(Boolean)
+        : [];
+      // Drop any bullet asserting an unbacked measurement number.
+      bullets = bullets.filter(
+        (b) => !bulletHasUnbackedNumber(b, input.confirmedAttributes),
+      );
+      // Validate: real description, no CJK, no dangerous/forbidden/puffery.
+      const joined = `${description} ${bullets.join(" ")}`;
+      const forbiddenHit = input.forbidden.some(
+        (f) => f && joined.toLowerCase().includes(f.toLowerCase()),
+      );
+      if (
+        description.length < 40 ||
+        description.length > 600 ||
+        bullets.length < 3 ||
+        /[㐀-鿿぀-ヿ]/.test(joined) ||
+        textHasDangerousClaim(joined) ||
+        forbiddenHit
+      ) {
+        console.warn(`[seoProse] ${model} failed validation`);
+        continue;
+      }
+      console.log(`[seoProse] ok via ${model} (${bullets.length} bullets)`);
+      return { description, bullets: bullets.slice(0, 5) };
+    } catch (error) {
+      console.warn(
+        `[seoProse] ${model} failed:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+  return null;
+}
+
+// Reuse the object extractor for the SEO prose parser.
+function extractJsonObject(raw: string): string | null {
+  const cleaned = stripFences(raw);
+  const firstBrace = cleaned.indexOf("{");
+  if (firstBrace === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = firstBrace; i < cleaned.length; i += 1) {
+    const char = cleaned[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) return cleaned.slice(firstBrace, i + 1);
+  }
+  return null;
 }
 
 async function callModel(
