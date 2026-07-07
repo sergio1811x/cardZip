@@ -3719,7 +3719,7 @@ export async function translateSupplierQuestionsRuToCn(
       body: JSON.stringify({
         model:
           g.process?.env?.CARDZIP_CN_TRANSLATOR_MODEL ||
-          "google/gemini-2.5-flash",
+          "deepseek/deepseek-v4-pro",
         max_tokens: 1200,
         temperature: 0,
         messages: [

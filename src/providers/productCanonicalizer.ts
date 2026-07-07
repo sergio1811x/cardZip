@@ -83,14 +83,15 @@ export type CanonicalizerModelResult = Partial<ProductContext> & {
 // Ведущей должна быть быстрая vision-модель — gemini-3.1-flash-lite (~20с на Railway),
 // gemini-2.5-flash как проверенный backup.
 const DEFAULT_VISION_MODELS = [
+  "openai/gpt-5.4-mini",
   "google/gemini-3.1-flash-lite",
   "google/gemini-2.5-flash",
 ];
 
 const DEFAULT_TEXT_MODELS = [
+  "deepseek/deepseek-v4-pro",
   "google/gemini-3.1-flash-lite",
   "google/gemini-2.5-flash",
-  "deepseek/deepseek-v4-flash",
 ];
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";

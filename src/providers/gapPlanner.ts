@@ -3,9 +3,9 @@ import type { GapPlannerResult } from '../types';
 import { GapPlannerResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const GAP_PLANNER_MODELS = [
+  'deepseek/deepseek-v4-pro',
   'google/gemini-3.1-flash-lite',
   'openai/gpt-5-mini',
-  'qwen/qwen3-235b-a22b',
 ];
 
 const GAP_PLANNER_PROMPT = `CardZip Gap Planner.

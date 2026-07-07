@@ -1,7 +1,7 @@
 import type { ProductContext, AiContentResult } from '../types';
 
 const SYNTHESIS_MODELS = [
-  'deepseek/deepseek-v4-flash',
+  'deepseek/deepseek-v4-pro',
   'google/gemini-3.1-flash-lite',
 ];
 

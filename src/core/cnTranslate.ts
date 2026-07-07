@@ -1,10 +1,10 @@
 // ─── CN→RU translation for SKU names, colors, sizes ────────────────────────
 
-// Translation model chain: gemini-3.1-flash-lite first, gemini-2.5-flash as the
-// proven fallback. Overridable via CN_TRANSLATE_MODELS.
+// Translation model chain: deepseek-v4-pro first (strong Chinese), gemini flash
+// as the proven fallback. Overridable via CN_TRANSLATE_MODELS.
 const CN_TRANSLATE_MODELS: string[] = (process.env.CN_TRANSLATE_MODELS
   ? process.env.CN_TRANSLATE_MODELS.split(',').map((s) => s.trim()).filter(Boolean)
-  : ['google/gemini-3.1-flash-lite', 'google/gemini-2.5-flash']);
+  : ['deepseek/deepseek-v4-pro', 'google/gemini-3.1-flash-lite', 'google/gemini-2.5-flash']);
 
 const CN_COLORS: Record<string, string> = {
   '黑色': 'чёрный', '白色': 'белый', '红色': 'красный', '蓝色': 'синий',

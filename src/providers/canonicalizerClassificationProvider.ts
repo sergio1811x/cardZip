@@ -2,9 +2,9 @@ import type { RawProductForCanonicalizer } from './productCanonicalizer';
 import { buildCanonicalizerClassificationInput } from './canonicalizerClassifier';
 
 const CLASSIFIER_MODELS = [
+  'deepseek/deepseek-v4-pro',
   'google/gemini-3.1-flash-lite',
   'openai/gpt-5-mini',
-  'qwen/qwen3-235b-a22b',
 ];
 
 export interface CanonicalizerClassificationLlmResult {

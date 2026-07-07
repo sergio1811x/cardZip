@@ -75,9 +75,9 @@ export interface FullProductAnalysis {
 // ─── LLM Call with Fallback ──────────────────────────────────────────────────
 
 const SEARCH_MODELS = [
+  'deepseek/deepseek-v4-pro',
   'google/gemini-3.1-flash-lite',
   'google/gemini-2.5-flash',
-  'deepseek/deepseek-v4-flash',
   'meta-llama/llama-4-scout',
 ];
 
@@ -341,8 +341,9 @@ ${info}`;
 
 // ─── Product Intelligence ───────────────────────────────────────────────────
 
-// Vision on the critical path — gemini-3.1-flash-lite first, gemini-2.5-flash backup.
+// Vision on the critical path — gpt-5.4-mini first, gemini flash backups.
 const VISION_MODELS = [
+  'openai/gpt-5.4-mini',
   'google/gemini-3.1-flash-lite',
   'google/gemini-2.5-flash',
 ];

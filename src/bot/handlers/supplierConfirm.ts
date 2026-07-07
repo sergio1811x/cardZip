@@ -291,6 +291,7 @@ interface ExtractedData {
 }
 
 const EXTRACT_MODELS = [
+  { base: 'https://openrouter.ai/api/v1', model: 'deepseek/deepseek-v4-pro', key: 'OPENROUTER_API_KEY' },
   { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-3.1-flash-lite', key: 'OPENROUTER_API_KEY' },
   { base: 'https://openrouter.ai/api/v1', model: 'google/gemini-2.5-flash', key: 'OPENROUTER_API_KEY' },
   { base: 'https://openrouter.ai/api/v1', model: 'meta-llama/llama-4-scout', key: 'OPENROUTER_API_KEY' },
