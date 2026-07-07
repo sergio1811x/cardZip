@@ -2,7 +2,7 @@ import type { RawProductForCanonicalizer } from './productCanonicalizer';
 import { buildCanonicalizerClassificationInput } from './canonicalizerClassifier';
 
 const CLASSIFIER_MODELS = [
-  'google/gemini-2.5-flash',
+  'qwen/qwen3.6-flash',
   'openai/gpt-5-mini',
   'qwen/qwen3-235b-a22b',
 ];

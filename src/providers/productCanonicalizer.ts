@@ -82,12 +82,12 @@ export type CanonicalizerModelResult = Partial<ProductContext> & {
 // электрика/вилки). Ведущая модель должна быть сильной по vision+reasoning,
 // дальше идут быстрые дешёвые модели как fallback.
 const DEFAULT_VISION_MODELS = [
-  "google/gemini-2.5-flash",
+  "qwen/qwen3.6-flash",
   "google/gemini-2.5-flash",
 ];
 
 const DEFAULT_TEXT_MODELS = [
-  "google/gemini-2.5-flash",
+  "qwen/qwen3.6-flash",
   "google/gemini-2.5-flash",
   "deepseek/deepseek-v4-flash",
 ];
