@@ -3962,6 +3962,72 @@ export function buildSampleChecklistFromProfile(
   ].join("\n");
 }
 
+// Vague, non-informative characteristic values that add nothing to a WB card
+// ("Стиль: новый китайский", "классический дизайн"). Category-agnostic: these are
+// marketing/style descriptors, not buyer-useful specs.
+const VAGUE_CHAR_VALUE_RE =
+  /^(?:нов(?:ый|ое)\s+китайск|классическ|современн|модн|стильн|трендов|универсальн|обычн|стандартн)/i;
+
+// Restore a steel/alloy grade that the LLM truncated ("Cr13" → "3Cr13") using the
+// full grade found in the product materials. Generic for N-prefixed alloy codes.
+function restoreAlloyGrade(value: string, p: ProductProcurementProfile): string {
+  const m = value.match(/(?<![0-9A-Za-z])(Cr\d{2,3}[A-Za-z]?)/i);
+  if (!m) return value;
+  const full = p.identity.materials
+    .join(" ")
+    .match(/(\d(?:Cr\d{2,3}[A-Za-z]?))/i);
+  if (full && full[1].toLowerCase().endsWith(m[1].toLowerCase())) {
+    return value.replace(m[1], full[1]);
+  }
+  return value;
+}
+
+export function sanitizeSeoChars(
+  raw: Array<{ name?: unknown; value?: unknown; status?: unknown }>,
+  p: ProductProcurementProfile,
+): Array<{ name: string; value: string; status: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ name: string; value: string; status: string }> = [];
+  for (const c of raw) {
+    let value = fixGluedFallback(clean(c.value));
+    let status = clean(c.status) || "подтвердить у поставщика";
+    const name = clean(c.name);
+    if (!name) continue;
+    // Drop vague style/marketing rows entirely — they are card noise.
+    if (VAGUE_CHAR_VALUE_RE.test(value)) continue;
+    const hasDigit = /\d/.test(value);
+    if (
+      !value ||
+      value.length < 2 ||
+      /^(?:см|мм|м|кг|г|мл|л|вт|в|°|шт|hrc)\.?$/i.test(value) ||
+      /^(?:более|около|примерно|приблизительно|порядка|~|до|от)\s*\d/i.test(value) ||
+      (/[°]|\b(?:см|мм|кг|мл|hrc)\b/i.test(value) && !hasDigit)
+    ) {
+      value = "уточнить";
+      status = "подтвердить";
+    } else {
+      // Restore truncated alloy grade (Cr13 → 3Cr13) for consistency with the
+      // description/material.
+      value = restoreAlloyGrade(value, p);
+    }
+    // A "Цвет" whose value is a long marketing phrase / bracketed SKU title is
+    // not a colour — the LLM mapped a variant title into the colour slot.
+    const looksLikeTitle =
+      /[\[\]]/.test(value) || value.split(/\s+/).filter(Boolean).length > 3;
+    if (/^цвет/i.test(name) && looksLikeTitle) {
+      value = "уточнить";
+      status = "подтвердить";
+    }
+    if (dangerousClaims(`${name} ${value}`).length) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, value, status });
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 export function buildSeoDraftFromProfile(
   product: any,
   opts: { sourceUrl?: string } = {},
@@ -3988,7 +4054,11 @@ export function buildSeoDraftFromProfile(
   // validated one — it has stronger anti-water / anti-invented-number control
   // than the generic seoCard generator.
   const prose = product?.polishedDocs?.seoProse as
-    | { description?: string; bullets?: string[] }
+    | {
+        description?: string;
+        bullets?: string[];
+        characteristics?: Array<{ name: string; value: string; status: string }>;
+      }
     | undefined;
   const bulletSource =
     prose?.bullets?.length ? prose.bullets : p.content.seoBullets ?? [];
@@ -4005,12 +4075,15 @@ export function buildSeoDraftFromProfile(
   // Honest customer-facing pool: only facts from the LLM-extracted identity.
   // NO internal procurement advice ("проверьте образец", "уточните у поставщика")
   // — that is not a selling point and lives in "Что уточнить".
+  // Don't top up with a material bullet if the LLM bullets already cover material
+  // (avoids "Материал лезвия: …" + "Материал: …" appearing as two bullets).
+  const llmCoversMaterial = llmBullets.some((b) => /^материал|материал[аеуы]?\b/i.test(b));
   const honestBulletPool = uniq(
     [
       p.identity.useCases.length
         ? `${objectForBullet} — ${p.identity.useCases.slice(0, 3).join(", ")}`
         : objectForBullet,
-      materialBullet,
+      llmCoversMaterial ? undefined : materialBullet,
       p.sku.colors.length ? `Цвета на выбор: ${p.sku.colors.join(", ")}` : undefined,
       p.sku.normalizedExamples.length > 1 || p.sku.models.length > 1
         ? "Несколько вариантов в карточке — выберите подходящий"
@@ -4024,49 +4097,12 @@ export function buildSeoDraftFromProfile(
   const bullets = uniq([...llmBullets, ...honestBulletPool], 5).slice(0, 5);
   while (bullets.length < 5)
     bullets.push("Универсальный вариант для дома и в подарок");
-  // Prefer LLM-provided characteristics when present (dangerous-claim filtered),
-  // else the deterministic per-kind table.
-  const llmChars = (p.content.seoCharacteristics ?? [])
-    .map((c) => {
-      let value = fixGluedFallback(clean(c.value));
-      let status = clean(c.status) || "подтвердить у поставщика";
-      // A value that is empty or just a bare unit/symbol ("см", "°", "мм")
-      // carries no real info — the LLM left it blank. Show "уточнить" instead of
-      // a dangling unit like "Длина лезвия | см".
-      const hasDigit = /\d/.test(value);
-      if (
-        !value ||
-        value.length < 2 ||
-        /^(?:см|мм|м|кг|г|мл|л|вт|в|°|шт|hrc)\.?$/i.test(value) ||
-        // Hedged/estimated numbers ("более 60°", "около 5 см", "примерно") are
-        // guesses the LLM invented — not a confirmed fact from the card.
-        /^(?:более|около|примерно|приблизительно|порядка|~|до|от)\s*\d/i.test(value) ||
-        // A bare unit/symbol with NO number at all ("° и более", "см", "мм ×") is
-        // meaningless — the model left the number out.
-        (/[°]|\b(?:см|мм|кг|мл|hrc)\b/i.test(value) && !hasDigit)
-      ) {
-        value = "уточнить";
-        status = "подтвердить";
-      }
-      const name = clean(c.name);
-      // A "Цвет" whose value is a long marketing phrase / bracketed SKU title
-      // ("Домашний нож для нарезки овощей [острый и прочный]") is not a colour —
-      // the LLM mapped a variant title into the colour slot. Category-agnostic:
-      // a real colour value is short and bracket-free.
-      const looksLikeTitle =
-        /[\[\]]/.test(value) || value.split(/\s+/).filter(Boolean).length > 3;
-      if (/^цвет/i.test(name) && looksLikeTitle) {
-        value = "уточнить";
-        status = "подтвердить";
-      }
-      return { name, value, status };
-    })
-    .filter(
-      (c) =>
-        c.name &&
-        c.value &&
-        !dangerousClaims(`${c.name} ${c.value}`).length,
-    );
+  // Prefer the writer's characteristics, else the seoCard generator's, else the
+  // deterministic per-kind table. Both LLM sources go through the same sanitizer.
+  const rawChars =
+    (prose?.characteristics?.length ? prose.characteristics : p.content.seoCharacteristics) ??
+    [];
+  const llmChars = sanitizeSeoChars(rawChars, p);
   const characteristics = llmChars.length ? llmChars : seoCharacteristics(p);
 
   // Keywords: prefer LLM deduped set, else a deterministic set (dropping the giant
