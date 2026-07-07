@@ -8,14 +8,16 @@
 import { textHasDangerousClaim } from "../core/procurementProfile";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-// Content writing is a nuance-heavy task. gemini-2.5-flash is the quality/latency
-// sweet spot that actually completes on Railway (pro often times out, deepseek /
-// gpt-5-mini time out entirely). Overridable via env for tuning.
+// Content writing is a nuance-heavy task. Try a stronger model first for copy
+// quality, then fall back to gemini-2.5-flash which reliably completes on Railway
+// so we ALWAYS get output. Fully overridable via DOC_WRITER_MODELS. NOTE: verify
+// exact slugs on the OpenRouter models page — a wrong slug just falls through.
 const DEFAULT_MODELS = [
+  "qwen/qwen3.6-flash",
   "google/gemini-2.5-flash",
   "google/gemini-2.5-flash",
 ];
-const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 3000;
 const DEFAULT_TEMPERATURE = 0.3;
 
