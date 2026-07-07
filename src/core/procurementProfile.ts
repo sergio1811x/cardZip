@@ -3993,6 +3993,11 @@ export function sanitizeSeoChars(
     let status = clean(c.status) || "подтвердить у поставщика";
     const name = clean(c.name);
     if (!name) continue;
+    // GLOBAL PRINCIPLE: 1688 card data is a SELLER CLAIM, not a verified fact.
+    // A value taken "из карточки" must read as declared/unconfirmed — otherwise
+    // the card asserts (e.g.) a steel grade as fact while the questions file
+    // simultaneously asks the supplier to confirm it.
+    if (/из\s*карточк/i.test(status)) status = "заявлено, уточнить";
     // Drop vague style/marketing rows entirely — they are card noise.
     if (VAGUE_CHAR_VALUE_RE.test(value)) continue;
     const hasDigit = /\d/.test(value);
@@ -4166,6 +4171,28 @@ export function buildSeoDraftFromProfile(
   return sanitizeUserFacingText(out);
 }
 
+// Soften bald material assertions into declared form. 1688 card material is a
+// seller claim; a card must not state "изготовлен из нержавеющей стали 3Cr13" as
+// fact while the questions file asks to confirm that very grade. Global,
+// category-agnostic: rewrites the assertion verb, not the material itself.
+function hedgeDeclaredMaterial(text: string): string {
+  if (!text) return text;
+  // Per-sentence: an assertion that OPENS with "изготовлен/выполнен/сделан из …"
+  // is a bald material claim → soften. (\b is unreliable before Cyrillic in JS, so
+  // anchor at sentence start.) Mid-sentence uses are rarer and left intact.
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) =>
+      s.replace(
+        /^(?:изготовлен|выполнен|сделан|произвед[её]н)[а-яё]*\s+из\s+/i,
+        "Заявленный материал — ",
+      ),
+    )
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 const SEO_DISCLAIMER =
   "Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.";
 
@@ -4178,8 +4205,10 @@ function seoDescription(
   // Salvage the factual sentences from the LLM paragraph, dropping puffery and
   // dangerous-claim sentences rather than discarding the whole thing. Only if
   // enough concrete text survives do we use it; else fall to the honest floor.
-  const llm = stripPufferySentences(
-    (proseDescription || p.content.seoDescription || "").trim(),
+  const llm = hedgeDeclaredMaterial(
+    stripPufferySentences(
+      (proseDescription || p.content.seoDescription || "").trim(),
+    ),
   );
   if (llm.length >= 40) {
     const base = /[.!?]$/.test(llm) ? llm : `${llm}.`;
@@ -4239,7 +4268,7 @@ function filterDangerousBullets(
   _p: ProductProcurementProfile,
 ): string[] {
   return bullets
-    .map((b) => fixGluedFallback(clean(b)))
+    .map((b) => hedgeDeclaredMaterial(fixGluedFallback(clean(b))))
     .filter(
       (b) =>
         b &&
