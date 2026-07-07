@@ -2,7 +2,7 @@ import type { ProductContext, AiContentResult } from '../types';
 
 const SYNTHESIS_MODELS = [
   'deepseek/deepseek-v4-flash',
-  'qwen/qwen3.6-flash',
+  'stepfun/step-3.7-flash',
 ];
 
 type MarketInput = {

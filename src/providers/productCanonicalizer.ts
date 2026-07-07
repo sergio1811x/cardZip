@@ -79,15 +79,16 @@ export type CanonicalizerModelResult = Partial<ProductContext> & {
 };
 
 // Канонизатор — самый тяжёлый multimodal reasoning шаг (тип товара, разбор SKU,
-// электрика/вилки). Ведущая модель должна быть сильной по vision+reasoning,
-// дальше идут быстрые дешёвые модели как fallback.
+// электрика/вилки), и он на КРИТИЧЕСКОМ пути (все документы ждут его результата).
+// Ведущей должна быть быстрая vision-модель — gemini-3.1-flash-lite, затем
+// stepfun/step-3.7-flash как backup. (Текстовые параллельные цепочки ведут stepfun.)
 const DEFAULT_VISION_MODELS = [
-  "qwen/qwen3.6-flash",
-  "google/gemini-2.5-flash",
+  "google/gemini-3.1-flash-lite",
+  "stepfun/step-3.7-flash",
 ];
 
 const DEFAULT_TEXT_MODELS = [
-  "qwen/qwen3.6-flash",
+  "stepfun/step-3.7-flash",
   "google/gemini-2.5-flash",
   "deepseek/deepseek-v4-flash",
 ];

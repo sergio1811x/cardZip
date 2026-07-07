@@ -75,7 +75,7 @@ export interface FullProductAnalysis {
 // ─── LLM Call with Fallback ──────────────────────────────────────────────────
 
 const SEARCH_MODELS = [
-  'qwen/qwen3.6-flash',
+  'stepfun/step-3.7-flash',
   'google/gemini-2.5-flash',
   'deepseek/deepseek-v4-flash',
   'meta-llama/llama-4-scout',
@@ -341,10 +341,10 @@ ${info}`;
 
 // ─── Product Intelligence ───────────────────────────────────────────────────
 
+// Vision on the critical path — gemini-3.1-flash-lite first, stepfun as backup.
 const VISION_MODELS = [
-  'qwen/qwen3.6-flash',
-  'google/gemini-2.5-flash',
-  'google/gemini-2.0-flash-001',
+  'google/gemini-3.1-flash-lite',
+  'stepfun/step-3.7-flash',
 ];
 
 async function callLlmWithVision(prompt: string, systemMsg: string, imageBase64: string): Promise<any> {

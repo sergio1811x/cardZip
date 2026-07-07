@@ -3,7 +3,7 @@ import type { QaResult, GeneratedArtifacts } from '../types';
 import { QaGateResultSchema, parseLlmJson } from '../core/llmSchemas';
 
 const QA_MODELS = [
-  'qwen/qwen3.6-flash',
+  'stepfun/step-3.7-flash',
   'google/gemini-2.5-flash',
   'deepseek/deepseek-v4-flash',
 ];
