@@ -3789,7 +3789,16 @@ export function buildSupplierQuestionsFromProfile(
   opts: { sourceUrl?: string } = {},
 ): SupplierQuestionsProfileResult {
   const profile = ensureProductProcurementProfile(product, opts);
-  const ru = uniq(profile.procurement.mustAskSupplier, 10).slice(0, 10);
+  // Prefer the EXACT RU list the CN translation ran on (persisted upstream), so the
+  // rendered RU and CN are always a matched pair of equal length. Re-deriving here
+  // can differ by a question and silently drop the whole CN version.
+  const pairedRu =
+    profile.supplierQuestionsCnValid &&
+    Array.isArray((product as any)?.supplierQuestionsRu) &&
+    (product as any).supplierQuestionsRu.length
+      ? ((product as any).supplierQuestionsRu as string[]).slice(0, 10)
+      : null;
+  const ru = pairedRu ?? uniq(profile.procurement.mustAskSupplier, 10).slice(0, 10);
   const savedCn =
     profile.supplierQuestionsCnValid &&
     Array.isArray(profile.supplierQuestionsCn)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile, dedupBulletsByOverlap } from './procurementProfile';
+import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile, buildSupplierQuestionsFromProfile, dedupBulletsByOverlap } from './procurementProfile';
 
 function baseProduct(overrides: Record<string, any> = {}) {
   return {
@@ -160,6 +160,24 @@ describe('supplier questions — hard gate + cargo essentials', () => {
     const qs = buildProductProcurementProfile(dryer()).procurement.mustAskSupplier;
     const variantAsks = qs.filter((q) => /вариант\/sku|какой именно sku/i.test(q));
     expect(variantAsks.length).toBe(1);
+  });
+
+  it('renders the paired RU+CN version from the persisted list (no CN drop)', () => {
+    const ru = ['Какой SKU за 28 ¥?', 'Какова мощность?', 'Есть ли сертификаты?'];
+    const cn = ['所选SKU对应28元吗？', '功率是多少？', '有认证吗？'];
+    const res = buildSupplierQuestionsFromProfile(
+      baseProduct({
+        titleRu: 'Фен',
+        productKind: 'small_appliance',
+        supplierQuestionsRu: ru,
+        supplierQuestionsCn: cn,
+        supplierQuestionsCnValid: true,
+      }),
+    );
+    expect(res.ru).toEqual(ru);
+    expect(res.cnValid).toBe(true);
+    expect(res.cn.length).toBe(res.ru.length);
+    expect(res.text).not.toMatch(/не сформирована/);
   });
 });
 

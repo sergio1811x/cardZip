@@ -407,6 +407,10 @@ export async function continuePipeline(jobId: string) {
       if (ruQuestions.length) {
         const cnQuestions = await translateQuestionsToCn(ruQuestions).catch(() => []);
         if (Array.isArray(cnQuestions) && cnQuestions.length === ruQuestions.length) {
+          // Persist the EXACT RU list that was translated so the doc builder renders
+          // the matching RU+CN pair. Re-deriving the questions there can yield a
+          // different count (hard-gate/reserve), which drops CN to RU-only.
+          product.supplierQuestionsRu = ruQuestions;
           product.supplierQuestionsCn = cnQuestions;
           product.supplierQuestionsCnValid = true;
           console.log(`[cn-translate] supplier questions RU→CN: ${cnQuestions.length}`);
@@ -468,6 +472,7 @@ export async function continuePipeline(jobId: string) {
             ...(profile.identity.claimedFeatures ?? []),
             ...(profile.identity.unconfirmedFeatures ?? []),
           ],
+          skuReliable: profile.sku.selectedSkuReliable,
           confirmedAttributes,
           forbidden,
         }).catch(() => null),

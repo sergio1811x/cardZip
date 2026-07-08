@@ -20,6 +20,14 @@ const DEFAULT_MODELS = [
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 3000;
 const DEFAULT_TEMPERATURE = 0.3;
+// SEO copy quality is worth latency here (it's a ZIP doc, not the live reply), so
+// SEO prose leads with a stronger model and falls back to the fast ones if it
+// times out. Overridable via SEO_PROSE_MODELS. Slugs must match OpenRouter.
+const SEO_PROSE_DEFAULT_MODELS = [
+  "deepseek/deepseek-v4-pro",
+  "google/gemini-2.5-flash",
+  "google/gemini-3.1-flash-lite",
+];
 
 export type DocType = "cargo" | "checklist";
 
@@ -228,6 +236,9 @@ export interface SeoProseInput {
   // Seller-claimed features (motor type, overheat protection, ionization, …) that
   // must be framed as declared, never asserted as fact.
   claimedFeatures?: string[];
+  // When the exact variant isn't confirmed, the pack contents (case/set/nozzle)
+  // are ambiguous — the copy must not assert them (esp. in the title).
+  skuReliable?: boolean;
   // Only values we can actually back as facts (attribute name→value the card had).
   confirmedAttributes: Array<{ name: string; value: string }>;
   forbidden: string[];
@@ -274,6 +285,9 @@ function buildSeoProsePrompt(input: SeoProseInput): string {
     input.claimedFeatures?.length
       ? `Заявленные продавцом фичи (упоминать ТОЛЬКО как «заявленные», не как факт): ${input.claimedFeatures.join(", ")}`
       : "",
+    input.skuReliable === false
+      ? `ВНИМАНИЕ: точная комплектация НЕ подтверждена (варианты могут отличаться, вплоть до «только упаковка»). НЕ утверждай состав комплекта (кейс, набор, насадка) как факт — особенно в заголовке; максимум «в комплекте, по заявлению».`
+      : "",
     input.confirmedAttributes.length
       ? `Подтверждённые атрибуты: ${input.confirmedAttributes
           .map((a) => `${a.name}: ${a.value}`)
@@ -296,7 +310,7 @@ function buildSeoProsePrompt(input: SeoProseInput): string {
 
 ТЕПЕРЬ так же качественно для СВОЕГО товара, СТРОГО соблюдая честность:
 - Материал бери ТОЛЬКО из списка «Материалы» в фактах — НЕ добавляй других (если в списке «PC, ABS», то нейлона/PA и прочего быть не должно). Пиши «заявленный материал — …»; НЕ «материал изделия/товара — …», не называй марку голым фактом.
-- Фичи из «Заявленные фичи» (двигатель, защита от перегрева, ионизация, режимы и т.п.) упоминай ТОЛЬКО как заявленные («заявленная защита от перегрева», «по заявлению — бесщёточный двигатель»), НЕ как подтверждённый факт.
+- Фичи из «Заявленные фичи» (двигатель, защита от перегрева, ионизация, режимы) не утверждай как факт — но НЕ начинай каждый буллет со слова «Заявленный/Заявленная», это читается оборонительно и однообразно. Сделай так: сгруппируй заявленные характеристики в ОДНОМ буллете или предложении под общей оговоркой (например: «По заявлению продавца — бесщёточный мотор, ионизация и защита от перегрева; уточните перед заказом»), а остальные буллеты пиши про выгоду и применение живо, БЕЗ повтора «заявлено».
 - ЛЮБОЕ свойство/стойкость (качество, острота, прочность, мощность, «устойчив/защищает/не боится» влаги, коррозии, износа, нагрева и пр.) — не как факт: либо не пиши, либо «заявлено». Требовательные способности (рубить кости, замороженное, твёрдое, тяжёлое) — не утверждай, если нет в фактах.
 - НЕ придумывай числа (длину, ширину, толщину, угол, HRC, вес, мощность): нет числа в «Подтверждённых атрибутах» — не пиши его. Числа-размеры в заголовок НЕ ставь.
 - Сценарии/аудиторию/место применения бери ТОЛЬКО из строки «Применение». Не расширяй бытовой товар до профессионального/коммерческого, если этого нет в фактах.
@@ -330,17 +344,16 @@ export async function writeSeoProse(
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
   const prompt = buildSeoProsePrompt(input);
-  const timeoutMs = getNumberEnv("DOC_WRITER_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+  // Strong model → longer timeout (deepseek is slow); still falls back to the fast
+  // models if it doesn't complete in time.
+  const timeoutMs = getNumberEnv("SEO_PROSE_TIMEOUT_MS", 150_000);
   const maxTokens = getNumberEnv("SEO_PROSE_MAX_TOKENS", 2200);
   // Copy needs some life — 0.25 pushed the model into flat, "safe" spec-list
   // phrasing. The grounding verifier + deterministic guards catch any drift, so a
   // higher temperature is safe here and reads far less robotic.
   const temperatureRaw = Number(process.env.SEO_PROSE_TEMPERATURE);
   const temperature = Number.isFinite(temperatureRaw) ? temperatureRaw : 0.45;
-  // SEO copy quality can be traded for a bit of latency by pointing this at a
-  // stronger model (e.g. SEO_PROSE_MODELS=google/gemini-2.5-flash,...). Default
-  // keeps the fast primary to honour the speed preference.
-  const models = getEnvList("SEO_PROSE_MODELS", MODELS);
+  const models = getEnvList("SEO_PROSE_MODELS", SEO_PROSE_DEFAULT_MODELS);
 
   for (const model of models) {
     try {
@@ -517,7 +530,7 @@ function buildGroundingVerifyPrompt(
 
 ОСТАВЬ ЧЕСТНЫМ (не выходя за факты):
 - Материал только из списка «Материалы» и только как «заявленный материал — …»; НЕ добавляй других материалов (нет в списке — не пиши), НЕ «материал изделия/товара — …», не марку голым фактом.
-- Фичи из «Заявленные фичи» (двигатель, защита от перегрева, ионизация, режимы) — только как заявленные, НЕ как факт.
+- Фичи из «Заявленные фичи» — не как факт, но НЕ префикси каждый буллет «Заявленный/Заявленная». Сгруппируй заявленные характеристики в одном месте под общей оговоркой («по заявлению продавца — …; уточните перед заказом»); остальные буллеты — живо, без повтора «заявлено».
 - Любой сценарий/аудиторию/место/свойство/способность, которых НЕТ в фактах, — убери или смягчи до заявленного. Не расширяй бытовой товар до профессионального/коммерческого.
 - НЕ добавляй воду («мощный», «профессиональный», «эффективный», «высококачественный», «надёжный», «идеальный») и непроверенные числа/свойства.
 
