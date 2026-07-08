@@ -4319,10 +4319,40 @@ function hedgeUnitIfClaimed(unit: string, featureStems: Set<string>[]): string {
   return `${unit.replace(/[.\s]+$/, "")} (заявлено).`;
 }
 
+// Packaging / gift-set vocabulary (structural, not category-specific): the case,
+// pouch or gift box a listing may include. When the exact variant is unconfirmed,
+// these can't be sold as a guaranteed inclusion — the buyer might receive only the
+// box, or a different set.
+const PACKAGING_RE =
+  /кейс[а-яё]*|футляр[а-яё]*|чехл[а-яё]*|чехол|подарочн[а-яё]*|комплектн[а-яё]*|в\s+подарок|готов[а-яё]*\s+подар/i;
+
+// Strip an unconfirmed packaging clause from a title (e.g. "в подарочном кейсе").
+export function stripUnconfirmedPackaging(title: string): string {
+  return title
+    // "в подарочном кейсе" / "с подарочным футляром" / "подарочный набор" — consume
+    // the leading preposition too (no trailing \b: it's ASCII-only and fails on
+    // Cyrillic, which previously left a dangling "в").
+    .replace(
+      /\s*(?:в|с|—|,)?\s*подарочн[а-яё]*\s+(?:кейс[а-яё]*|футляр[а-яё]*|чехл[а-яё]*|набор[а-яё]*|бокс[а-яё]*|упаковк[а-яё]*)(?![а-яё])/gi,
+      " ",
+    )
+    // "в кейсе" / "с футляром" without "подарочный".
+    .replace(
+      /\s*(?:в|с)\s+(?:кейс[а-яё]*|футляр[а-яё]*|чехл[а-яё]*|чехол)(?![а-яё])/gi,
+      " ",
+    )
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+,/g, ",")
+    .replace(/[\s,]+$/g, "")
+    .trim();
+}
+
 /**
  * Projects the profile's fact confidence onto the SEO prose: contains materials to
- * the profile's set and hedges seller-claimed features. Deterministic and
- * offline-testable; guarantees honesty regardless of what the LLM produced.
+ * the profile's set, hedges seller-claimed features, and — when the variant is
+ * unconfirmed — drops bullets that sell the packaging/gift-set as a guaranteed
+ * inclusion. Deterministic and offline-testable; guarantees honesty regardless of
+ * what the LLM produced.
  */
 export function groundSeoToProfile(
   p: ProductProcurementProfile,
@@ -4344,9 +4374,12 @@ export function groundSeoToProfile(
     .join(" ")
     .replace(/\s{2,}/g, " ")
     .trim();
-  const bl = bullets.map((b) =>
+  let bl = bullets.map((b) =>
     hedgeUnitIfClaimed(reconcileMaterialToProfile(b, p), featureStems),
   );
+  // Unconfirmed variant → don't sell the packaging/gift-set as guaranteed. Drop
+  // bullets whose selling point is the case/pouch/gift box.
+  if (p.sku?.selectedSkuReliable === false) bl = bl.filter((b) => !PACKAGING_RE.test(b));
   return { description: desc, bullets: bl };
 }
 
@@ -4380,10 +4413,15 @@ export function buildSeoDraftFromProfile(
   // safeSeoTitle guard (strips WB/Ozon, dangerous claims, unconfirmed measurements).
   const proseTitle = String(product?.polishedDocs?.seoProse?.title ?? "").trim();
   const llmTitle = proseTitle || (p.content.seoTitle ?? "").trim();
-  const title = safeSeoTitle(
+  const titleRaw = safeSeoTitle(
     llmTitle || safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
     p.identity.productKind,
   );
+  // Unconfirmed variant → the pack contents are ambiguous; strip a packaging claim
+  // ("в подарочном кейсе") from the title so it isn't sold as a guaranteed set.
+  const title = p.sku.selectedSkuReliable
+    ? titleRaw
+    : stripUnconfirmedPackaging(titleRaw) || titleRaw;
   const useCases = p.identity.useCases.length
     ? p.identity.useCases.join(", ")
     : "повседневного использования";
@@ -4517,6 +4555,8 @@ export function buildSeoDraftFromProfile(
     "",
     "## Идеи для инфографики",
     ...p.content.infographicIdeas
+      // Unconfirmed variant → drop packaging/gift-set infographic ideas.
+      .filter((idea) => p.sku.selectedSkuReliable || !PACKAGING_RE.test(String(idea)))
       .slice(0, 6)
       .map((idea, i) => `${i + 1}. ${idea}`),
   ]
@@ -4655,9 +4695,10 @@ function dedupKeywords(items: string[], limit: number): string[] {
     if (!k) continue;
     const key = k.toLowerCase();
     if (seen.has(key)) continue;
-    // skip if it's a substring of an already-kept keyword or vice versa
-    if (out.some((o) => o.toLowerCase().includes(key) || key.includes(o.toLowerCase())))
-      continue;
+    // Exact-dup only. A previous substring filter wrongly nuked every long-tail
+    // phrase once a bare head term slipped in first ("фен" killed "фен для волос",
+    // "фен с ионизацией" …), collapsing keywords to one word. WB wants many
+    // variations, so near-duplicates are kept.
     seen.add(key);
     out.push(k);
     if (out.length >= limit) break;

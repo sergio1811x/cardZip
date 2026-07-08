@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groundSeoToProfile } from "./procurementProfile";
+import { groundSeoToProfile, stripUnconfirmedPackaging } from "./procurementProfile";
 
 // The honesty projection is the architectural guarantee that SEO copy stays a
 // PROJECTION of the profile: materials are contained to the profile's set and
@@ -10,6 +10,7 @@ const profile = {
     claimedFeatures: ["защита от перегрева", "бесщёточный двигатель"],
     unconfirmedFeatures: ["функция ионизации"],
   },
+  sku: { selectedSkuReliable: true },
 } as any;
 
 describe("groundSeoToProfile — material containment", () => {
@@ -49,5 +50,42 @@ describe("groundSeoToProfile — claimed-feature hedging", () => {
   it("leaves a bullet with no claimed feature untouched", () => {
     const bullet = "Компактный корпус удобно брать с собой в поездки";
     expect(groundSeoToProfile(profile, "", [bullet]).bullets[0]).toBe(bullet);
+  });
+});
+
+describe("packaging guard — unconfirmed variant", () => {
+  const unreliable = {
+    identity: { materials: [], claimedFeatures: [], unconfirmedFeatures: [] },
+    sku: { selectedSkuReliable: false },
+  } as any;
+  const reliable = {
+    identity: { materials: [], claimedFeatures: [], unconfirmedFeatures: [] },
+    sku: { selectedSkuReliable: true },
+  } as any;
+
+  it("drops bullets that sell the case/gift set when the variant is unconfirmed", () => {
+    const out = groundSeoToProfile(unreliable, "", [
+      "Переключение горячий/холодный воздух для удобной укладки",
+      "Комплектный подарочный футляр делает фен готовым подарком",
+      "Насадка-концентратор направляет поток на пряди",
+    ]);
+    expect(out.bullets).toHaveLength(2);
+    expect(out.bullets.some((b) => /футляр|подарочн/i.test(b))).toBe(false);
+  });
+
+  it("keeps the case bullet when the variant IS confirmed", () => {
+    const out = groundSeoToProfile(reliable, "", [
+      "Комплектный подарочный футляр для хранения",
+    ]);
+    expect(out.bullets).toHaveLength(1);
+  });
+
+  it("strips a packaging clause from the title without leaving a dangling preposition", () => {
+    const t = stripUnconfirmedPackaging(
+      "Фен для волос высокоскоростной в подарочном кейсе для сушки и укладки",
+    );
+    expect(t).not.toMatch(/кейс|подарочн/i);
+    expect(t).not.toMatch(/\sв\s+для/);
+    expect(t).toMatch(/фен для волос/i);
   });
 });
