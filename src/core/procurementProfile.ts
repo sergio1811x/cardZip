@@ -3289,6 +3289,26 @@ export function cleanDisplayTitle(title: unknown): string {
   return out.charAt(0).toUpperCase() + out.slice(1);
 }
 
+// An SEO title must not assert an unconfirmed material grade/alloy CODE as fact:
+// on 1688 the material is always a seller claim (the questions file asks the
+// supplier to confirm that very grade). Category-agnostic — strips only the
+// alloy/grade codes, keeping the base material noun (сталь, алюминий). The code
+// stays valid as a search keyword, just not as a title-level fact.
+// Examples: "сталь 3Cr13" → "сталь", "SUS304 нержавейка" → "нержавейка".
+function stripUnconfirmedGradeTokens(title: string): string {
+  return title
+    .replace(/\b\d{1,2}Cr\d{1,2}(?:MoV|Mo|V|Ni|Si|Mn)?\b/gi, " ") // 3Cr13, 5Cr15MoV
+    .replace(/\bSUS\s?\d{3}[A-Za-z]?\b/gi, " ") // SUS304, SUS 316L
+    .replace(/\bмарк[аиуеой]\s+[A-Za-z0-9-]+/gi, " ") // "марка 304"
+    // Tidy punctuation orphaned by a removed code (e.g. "сталь , для" → "сталь,").
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*,/g, ",")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s,]+|[\s,]+$/g, "")
+    .trim();
+}
+
 function safeSeoTitle(title: string, kind: ProductKind): string {
   let out = fixMixedRuTypos(
     stripRawSourceLabels(
@@ -3305,6 +3325,7 @@ function safeSeoTitle(title: string, kind: ProductKind): string {
     .trim();
   for (const re of DANGEROUS_CLAIM_RES)
     out = out.replace(new RegExp(re.source, "gi"), "").trim();
+  out = stripUnconfirmedGradeTokens(out);
   if (kind === "dish_rack" || kind === "kitchen_storage_rack")
     return "Сушилка для посуды настольная многоярусная";
   if (/балаклав|подшлемник/i.test(out))
@@ -3363,8 +3384,15 @@ const PUFFERY_RE = new RegExp(
   ).join("|"),
   "i",
 );
+// Empty "audience filler" — vague marketing that names a buyer/scenario but
+// states no concrete product fact ("подходит как для дома, так и для тех, кто
+// ценит удобство"; "станет незаменимым помощником"). Category-agnostic, and
+// distinct from PUFFERY_STEMS (which catches praise adjectives): these are
+// hollow sentence constructions. Kept narrow to avoid dropping real features.
+const VAGUE_MARKETING_RE =
+  /подходит\s+(?:как\s+)?для\s+[^.!?]*\bтак\s+и\s+для\b|для\s+тех,?\s+кто\s+(?:ценит|любит|предпочита|ищет|заботит|привык)|стан(?:ет|ут)\s+[^.!?]*\b(?:помощник|выбор|подарк|дополнени|решени|спутник)|оцен(?:ит|ят)\s+по\s+достоинств|не\s+оставит\s+равнодушн|для\s+ценител|тем,?\s+кто\s+ценит/i;
 function hasPuffery(text: string): boolean {
-  return PUFFERY_RE.test(text);
+  return PUFFERY_RE.test(text) || VAGUE_MARKETING_RE.test(text);
 }
 // Drop puffery/claim sentences from an LLM paragraph, keeping the honest ones.
 // Better than rejecting the whole description to the generic floor: we salvage
@@ -4113,15 +4141,14 @@ export function buildSeoDraftFromProfile(
       p.sku.normalizedExamples.length > 1 || p.sku.models.length > 1
         ? "Несколько вариантов в карточке — выберите подходящий"
         : undefined,
-      "Компактный формат — удобно хранить и использовать каждый день",
     ].filter((b): b is string => Boolean(b && String(b).trim())),
     6,
   );
-  // Keep the LLM's concrete selling points and top them up from the honest pool
-  // (instead of discarding all LLM bullets when a few were dropped as puffery).
+  // 3–5 HONEST bullets, never padded with filler. Previously "exactly 5" forced
+  // hollow marketing water ("Универсальный вариант для дома и в подарок") whenever
+  // the product had fewer than 5 real facts. Now we ship only what we actually
+  // know (LLM selling points + honest identity pool) and stop.
   const bullets = uniq([...llmBullets, ...honestBulletPool], 5).slice(0, 5);
-  while (bullets.length < 5)
-    bullets.push("Универсальный вариант для дома и в подарок");
   // Prefer the writer's characteristics, else the seoCard generator's, else the
   // deterministic per-kind table. Both LLM sources go through the same sanitizer.
   const rawChars =
@@ -4722,7 +4749,8 @@ export function validateDocuments(
       const bulletSection =
         text.match(/## Буллеты\n([\s\S]*?)(?:\n## |$)/)?.[1] ?? "";
       const bullets = bulletSection.match(/^\d+\.\s+/gm)?.length ?? 0;
-      if (bullets !== 5) errors.push(`${doc.filename}: bullets not 5`);
+      if (bullets < 3 || bullets > 5)
+        errors.push(`${doc.filename}: bullets not in 3–5 range (${bullets})`);
     }
 
     if (

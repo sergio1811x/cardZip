@@ -468,7 +468,7 @@ ${categoryBlock}
 1. titleRu — название карточки до 120 символов. Только категория + подтверждённые важные свойства. Без бренда, OEM и рекламных слов.
 ${req.brand ? "2. titleRuBranded — справочное обозначение поставщика, не для карточка товара." : ""}
 3. description — описание 350-700 символов: что это, подтверждённые характеристики, комплектация/назначение если известно. Последняя фраза: "${categoryEnding}"
-4. bullets — ровно 5 тезисов по 5-10 слов, без эмодзи, только подтверждённые свойства.
+4. bullets — 3–5 тезисов по 5-10 слов, без эмодзи, только подтверждённые свойства (лучше меньше, чем вода).
 5. keywords — 8-15 релевантных карточка товара-запросов без бренда и без смены типа товара.
 6. characteristics — только переведённые характеристики поставщика. Не оставляй китайские ключи/значения.
 7. filterKeywords — required 1-2 слова, optional 3-5 слов, exclude 3-8 слов.
@@ -598,16 +598,17 @@ function callFireworks(prompt: string): Promise<AiContentResult | null> {
 
 function normalizeBullets(result: AiContentResult): void {
   const bullets = uniqClean(result.bullets ?? [], 5);
+  // 3–5 honest bullets, never padded to a fixed 5 with filler. Only top up to a
+  // minimum of 3 when the model returned too few, using neutral procurement
+  // reminders — not invented selling points.
   const fallback = [
     "Подтвердите характеристики выбранного SKU",
     "Уточните комплектацию перед закупкой",
     "Проверьте вес товара с упаковкой",
-    "Запросите реальные фото у поставщика",
-    "Проверьте документы для продажи",
   ];
 
   for (const item of fallback) {
-    if (bullets.length >= 5) break;
+    if (bullets.length >= 3) break;
     bullets.push(item);
   }
 

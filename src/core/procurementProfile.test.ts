@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProductProcurementProfile, buildMainReportFromProfile } from './procurementProfile';
+import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile } from './procurementProfile';
 
 function baseProduct(overrides: Record<string, any> = {}) {
   return {
@@ -80,6 +80,59 @@ describe('productKind: balaclava (clothing override)', () => {
     const forbidden = profile.content.seoForbiddenClaims.join(' ').toLowerCase();
     expect(forbidden).toMatch(/upf50\+ без документов/);
     expect(asks).not.toMatch(/напряжение|тип вилки/);
+  });
+});
+
+describe('SEO title grounding', () => {
+  it('does not assert an unconfirmed material grade code (3Cr13) in the title', () => {
+    const product = baseProduct({ titleRu: 'Кухонный нож-топорик сталь 3Cr13 для мяса и овощей' });
+    const profile = buildProductProcurementProfile(product);
+    expect(profile.identity.titleForSeo.toLowerCase()).not.toMatch(/3\s*cr\s*13/i);
+
+    const seo = buildSeoDraftFromProfile(product).split('\n');
+    const nameIdx = seo.findIndex((l) => l.trim() === '## Название');
+    const nameLine = (seo[nameIdx + 1] ?? '').toLowerCase();
+    expect(nameLine).not.toMatch(/3\s*cr\s*13/i);
+    // base material noun and the object survive — we soften the grade, not the noun
+    expect(nameLine).toMatch(/нож/);
+  });
+});
+
+describe('SEO bullets drop empty audience filler', () => {
+  it('rejects vague marketing bullets that state no concrete fact', () => {
+    const product = baseProduct({
+      titleRu: 'Кухонный нож-топорик сталь для мяса',
+      productContext: {
+        procurementProfileDraft: {
+          domainRules: {
+            seo: {
+              sellingBullets: [
+                'Подходит как для домашнего использования, так и для тех, кто ценит функциональность',
+                'Станет незаменимым помощником на любой кухне',
+                'Лезвие из нержавеющей стали для нарезки мяса и овощей',
+              ],
+            },
+          },
+        },
+      },
+    });
+    const seo = buildSeoDraftFromProfile(product).toLowerCase();
+    expect(seo).not.toMatch(/так и для тех, кто ценит/);
+    expect(seo).not.toMatch(/станет незаменимым помощником/);
+  });
+});
+
+describe('SEO bullets are 3–5 honest, never padded with filler', () => {
+  it('does not pad to 5 with hollow marketing filler', () => {
+    const seo = buildSeoDraftFromProfile(baseProduct({ titleRu: 'Простой товар без данных' })).split('\n');
+    const start = seo.findIndex((l) => l.trim() === '## Буллеты');
+    const end = seo.findIndex((l, i) => i > start && l.startsWith('## '));
+    const bulletLines = seo.slice(start + 1, end === -1 ? undefined : end).filter((l) => /^\d+\.\s+/.test(l));
+    expect(bulletLines.length).toBeGreaterThanOrEqual(1);
+    expect(bulletLines.length).toBeLessThanOrEqual(5);
+    const joined = bulletLines.join(' ').toLowerCase();
+    expect(joined).not.toMatch(/универсальный вариант для дома и в подарок/);
+    expect(joined).not.toMatch(/компактный формат — удобно хранить/);
   });
 });
 

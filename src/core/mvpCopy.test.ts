@@ -34,7 +34,10 @@ describe('SEO draft quality', () => {
     });
 
     const bulletSection = text.match(/## Буллеты\n([\s\S]*?)(?:\n## |$)/)?.[1] ?? '';
-    expect(bulletSection.match(/^\d+\.\s+/gm)?.length).toBe(5);
+    // 3–5 honest bullets (no filler padding to a fixed 5).
+    const bulletCount = bulletSection.match(/^\d+\.\s+/gm)?.length ?? 0;
+    expect(bulletCount).toBeGreaterThanOrEqual(3);
+    expect(bulletCount).toBeLessThanOrEqual(5);
     expect(text).not.toMatch(/для ежедневная/i);
     expect(text).not.toMatch(/карточк[еаи]\s+1688/i);
     expect(text).not.toMatch(/WB\/Ozon/i);
