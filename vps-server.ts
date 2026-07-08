@@ -464,6 +464,10 @@ export async function continuePipeline(jobId: string) {
           categoryType: profile.identity.categoryType,
           useCases: profile.identity.useCases ?? [],
           materials: profile.identity.materials ?? [],
+          claimedFeatures: [
+            ...(profile.identity.claimedFeatures ?? []),
+            ...(profile.identity.unconfirmedFeatures ?? []),
+          ],
           confirmedAttributes,
           forbidden,
         }).catch(() => null),

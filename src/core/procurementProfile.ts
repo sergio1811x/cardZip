@@ -4132,6 +4132,131 @@ export function sanitizeSeoChars(
   return out;
 }
 
+// ─── SEO honesty projection ─────────────────────────────────────────────────
+// Architectural guarantee: SEO copy is a PROJECTION of the profile, never a
+// re-guess of the product. The LLM supplies LANGUAGE; these deterministic guards
+// enforce the profile's authority over FACTS. They are data-driven — keyed on the
+// profile's own material set and claimed-feature list — so they stay category- and
+// word-agnostic (no hardcoded product terms). Cyrillic-safe (no \b, no \w).
+
+// A hedge marker already frames a claim as declared → don't double-hedge.
+const HEDGE_MARKER_RE = /заявл|по заявлению|со слов|указан|производитель|продавец/i;
+
+// 5-char stems of significant words, for fuzzy matching a profile feature phrase
+// against a copy segment despite inflection.
+function featureStemSet(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 4)
+      .map((w) => w.slice(0, 5)),
+  );
+}
+
+// A segment "asserts" a claimed feature when most of the feature's significant
+// stems appear in it and it carries no hedge marker.
+function segmentAssertsFeature(segment: string, featureStems: Set<string>): boolean {
+  if (featureStems.size === 0 || HEDGE_MARKER_RE.test(segment)) return false;
+  const seg = featureStemSet(segment);
+  let inter = 0;
+  for (const t of featureStems) if (seg.has(t)) inter += 1;
+  return inter / featureStems.size >= 0.7;
+}
+
+// The profile's confirmed materials, cleaned of the stored confirm-suffix
+// ("— подтвердить") so the copy doesn't double-hedge (we add "заявленный" ourselves).
+function profileMaterials(p: ProductProcurementProfile): string[] {
+  return p.identity.materials
+    .map((m) =>
+      clean(m)
+        .replace(/\s*[—–-]\s*подтверд[а-яё]*\.?$/i, "")
+        .trim(),
+    )
+    .filter((m) => m && !/^уточнить/i.test(m));
+}
+
+// Structural cue that a segment states material COMPOSITION (not product-specific
+// words — "материал/состав/выполнен из/корпус из" are honesty-framework vocabulary).
+const MATERIAL_SENTENCE_RE =
+  /матери[аи]л|состав\b|выполнен[а-яё]*\s+из|корпус[а-яё]*\s+(?:из|выполнен)|изготовлен[а-яё]*\s+из|сделан[а-яё]*\s+из/i;
+
+// Replace any material-composition segment with the profile's canonical materials,
+// so a material the LLM invented or pulled from a raw attribute (e.g. "нейлон PA")
+// cannot appear — the profile's normalized material set is the single authority.
+function reconcileMaterialToProfile(
+  text: string,
+  p: ProductProcurementProfile,
+): string {
+  const mats = profileMaterials(p);
+  if (!mats.length || !text) return text;
+  const canonical = mats.join(", ");
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => (MATERIAL_SENTENCE_RE.test(s) ? `Заявленный материал — ${canonical}.` : s))
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+// Append a light "(заявлено)" to a unit that states a seller-CLAIMED feature as
+// fact, so the copy matches the "заявлено, уточнить" status the characteristics
+// table already carries. Skips units already hedged or reconciled to material.
+function hedgeUnitIfClaimed(unit: string, featureStems: Set<string>[]): string {
+  if (!unit || HEDGE_MARKER_RE.test(unit)) return unit;
+  if (!featureStems.some((fs) => segmentAssertsFeature(unit, fs))) return unit;
+  return `${unit.replace(/[.\s]+$/, "")} (заявлено).`;
+}
+
+/**
+ * Projects the profile's fact confidence onto the SEO prose: contains materials to
+ * the profile's set and hedges seller-claimed features. Deterministic and
+ * offline-testable; guarantees honesty regardless of what the LLM produced.
+ */
+export function groundSeoToProfile(
+  p: ProductProcurementProfile,
+  description: string,
+  bullets: string[],
+): { description: string; bullets: string[] } {
+  const claimed = uniq(
+    [...p.identity.claimedFeatures, ...p.identity.unconfirmedFeatures]
+      .map((f) => clean(f))
+      .filter((f) => f.length >= 4),
+    30,
+  );
+  const featureStems = claimed
+    .map(featureStemSet)
+    .filter((s) => s.size >= 1);
+  const desc = reconcileMaterialToProfile(description, p)
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => hedgeUnitIfClaimed(s, featureStems))
+    .join(" ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const bl = bullets.map((b) =>
+    hedgeUnitIfClaimed(reconcileMaterialToProfile(b, p), featureStems),
+  );
+  return { description: desc, bullets: bl };
+}
+
+// Force the material characteristic row to the profile's materials — the LLM's row
+// may carry an invented/raw-attribute material (e.g. "нейлон PA") absent from the
+// normalized profile.
+function enforceProfileMaterialRow(
+  chars: Array<{ name: string; value: string; status: string }>,
+  p: ProductProcurementProfile,
+): Array<{ name: string; value: string; status: string }> {
+  const mats = profileMaterials(p);
+  if (!mats.length) return chars;
+  const canonical = mats.join(", ");
+  return chars.map((c) =>
+    /^матери[аи]л/i.test(c.name)
+      ? { ...c, value: canonical, status: "заявлено, уточнить" }
+      : c,
+  );
+}
+
 export function buildSeoDraftFromProfile(
   product: any,
   opts: { sourceUrl?: string } = {},
@@ -4214,7 +4339,10 @@ export function buildSeoDraftFromProfile(
     (prose?.characteristics?.length ? prose.characteristics : p.content.seoCharacteristics) ??
     [];
   const llmChars = sanitizeSeoChars(rawChars, p);
-  const characteristics = llmChars.length ? llmChars : seoCharacteristics(p);
+  const characteristics = enforceProfileMaterialRow(
+    llmChars.length ? llmChars : seoCharacteristics(p),
+    p,
+  );
 
   // Keywords: prefer LLM deduped set, else a deterministic set (dropping the giant
   // title as a keyword and de-duplicating near-identical entries).
@@ -4237,6 +4365,14 @@ export function buildSeoDraftFromProfile(
     12,
   ).join(", ");
 
+  // Honesty projection: force the profile's authority over facts onto the LLM copy
+  // — contain materials to the profile's set, hedge seller-claimed features.
+  const grounded = groundSeoToProfile(
+    p,
+    seoDescription(p, title, prose?.description),
+    bullets,
+  );
+
   const out = [
     "# SEO-черновик карточки товара",
     "",
@@ -4244,10 +4380,10 @@ export function buildSeoDraftFromProfile(
     title,
     "",
     "## Описание",
-    seoDescription(p, title, prose?.description),
+    grounded.description,
     "",
     "## Буллеты",
-    ...bullets.map((b, i) => `${i + 1}. ${b}`),
+    ...grounded.bullets.map((b, i) => `${i + 1}. ${b}`),
     "",
     "## Характеристики",
     "| Параметр | Значение | Статус |",
@@ -4291,10 +4427,18 @@ function hedgeDeclaredMaterial(text: string): string {
   return text
     .split(/(?<=[.!?])\s+/)
     .map((s) =>
-      s.replace(
-        /^(?:изготовлен|выполнен|сделан|произвед[её]н)[а-яё]*\s+из\s+/i,
-        "Заявленный материал — ",
-      ),
+      s
+        .replace(
+          /^(?:изготовлен|выполнен|сделан|произвед[её]н)[а-яё]*\s+из\s+/i,
+          "Заявленный материал — ",
+        )
+        // "Материал изделия/товара/продукции — X" reads as a confirmed fact; the
+        // 1688 card material is only a seller claim. Rewrite to declared form.
+        // (Component labels like "материал лезвия/рукояти" are left intact.)
+        .replace(
+          /^Материал\s+(?:издели[а-яё]*|товара|продукц[а-яё]*)\s*[—:–-]\s*/i,
+          "Заявленный материал — ",
+        ),
     )
     .join(" ")
     .replace(/\s{2,}/g, " ")

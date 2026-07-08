@@ -152,6 +152,23 @@ describe('SEO draft quality — writer prose is the single source', () => {
     const kw = section(buildSeoDraftFromProfile(knife()), '## Ключевые слова').toLowerCase();
     expect(kw).toMatch(/цайдао/);
   });
+
+  it('rewrites a bald "материал изделия — X" into declared form', () => {
+    const product = baseProduct({
+      titleRu: 'Кухонный нож цайдао для мяса',
+      productKind: 'knife',
+      polishedDocs: {
+        seoProse: {
+          ...seoProse,
+          description:
+            'Кухонный нож цайдао для нарезки мяса и овощей. Материал изделия — нержавеющая сталь 3Cr13, рукоять деревянная.',
+        },
+      },
+    });
+    const desc = section(buildSeoDraftFromProfile(product), '## Описание').toLowerCase();
+    expect(desc).toMatch(/заявленн[а-яё]+ материал/);
+    expect(desc).not.toMatch(/материал изделия/);
+  });
 });
 
 describe('dedupBulletsByOverlap — drops near-duplicate bullets', () => {
