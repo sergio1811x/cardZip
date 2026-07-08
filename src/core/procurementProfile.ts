@@ -3325,6 +3325,25 @@ function stripUnconfirmedGradeTokens(title: string): string {
     .trim();
 }
 
+// A number followed by a physical unit asserted in the SEO title. Category- and
+// word-agnostic: it matches the numeric+unit PATTERN, not any product term. On
+// 1688 these specs (length, weight, angle, power) are seller claims, never
+// confirmed — so the title must not present them as fact while the questions
+// file / characteristics table simultaneously ask to confirm them. Mirrors the
+// bullet-level BULLET_MEASUREMENT_RE guard. Bare counts ("3 в 1", "5 шт") carry
+// no physical unit and are kept.
+function stripAssertedMeasurements(title: string): string {
+  return title
+    .replace(
+      /\s*\b\d+(?:[.,]\d+)?\s*(?:см|мм|кг|мл|hrc|вт|ватт|вольт|дюйм|градус[а-яё]*|°)\b\.?/gi,
+      " ",
+    )
+    .replace(/\s+,/g, ",")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s,]+|[\s,·—–-]+$/g, "")
+    .trim();
+}
+
 function safeSeoTitle(title: string, kind: ProductKind): string {
   let out = fixMixedRuTypos(
     stripRawSourceLabels(
@@ -3342,6 +3361,7 @@ function safeSeoTitle(title: string, kind: ProductKind): string {
   for (const re of DANGEROUS_CLAIM_RES)
     out = out.replace(new RegExp(re.source, "gi"), "").trim();
   out = stripUnconfirmedGradeTokens(out);
+  out = stripAssertedMeasurements(out);
   if (kind === "dish_rack" || kind === "kitchen_storage_rack")
     return "Сушилка для посуды настольная многоярусная";
   if (/балаклав|подшлемник/i.test(out))

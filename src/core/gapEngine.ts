@@ -28,16 +28,22 @@ export type GapSlotId =
 
 /** Lower number → shown first. Universal procurement basics rank above
  * category-specific detail. Category-specific questions (no slot) get
- * {@link CATEGORY_SPECIFIC_PRIORITY}, so they survive but rank after basics. */
+ * {@link CATEGORY_SPECIFIC_PRIORITY}, so they survive but rank after basics.
+ *
+ * Ordering rationale: for the sample decision, WHAT you are buying and its
+ * physical, verify-on-sample specs (material grade, dimensions, packed weight,
+ * packaging) matter more than negotiating the price — the price is already shown
+ * in the report and is a supplier-chat detail. So `price` is demoted below the
+ * physical basics; only compliance ranks after it. */
 const SLOT_PRIORITY: Record<GapSlotId, number> = {
-  price: 0,
-  selected_variant: 1,
-  material: 2,
-  dimensions: 3,
-  unit_weight_packed: 4,
-  package_dims: 5,
-  carton: 6,
-  transport_constraint: 7,
+  selected_variant: 0,
+  material: 1,
+  dimensions: 2,
+  unit_weight_packed: 3,
+  package_dims: 4,
+  carton: 5,
+  transport_constraint: 6,
+  price: 7,
   compliance: 8,
 };
 

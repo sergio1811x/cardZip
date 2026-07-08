@@ -278,7 +278,10 @@ function buildSeoProsePrompt(input: SeoProseInput): string {
   return `Ты пишешь продающую карточку для Wildberries/Ozon по ЭТОМУ товару: описание, буллеты и таблицу характеристик. Пиши как опытный копирайтер маркетплейса — естественно, по делу, с ключевыми словами, которые покупатель реально вводит в поиск.
 
 ГЛАВНЫЙ ПРИНЦИП ЧЕСТНОСТИ:
-Данные карточки 1688 — это ЗАЯВЛЕНО продавцом, НЕ подтверждено. Материал, марку, состав, размеры пиши как ЗАЯВЛЕННЫЕ, а не как факт. Нельзя: «изготовлен из нержавеющей стали 3Cr13». Можно: «заявленный материал — нержавеющая сталь 3Cr13». Свойства (острота/прочность/качество) не утверждай вовсе.
+Данные карточки 1688 — это ЗАЯВЛЕНО продавцом, НЕ подтверждено. Материал, марку, состав, размеры пиши как ЗАЯВЛЕННЫЕ, а не как факт. Нельзя: «изготовлен из нержавеющей стали 3Cr13». Можно: «заявленный материал — нержавеющая сталь 3Cr13». ЛЮБОЕ свойство или стойкость — качество, острота, прочность, а также «устойчив/защищает/не боится» чего-либо (влага, коррозия, ржавчина, износ, запах, нагрев, царапины и любое другое) — НЕ утверждай как факт: либо не пиши вовсе, либо только как «заявлено, подтвердить у поставщика». Это относится и к description, и к буллетам.
+
+ГРАНИЦЫ ТОВАРА (не выдумывай назначение):
+Сценарии применения, аудиторию и место использования бери ТОЛЬКО из строки «Применение» в ФАКТАХ. НЕ добавляй новых мест, аудиторий или сценариев, которых там нет (в частности не расширяй бытовой товар до профессионального/коммерческого использования, если это не сказано в фактах). Если в фактах нет данных об аудитории или месте применения — не придумывай их.
 
 ПРАВИЛА ПО СЕКЦИЯМ:
 - description: 3–4 живых предложения. Что это и для каких задач; для кого/где применяется; заявленный материал (с оговоркой); при желании — уход. Вплетай поисковые слова естественно. БЕЗ оценочной воды («высококачественный», «эффективный», «идеальный», «прочный», «долговечный», «надёжный», «обеспечивает», «гарантирует», «профессиональный»).
@@ -387,7 +390,18 @@ export async function writeSeoProse(
       console.log(
         `[seoProse] ok via ${model} (${bullets.length} bullets, ${characteristics.length} chars)`,
       );
-      return { description, bullets: bullets.slice(0, 5), characteristics };
+      const prose = { description, bullets: bullets.slice(0, 5), characteristics };
+      // Second LLM pass: strip any scenario/audience/place/property the writer
+      // invented beyond the profile facts. Fully category-agnostic; on any failure
+      // it returns the writer's already-validated prose unchanged.
+      if (shouldVerifyGrounding()) {
+        const grounded = await verifySeoGrounding(input, {
+          description: prose.description,
+          bullets: prose.bullets,
+        });
+        return { ...prose, ...grounded };
+      }
+      return prose;
     } catch (error) {
       console.warn(
         `[seoProse] ${model} failed:`,
@@ -396,6 +410,167 @@ export async function writeSeoProse(
     }
   }
   return null;
+}
+
+// ─── SEO grounding verifier (second LLM pass) ────────────────────────────────
+// The writer prompt keeps most invention out, but LLMs still drift and add
+// unsupported scenarios/audience ("подходит для небольшого общепита"), places or
+// properties. This pass fact-checks the generated prose against the SAME profile
+// facts and removes anything not derivable from them. It is a fact-CHECK, not a
+// keyword list — category-agnostic, zero hardcoded product terms — so it scales
+// to arbitrary products. It can only ever REMOVE/soften; it never adds facts, and
+// any failure falls back to the writer's already-validated prose.
+
+const SEO_VERIFY_SYSTEM =
+  "Ты — фактчекер карточек товара. Отвечаешь ТОЛЬКО валидным JSON-объектом, без markdown и пояснений.";
+
+// Default ON; disable with SEO_GROUNDING_VERIFY=0 (also false/off/no).
+export function shouldVerifyGrounding(): boolean {
+  const v = String(process.env.SEO_GROUNDING_VERIFY ?? "1").trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "off" && v !== "no";
+}
+
+function buildGroundingVerifyPrompt(
+  input: SeoProseInput,
+  draft: { description: string; bullets: string[] },
+): string {
+  const facts = [
+    `Тип товара: ${input.coreObject}`,
+    input.categoryType ? `Категория: ${input.categoryType}` : "",
+    input.useCases.length
+      ? `Применение (полный список, ничего сверх него): ${input.useCases.join(", ")}`
+      : "Применение: в данных не указано",
+    input.materials.length
+      ? `Материалы (заявлено, не подтверждено): ${input.materials.join(", ")}`
+      : "",
+    input.confirmedAttributes.length
+      ? `Подтверждённые атрибуты: ${input.confirmedAttributes
+          .map((a) => `${a.name}: ${a.value}`)
+          .join(" | ")}`
+      : "Подтверждённых числовых характеристик нет.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return `Проверь описание и буллеты карточки на соответствие ФАКТАМ о товаре. Задача — убрать «отсебятину», НИЧЕГО не добавляя.
+
+ПРАВИЛА:
+- Оставляй ТОЛЬКО то, что прямо выводится из фактов: назначение, применение, аудиторию, место использования, материал, свойства.
+- Любой сценарий, аудиторию или место применения, которых НЕТ в строке «Применение», удали или перепиши нейтрально. В частности не расширяй бытовой товар до профессионального/коммерческого, если этого нет в фактах.
+- Любое свойство или стойкость («устойчив/защищает/не боится» чего-либо), которого нет в фактах, — убери.
+- НЕ добавляй новых фактов, чисел, характеристик или сценариев. Только убирай/смягчай необоснованное.
+- Живой русский, сохрани стиль. Буллетов оставь от 3 до 5.
+
+ФАКТЫ:
+${facts}
+
+ПРОВЕРЯЕМЫЙ ТЕКСТ:
+описание: ${draft.description}
+буллеты:
+${draft.bullets.map((b, i) => `${i + 1}. ${b}`).join("\n")}
+
+Верни строго JSON:
+{"description":"...","bullets":["...","...","..."]}`;
+}
+
+/**
+ * Applies a verifier model's raw JSON verdict to the draft, re-running the SAME
+ * safety gates as the writer (unbacked numbers, CJK, dangerous/forbidden claims,
+ * length, min-3 bullets). Pure/testable. If the verdict is missing, unparseable,
+ * or fails a gate, returns the untouched `fallback` — the verifier can only
+ * improve, never degrade, the already-validated prose.
+ */
+export function parseGroundingVerdict(
+  raw: string,
+  input: SeoProseInput,
+  fallback: { description: string; bullets: string[] },
+): { description: string; bullets: string[] } {
+  const jsonStr = extractJsonObject(raw);
+  if (!jsonStr) return fallback;
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(jsonStr) as Record<string, unknown>;
+  } catch {
+    return fallback;
+  }
+  const description = cleanProseLine(obj.description);
+  let bullets = Array.isArray(obj.bullets)
+    ? obj.bullets.map(cleanProseLine).filter(Boolean)
+    : [];
+  bullets = bullets.filter(
+    (b) => !bulletHasUnbackedNumber(b, input.confirmedAttributes),
+  );
+  const joined = `${description} ${bullets.join(" ")}`;
+  const forbiddenHit = input.forbidden.some(
+    (f) => f && joined.toLowerCase().includes(f.toLowerCase()),
+  );
+  if (
+    description.length < 40 ||
+    description.length > 800 ||
+    bullets.length < 3 ||
+    /[㐀-鿿぀-ヿ]/.test(joined) ||
+    textHasDangerousClaim(joined) ||
+    forbiddenHit
+  ) {
+    return fallback;
+  }
+  return { description, bullets: bullets.slice(0, 5) };
+}
+
+export async function verifySeoGrounding(
+  input: SeoProseInput,
+  draft: { description: string; bullets: string[] },
+): Promise<{ description: string; bullets: string[] }> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return draft;
+  const prompt = buildGroundingVerifyPrompt(input, draft);
+  const timeoutMs = getNumberEnv("SEO_VERIFY_TIMEOUT_MS", 45_000);
+  const maxTokens = getNumberEnv("SEO_VERIFY_MAX_TOKENS", 1200);
+  const models = getEnvList("SEO_VERIFY_MODELS", MODELS);
+  for (const model of models) {
+    try {
+      const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer":
+            process.env.OPENROUTER_HTTP_REFERER ??
+            "https://github.com/sergio1811x/cardZip",
+          "X-Title": process.env.OPENROUTER_X_TITLE ?? "cardZip",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          temperature: 0.1,
+          messages: [
+            { role: "system", content: SEO_VERIFY_SYSTEM },
+            { role: "user", content: prompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        console.warn(`[seoVerify] ${model} HTTP ${res.status}`);
+        continue;
+      }
+      const data = (await res.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const rawContent = data.choices?.[0]?.message?.content ?? "";
+      const grounded = parseGroundingVerdict(rawContent, input, draft);
+      const changed =
+        grounded.description !== draft.description ||
+        grounded.bullets.join("") !== draft.bullets.join("");
+      console.log(`[seoVerify] ok via ${model} (${changed ? "adjusted" : "no change"})`);
+      return grounded;
+    } catch (error) {
+      console.warn(
+        `[seoVerify] ${model} failed:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+  return draft;
 }
 
 // Reuse the object extractor for the SEO prose parser.

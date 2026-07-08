@@ -96,6 +96,18 @@ describe('SEO title grounding', () => {
     // base material noun and the object survive — we soften the grade, not the noun
     expect(nameLine).toMatch(/нож/);
   });
+
+  it('does not assert an unconfirmed physical measurement (20 см) in the title', () => {
+    const product = baseProduct({ titleRu: 'Кухонный нож для нарезки мяса и овощей 20 см' });
+    const seo = buildSeoDraftFromProfile(product).split('\n');
+    const nameIdx = seo.findIndex((l) => l.trim() === '## Название');
+    const nameLine = (seo[nameIdx + 1] ?? '').toLowerCase();
+    // On 1688 the dimension is a seller claim, never confirmed → it must not be
+    // asserted as fact in the title while the card asks to confirm it.
+    expect(nameLine).not.toMatch(/\d+\s*(?:см|мм|кг|мл)\b/);
+    // the object noun survives — we strip the measurement, not the product
+    expect(nameLine).toMatch(/нож/);
+  });
 });
 
 describe('SEO bullets drop empty audience filler', () => {

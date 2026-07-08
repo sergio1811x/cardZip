@@ -40,6 +40,25 @@ describe("gapEngine.applyUniversalGaps — universal procurement basics", () => 
     expect(idxWeight).toBeLessThan(idxHrc);
   });
 
+  it("ranks physical specs (material, dimensions, weight) above the price ask", () => {
+    // For the sample decision, what you can only learn from the supplier (grade,
+    // dimensions, packed weight) matters more than negotiating the shown price.
+    const out = applyUniversalGaps(
+      [
+        "Какова актуальная оптовая цена за единицу при заказе партии от 100 штук?",
+        "Подтвердите цену выбранного SKU — 5,01 ¥.",
+      ],
+      { ...knifeCtx, priceReliable: false },
+    );
+    const idxMaterial = out.findIndex((q) => /марку|материал/i.test(q));
+    const idxDims = out.findIndex((q) => /длина.*ширин|ширин.*длин|габаритн/i.test(q));
+    const idxPrice = out.findIndex((q) => /цен[ауы]|оптов|стоимост/i.test(q));
+    expect(idxMaterial).toBeGreaterThanOrEqual(0);
+    expect(idxPrice).toBeGreaterThanOrEqual(0);
+    expect(idxMaterial).toBeLessThan(idxPrice);
+    expect(idxDims).toBeLessThan(idxPrice);
+  });
+
   it("does not duplicate a slot already covered by an existing question", () => {
     const out = applyUniversalGaps(knifeNicheOnly, knifeCtx);
     // price was already asked and is reliable → no second price question
