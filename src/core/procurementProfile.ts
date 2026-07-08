@@ -3335,7 +3335,10 @@ function stripUnconfirmedGradeTokens(title: string): string {
 function stripAssertedMeasurements(title: string): string {
   return title
     .replace(
-      /\s*\b\d+(?:[.,]\d+)?\s*(?:см|мм|кг|мл|hrc|вт|ватт|вольт|дюйм|градус[а-яё]*|°)\b\.?/gi,
+      // NB: JS \b is ASCII-only — a trailing \b after a Cyrillic unit ("см") never
+      // matches, so the token was never stripped. Use a Unicode-safe negative
+      // lookahead (unit not followed by another letter) instead.
+      /\s*\b\d+(?:[.,]\d+)?\s*(?:см|мм|кг|мл|hrc|вт|ватт|вольт|дюйм|градус[а-яё]*|°)(?![а-яёa-z])\.?/gi,
       " ",
     )
     .replace(/\s+,/g, ",")
@@ -4137,7 +4140,11 @@ export function buildSeoDraftFromProfile(
   // Prefer the LLM-generated SEO title when present — always through the
   // safeSeoTitle guard (strips WB/Ozon, dangerous claims, cross-border junk) —
   // else keep the deterministic identity-derived title.
-  const llmTitle = (p.content.seoTitle ?? "").trim();
+  // Prefer the SEO prose writer's title (single strong source), else the AI
+  // content title, else the deterministic identity title. All go through the
+  // safeSeoTitle guard (strips WB/Ozon, dangerous claims, unconfirmed measurements).
+  const proseTitle = String(product?.polishedDocs?.seoProse?.title ?? "").trim();
+  const llmTitle = proseTitle || (p.content.seoTitle ?? "").trim();
   const title = safeSeoTitle(
     llmTitle || safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
     p.identity.productKind,
@@ -4156,8 +4163,10 @@ export function buildSeoDraftFromProfile(
   // than the generic seoCard generator.
   const prose = product?.polishedDocs?.seoProse as
     | {
+        title?: string;
         description?: string;
         bullets?: string[];
+        keywords?: string[];
         characteristics?: Array<{ name: string; value: string; status: string }>;
       }
     | undefined;
@@ -4196,7 +4205,9 @@ export function buildSeoDraftFromProfile(
   // hollow marketing water ("Универсальный вариант для дома и в подарок") whenever
   // the product had fewer than 5 real facts. Now we ship only what we actually
   // know (LLM selling points + honest identity pool) and stop.
-  const bullets = uniq([...llmBullets, ...honestBulletPool], 5).slice(0, 5);
+  const bullets = dedupBulletsByOverlap(
+    uniq([...llmBullets, ...honestBulletPool], 8),
+  ).slice(0, 5);
   // Prefer the writer's characteristics, else the seoCard generator's, else the
   // deterministic per-kind table. Both LLM sources go through the same sanitizer.
   const rawChars =
@@ -4207,7 +4218,9 @@ export function buildSeoDraftFromProfile(
 
   // Keywords: prefer LLM deduped set, else a deterministic set (dropping the giant
   // title as a keyword and de-duplicating near-identical entries).
-  const rawKeywords = (p.content.seoKeywords ?? []).length
+  const rawKeywords = prose?.keywords?.length
+    ? prose.keywords
+    : (p.content.seoKeywords ?? []).length
     ? p.content.seoKeywords!
     : [
         // Honest floor: only LLM-extracted identity facts, no category seeding.
@@ -4288,9 +4301,6 @@ function hedgeDeclaredMaterial(text: string): string {
     .trim();
 }
 
-const SEO_DISCLAIMER =
-  "Перед публикацией подтвердите материал, выбранный SKU, вес, упаковку и реальные фото у поставщика. Неподтверждённые свойства не указывайте как факт.";
-
 function seoDescription(
   p: ProductProcurementProfile,
   title: string,
@@ -4306,8 +4316,9 @@ function seoDescription(
     ),
   );
   if (llm.length >= 40) {
-    const base = /[.!?]$/.test(llm) ? llm : `${llm}.`;
-    return `${base} ${SEO_DISCLAIMER}`;
+    // Pure customer-facing copy — publish caveats live in the dedicated
+    // "Что уточнить перед публикацией" section, never inside the description.
+    return /[.!?]$/.test(llm) ? llm : `${llm}.`;
   }
 
   // Deterministic fallback — a full sentence, never a bare-noun opener like "шорты.".
@@ -4328,10 +4339,9 @@ function seoDescription(
   // object and its use cases if known, otherwise openly defer to the supplier —
   // never the filler "подходит для повседневного использования", never category
   // guesses. The real, product-specific description comes from the LLM above.
-  const sentence = useCases
+  return useCases
     ? `${capitalizeRu(objectName)} — ${useCases}.${materialPart}`
-    : `${capitalizeRu(objectName)}.${materialPart} Полное описание и характеристики уточните у поставщика перед публикацией.`;
-  return `${sentence} ${SEO_DISCLAIMER}`;
+    : `${capitalizeRu(objectName)}.${materialPart}`.trim();
 }
 
 function capitalizeRu(s: string): string {
@@ -4399,6 +4409,44 @@ function dedupKeywords(items: string[], limit: number): string[] {
     if (out.length >= limit) break;
   }
   return out;
+}
+
+// Category-agnostic near-duplicate filter for SEO bullets. Two bullets that share
+// most of their significant word-stems (e.g. an LLM use-case bullet and the
+// deterministic use-case floor bullet — "нарезка мяса, овощей" twice) read as a
+// repeat; keep the first, drop the rest. Stems to 5 chars so inflections
+// ("нарезки"/"нарезка") still match. No product/category words hardcoded — pure
+// token overlap.
+function bulletStemSet(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 4)
+      .map((w) => w.slice(0, 5)),
+  );
+}
+export function dedupBulletsByOverlap(bullets: string[], threshold = 0.6): string[] {
+  const kept: string[] = [];
+  const keptSets: Set<string>[] = [];
+  for (const b of bullets) {
+    const toks = bulletStemSet(b);
+    if (toks.size === 0) {
+      kept.push(b);
+      continue;
+    }
+    const dup = keptSets.some((k) => {
+      if (k.size === 0) return false;
+      let inter = 0;
+      for (const t of toks) if (k.has(t)) inter += 1;
+      return inter / Math.min(toks.size, k.size) >= threshold;
+    });
+    if (dup) continue;
+    kept.push(b);
+    keptSets.push(toks);
+  }
+  return kept;
 }
 
 function seoCharacteristics(

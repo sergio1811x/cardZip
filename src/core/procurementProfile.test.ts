@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile } from './procurementProfile';
+import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile, dedupBulletsByOverlap } from './procurementProfile';
 
 function baseProduct(overrides: Record<string, any> = {}) {
   return {
@@ -103,10 +103,76 @@ describe('SEO title grounding', () => {
     const nameIdx = seo.findIndex((l) => l.trim() === '## Название');
     const nameLine = (seo[nameIdx + 1] ?? '').toLowerCase();
     // On 1688 the dimension is a seller claim, never confirmed → it must not be
-    // asserted as fact in the title while the card asks to confirm it.
-    expect(nameLine).not.toMatch(/\d+\s*(?:см|мм|кг|мл)\b/);
+    // asserted as fact in the title while the card asks to confirm it. (No \b after
+    // the Cyrillic unit — JS \b is ASCII-only and would make this assertion vacuous.)
+    expect(nameLine).not.toMatch(/\d+\s*(?:см|мм|кг|мл)/);
     // the object noun survives — we strip the measurement, not the product
     expect(nameLine).toMatch(/нож/);
+  });
+});
+
+describe('SEO draft quality — writer prose is the single source', () => {
+  const seoProse = {
+    title: 'Кухонный нож цайдао 20 см из нержавеющей стали для нарезки мяса и овощей',
+    description:
+      'Кухонный нож цайдао для нарезки мяса, овощей и рыбы на домашней кухне. Заявленный материал — нержавеющая сталь, рукоять деревянная.',
+    bullets: [
+      'Подходит для нарезки овощей, мяса и кухонных работ',
+      'Лезвие из нержавеющей стали, рукоять из дерева',
+      'Рекомендуется мыть вручную и вытирать насухо',
+    ],
+    keywords: ['нож цайдао', 'нож кухонный поварской', 'нож для мяса и овощей'],
+  };
+  const knife = () =>
+    baseProduct({
+      titleRu: 'Кухонный нож цайдао для мяса',
+      productKind: 'knife',
+      polishedDocs: { seoProse },
+    });
+
+  function section(md: string, header: string): string {
+    const lines = md.split('\n');
+    const i = lines.findIndex((l) => l.trim() === header);
+    return i === -1 ? '' : (lines[i + 1] ?? '');
+  }
+
+  it('description is pure customer copy — no seller-facing publish caveats', () => {
+    const desc = section(buildSeoDraftFromProfile(knife()), '## Описание').toLowerCase();
+    expect(desc.length).toBeGreaterThan(20);
+    expect(desc).not.toMatch(/у поставщик|перед публикацией|выбранный sku|реальные фото|неподтверждённые свойства/);
+  });
+
+  it('prefers the writer title but strips the unconfirmed measurement', () => {
+    const title = section(buildSeoDraftFromProfile(knife()), '## Название').toLowerCase();
+    expect(title).toMatch(/нож/);
+    expect(title).not.toMatch(/\d+\s*(?:см|мм|кг|мл)/);
+  });
+
+  it('prefers the writer keywords', () => {
+    const kw = section(buildSeoDraftFromProfile(knife()), '## Ключевые слова').toLowerCase();
+    expect(kw).toMatch(/цайдао/);
+  });
+});
+
+describe('dedupBulletsByOverlap — drops near-duplicate bullets', () => {
+  it('removes a use-case floor bullet that repeats an LLM use-case bullet', () => {
+    const out = dedupBulletsByOverlap([
+      'Подходит для нарезки овощей, мяса и кухонных работ',
+      'Лезвие из нержавеющей стали, рукоять из дерева',
+      'Кухонный нож цайдао — нарезка овощей, нарезка мяса, кухонные работы',
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out.filter((b) => /нарез/i.test(b))).toHaveLength(1);
+  });
+
+  it('keeps genuinely distinct bullets', () => {
+    const input = [
+      'Широкое лезвие удобно шинковать зелень и рубить мясо',
+      'Деревянная рукоять с фиксацией на заклёпках',
+      'Заявленный материал — нержавеющая сталь',
+      'Рекомендуется ручная мойка и просушка',
+    ];
+    expect(dedupBulletsByOverlap(input)).toHaveLength(4);
   });
 });
 
