@@ -17,7 +17,11 @@ import {
 import { selectBestProductTitle, isBadTitleCandidate } from "./titleSelection";
 import { sanitizeUserFacingText } from "./userFacingSanitizer";
 import { isPlaceholderValue, safeTitle } from "./placeholderGuard";
-import { applyUniversalGaps } from "./gapEngine";
+import {
+  applyUniversalGaps,
+  evaluateGapSlots,
+  type GapEngineContext,
+} from "./gapEngine";
 
 export type ProductKind =
   | "footwear"
@@ -2815,6 +2819,36 @@ function buildKindVerdict(
     : "Можно готовить заказ образца. Партию закупать только после проверки образца и упаковки.";
 }
 
+// Builds the category-agnostic gap-engine context from an assembled profile
+// (identity/sku/pricing) + raw product. Shared by the supplier-questions ranking
+// and the buyer-brief "must confirm" checklist so both read the same signals.
+function gapContextFromProfile(
+  p: Pick<ProductProcurementProfile, "identity" | "sku" | "pricing">,
+  product: any,
+): GapEngineContext {
+  return {
+    productText: [
+      p.identity.coreObject,
+      p.identity.titleForReport,
+      product?.titleRu,
+      product?.titleEn,
+      product?.titleCn,
+      product?.categoryName,
+      ...p.identity.materials,
+      ...p.identity.visibleFeatures,
+      ...p.identity.claimedFeatures,
+      ...p.identity.useCases,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    materials: p.identity.materials,
+    weightKgKnown: extractWeightKg(product) != null,
+    packageDimsKnown: extractDimensionsCm(product) != null,
+    priceReliable: p.pricing.priceReliable,
+    selectedSkuReliable: p.sku.selectedSkuReliable,
+  };
+}
+
 export function buildProductProcurementProfile(
   product: any,
   opts: { sourceUrl?: string; intelligence?: ProductIntelligence | any } = {},
@@ -2954,28 +2988,10 @@ export function buildProductProcurementProfile(
   // battery transport, compliance) are present and ranked above niche detail,
   // whatever the LLM happened to ask. Detection is keyword-based, not a category
   // enum, so it generalizes to any 1688 product. See gapEngine.ts.
-  const gapText = [
-    baseProfile.identity.coreObject,
-    baseProfile.identity.titleForReport,
-    product?.titleRu,
-    product?.titleEn,
-    product?.titleCn,
-    product?.categoryName,
-    ...baseProfile.identity.materials,
-    ...baseProfile.identity.visibleFeatures,
-    ...baseProfile.identity.claimedFeatures,
-    ...baseProfile.identity.useCases,
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const mustAskSupplier = applyUniversalGaps(domainQuestions, {
-    productText: gapText,
-    materials: baseProfile.identity.materials,
-    weightKgKnown: extractWeightKg(product) != null,
-    packageDimsKnown: extractDimensionsCm(product) != null,
-    priceReliable: pricing.priceReliable,
-    selectedSkuReliable: sku.selectedSkuReliable,
-  }).slice(0, 10);
+  const mustAskSupplier = applyUniversalGaps(
+    domainQuestions,
+    gapContextFromProfile(baseProfile, product),
+  ).slice(0, 10);
   const images = collectProductIntelligenceImages(product, 3);
   const supplierRaw =
     product?.supplierType ??
@@ -3825,17 +3841,28 @@ export function buildBuyerBriefFromProfile(
   opts: { sourceUrl?: string } = {},
 ): string {
   const p = ensureProductProcurementProfile(product, opts);
+  const weightKg = extractWeightKg(product);
+  const pkgDims = extractDimensionsCm(product);
+  // Slot-based "must confirm" checklist (short labels), NOT a copy of the full
+  // supplier-questions list — the buyer brief used to re-dump the same questions
+  // as 01_Вопросы_поставщику.txt. Full wording stays in that file; here we show a
+  // compact gap checklist so the two documents don't duplicate each other.
+  const mustConfirm = evaluateGapSlots(gapContextFromProfile(p, product))
+    .filter((s) => s.state === "must_confirm" && s.label)
+    .map((s) => s.label);
   return [
     "# ТЗ байеру",
     "",
-    "## 1. Товар",
+    "## 1. Товар (данные из карточки — заявлено, проверить)",
     `Название: ${p.identity.titleForReport}`,
     `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? "—"}`,
     `Цена: ${formatPriceForDisplay(p.pricing)}`,
     `SKU: ${p.sku.selectedSkuText ?? "не определён"}`,
     `SKU в карточке: ${p.sku.skuSummary}`,
     `Цвета: ${p.sku.colors.length ? p.sku.colors.join(", ") : "уточнить"}`,
-    `Материал: ${p.identity.materials.join(", ")}`,
+    `Материал: ${p.identity.materials.length ? p.identity.materials.join(", ") : "не указан"}`,
+    `Вес: ${weightKg != null ? `${String(weightKg).replace(".", ",")} кг (заявлено, уточнить с упаковкой)` : "нет в карточке"}`,
+    `Габариты упаковки: ${pkgDims ? `${pkgDims} см (предварительно)` : "нет в карточке"}`,
     `MOQ: ${pos(product?.moq) ? `${Math.round(pos(product?.moq)!)} шт.` : "уточнить"}`,
     "",
     "## 2. Поставщик",
@@ -3844,8 +3871,9 @@ export function buildBuyerBriefFromProfile(
     `Рейтинг: ${p.supplier.rating || "—"}`,
     `Заказы: ${p.supplier.orders || "—"}`,
     "",
-    "## 3. Что подтвердить у поставщика",
-    ...list(p.procurement.mustAskSupplier, 10),
+    "## 3. Что подтвердить у поставщика (ключевое)",
+    ...list(mustConfirm, 12),
+    "Полные формулировки вопросов — в файле 01_Вопросы_поставщику.txt.",
     "",
     "## 4. Что проверить на образце",
     ...list(p.procurement.mustCheckOnSample, 10),

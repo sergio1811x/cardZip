@@ -112,6 +112,74 @@ function detectComplianceHint(text: string): string | null {
   return null;
 }
 
+export type GapSlotState = "in_card" | "must_confirm" | "not_applicable";
+
+export interface GapSlotStatus {
+  id: GapSlotId;
+  /** Short human label for a checklist (NOT a full supplier question). */
+  label: string;
+  state: GapSlotState;
+}
+
+/**
+ * Evaluates the universal procurement slots into a "known vs must-confirm"
+ * checklist for briefs (e.g. buyer brief) — so a document can show WHAT still
+ * needs confirming without re-dumping the full supplier-questions list. Same
+ * category-agnostic signals as {@link applyUniversalGaps}.
+ */
+export function evaluateGapSlots(ctx: GapEngineContext): GapSlotStatus[] {
+  const text = ctx.productText.toLowerCase();
+  const transport = detectTransportConstraint(text);
+  const compliance = detectComplianceHint(text);
+  return [
+    {
+      id: "price",
+      label: "актуальную цену выбранного SKU и цену при опте",
+      state: ctx.priceReliable ? "in_card" : "must_confirm",
+    },
+    {
+      id: "selected_variant",
+      label: "какой именно вариант/SKU соответствует этой цене и фото",
+      state: ctx.selectedSkuReliable ? "in_card" : "must_confirm",
+    },
+    {
+      id: "material",
+      label: "точный материал и его марку/состав (не маркетинговое название)",
+      state: "must_confirm",
+    },
+    {
+      id: "dimensions",
+      label: "точные габаритные размеры: длина, ширина, высота или диаметр",
+      state: "must_confirm",
+    },
+    {
+      id: "unit_weight_packed",
+      label: "вес одной единицы с индивидуальной упаковкой (брутто)",
+      state: ctx.weightKgKnown ? "in_card" : "must_confirm",
+    },
+    {
+      id: "package_dims",
+      label: "габариты индивидуальной упаковки (длина × ширина × высота)",
+      state: ctx.packageDimsKnown ? "in_card" : "must_confirm",
+    },
+    {
+      id: "carton",
+      label: "количество в транспортном коробе, вес и габариты короба",
+      state: "must_confirm",
+    },
+    {
+      id: "transport_constraint",
+      label: transport ?? "",
+      state: transport ? "must_confirm" : "not_applicable",
+    },
+    {
+      id: "compliance",
+      label: compliance ? `сертификаты/декларации соответствия (${compliance})` : "",
+      state: compliance ? "must_confirm" : "not_applicable",
+    },
+  ];
+}
+
 interface RankedQuestion {
   text: string;
   priority: number;

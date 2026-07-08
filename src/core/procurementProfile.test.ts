@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile } from './procurementProfile';
+import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile } from './procurementProfile';
 
 function baseProduct(overrides: Record<string, any> = {}) {
   return {
@@ -133,6 +133,20 @@ describe('SEO bullets are 3–5 honest, never padded with filler', () => {
     const joined = bulletLines.join(' ').toLowerCase();
     expect(joined).not.toMatch(/универсальный вариант для дома и в подарок/);
     expect(joined).not.toMatch(/компактный формат — удобно хранить/);
+  });
+});
+
+describe('buyer brief does not duplicate the supplier questions file', () => {
+  it('shows a compact slot checklist and points to 01_Вопросы instead of re-dumping questions', () => {
+    const buyer = buildBuyerBriefFromProfile(baseProduct({ titleRu: 'Кухонный нож-топорик сталь для мяса' }));
+    expect(buyer).toMatch(/01_Вопросы_поставщику\.txt/);
+    const low = buyer.toLowerCase();
+    expect(low).toMatch(/точный материал/);
+    expect(low).toMatch(/габаритные размеры/);
+    expect(low).toMatch(/коробе/);
+    // section 1 now exposes weight + package dimensions as card facts
+    expect(buyer).toMatch(/Вес:/);
+    expect(buyer).toMatch(/Габариты упаковки:/);
   });
 });
 
