@@ -26,15 +26,10 @@ export type GapSlotId =
   | "transport_constraint"
   | "compliance";
 
-/** Lower number → shown first. Universal procurement basics rank above
- * category-specific detail. Category-specific questions (no slot) get
- * {@link CATEGORY_SPECIFIC_PRIORITY}, so they survive but rank after basics.
- *
- * Ordering rationale: for the sample decision, WHAT you are buying and its
- * physical, verify-on-sample specs (material grade, dimensions, packed weight,
- * packaging) matter more than negotiating the price — the price is already shown
- * in the report and is a supplier-chat detail. So `price` is demoted below the
- * physical basics; only compliance ranks after it. */
+/** Orders ONLY the universal basics that get appended when the LLM omitted them
+ * (lower number → appended earlier). It no longer reorders the LLM's own
+ * questions. Physical, verify-on-sample basics (material grade, dimensions, packed
+ * weight, packaging) come before the price ask; compliance is last. */
 const SLOT_PRIORITY: Record<GapSlotId, number> = {
   selected_variant: 0,
   material: 1,
@@ -46,8 +41,6 @@ const SLOT_PRIORITY: Record<GapSlotId, number> = {
   price: 7,
   compliance: 8,
 };
-
-const CATEGORY_SPECIFIC_PRIORITY = 40;
 
 export interface GapEngineContext {
   /** All product text (titles, category, materials, features) lowercased for
@@ -208,12 +201,22 @@ function normKey(q: string): string {
 }
 
 /**
- * Merges category-specific questions (from LLM + KIND_RULES) with universal
- * procurement-basics, guaranteeing the basics are present and ranked first.
+ * Guarantees the universal procurement basics are PRESENT, without reordering the
+ * caller's questions.
  *
- * @param existing questions already produced downstream (already RU-cleaned).
+ * The LLM understands THIS product better than a fixed slot table does — for a
+ * knife it rightly ranks hardness/edge geometry above the carton spec; for a
+ * heater it ranks voltage/plug first. So we keep the LLM's own priority order as
+ * the backbone and only APPEND the universal basics it omitted (in slot order),
+ * after its questions. (An earlier version force-sorted every basic above all
+ * category-specific questions, which pushed a knife's HRC/edge questions past the
+ * final cap — the exact regression this avoids.)
+ *
+ * @param existing questions already produced downstream (already RU-cleaned), in
+ *                 the LLM's intended priority order.
  * @param ctx      signals about what is known from the 1688 data.
- * @returns ordered, de-duplicated question list (caller applies the final cap).
+ * @returns the existing questions in order, plus appended missing basics,
+ *          de-duplicated (caller applies the final cap).
  */
 export function applyUniversalGaps(
   existing: string[],
@@ -259,22 +262,17 @@ export function applyUniversalGaps(
   if (compliance)
     addIfUncovered("compliance", () => `Есть ли сертификаты/декларации соответствия (${compliance})?`);
 
-  const existingRanked: RankedQuestion[] = existing.map((q) => {
-    const s = slotOf(q);
-    return { text: q, priority: s ? SLOT_PRIORITY[s] : CATEGORY_SPECIFIC_PRIORITY };
-  });
+  // Appended basics are ordered among THEMSELVES by slot priority; the LLM's own
+  // questions keep their original order and always come first.
+  const appended = added
+    .sort((a, b) => a.priority - b.priority)
+    .map((q) => q.text);
 
   const seen = new Set<string>();
-  return [...added, ...existingRanked]
-    .filter((q) => {
-      const k = normKey(q.text);
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    })
-    // Stable sort by priority: universal basics first, category-specific after,
-    // original relative order preserved within the same priority bucket.
-    .map((q, i) => ({ ...q, i }))
-    .sort((a, b) => a.priority - b.priority || a.i - b.i)
-    .map((q) => q.text);
+  return [...existing, ...appended].filter((q) => {
+    const k = normKey(q);
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }

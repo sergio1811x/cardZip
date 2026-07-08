@@ -32,31 +32,28 @@ describe("gapEngine.applyUniversalGaps — universal procurement basics", () => 
     expect(j).toMatch(/длина.*ширин|ширин.*длин/); // full dimensions
   });
 
-  it("ranks universal basics above niche detail (packed weight before HRC)", () => {
+  it("preserves the LLM's order and only appends the missing basics after it", () => {
     const out = applyUniversalGaps(knifeNicheOnly, knifeCtx);
-    const idxWeight = out.findIndex((q) => /вес.*упаковк/i.test(q));
+    // The LLM's own questions keep their exact positions …
+    knifeNicheOnly.forEach((q, i) => expect(out[i]).toBe(q));
+    // … so a knife's HRC (LLM question) is NOT pushed below the appended basics.
     const idxHrc = out.findIndex((q) => /hrc|роквелл/i.test(q));
-    expect(idxWeight).toBeGreaterThanOrEqual(0);
-    expect(idxWeight).toBeLessThan(idxHrc);
+    const idxWeight = out.findIndex((q) => /вес.*упаковк/i.test(q));
+    expect(idxHrc).toBeGreaterThanOrEqual(0);
+    expect(idxWeight).toBeGreaterThan(idxHrc); // packed weight appended after
   });
 
-  it("ranks physical specs (material, dimensions, weight) above the price ask", () => {
-    // For the sample decision, what you can only learn from the supplier (grade,
-    // dimensions, packed weight) matters more than negotiating the shown price.
-    const out = applyUniversalGaps(
-      [
-        "Какова актуальная оптовая цена за единицу при заказе партии от 100 штук?",
-        "Подтвердите цену выбранного SKU — 5,01 ¥.",
-      ],
-      { ...knifeCtx, priceReliable: false },
-    );
+  it("does not reorder the LLM's questions (price stays where the LLM put it)", () => {
+    const existing = [
+      "Какова твёрдость стали по шкале Роквелла (HRC)?",
+      "Подтвердите цену выбранного SKU — 5,01 ¥.",
+    ];
+    const out = applyUniversalGaps(existing, { ...knifeCtx, priceReliable: false });
+    expect(out[0]).toBe(existing[0]);
+    expect(out[1]).toBe(existing[1]);
+    // appended basics (material, dimensions, …) come AFTER the LLM's questions
     const idxMaterial = out.findIndex((q) => /марку|материал/i.test(q));
-    const idxDims = out.findIndex((q) => /длина.*ширин|ширин.*длин|габаритн/i.test(q));
-    const idxPrice = out.findIndex((q) => /цен[ауы]|оптов|стоимост/i.test(q));
-    expect(idxMaterial).toBeGreaterThanOrEqual(0);
-    expect(idxPrice).toBeGreaterThanOrEqual(0);
-    expect(idxMaterial).toBeLessThan(idxPrice);
-    expect(idxDims).toBeLessThan(idxPrice);
+    expect(idxMaterial).toBeGreaterThan(1);
   });
 
   it("does not duplicate a slot already covered by an existing question", () => {
