@@ -111,6 +111,58 @@ describe('SEO title grounding', () => {
   });
 });
 
+describe('supplier questions — hard gate + cargo essentials', () => {
+  const dryer = () =>
+    baseProduct({
+      titleRu: 'Высокоскоростной фен',
+      productKind: 'small_appliance',
+      priceYuan: 28,
+      weightKg: 0.62,
+      skus: [
+        { name: 'только кейс', priceYuan: 28 },
+        { name: 'кейс и насадка', priceYuan: 28 },
+        { name: 'кейс и фен', priceYuan: 28 },
+      ],
+      productContext: {
+        procurementProfileDraft: {
+          procurement: {
+            mustAskSupplier: [
+              'Какова реальная потребляемая мощность в ваттах?',
+              'Есть ли сертификаты безопасности (CE, RoHS, EAC)?',
+              'Какой тип двигателя используется?',
+              'Какова длина сетевого шнура?',
+              'Поддерживает ли фен напряжение 220В?',
+              'Есть ли защита от перегрева?',
+              'Какие режимы температуры доступны?',
+              'Есть ли гарантия?',
+              'Какой стандарт вилки?',
+              'Есть ли ионизация?',
+            ],
+          },
+        },
+      },
+    });
+
+  it('leads with the SKU-composition question when the variant is unconfirmed', () => {
+    const p = buildProductProcurementProfile(dryer());
+    expect(p.sku.selectedSkuReliable).toBe(false);
+    expect(p.procurement.mustAskSupplier[0].toLowerCase()).toMatch(/какой именно sku|что.*входит в.*комплект/);
+    expect(p.procurement.leadQuestions.length).toBeGreaterThan(0);
+  });
+
+  it('keeps cargo essentials (packed weight, package dims) despite a long LLM list', () => {
+    const j = buildProductProcurementProfile(dryer()).procurement.mustAskSupplier.join(' ').toLowerCase();
+    expect(j).toMatch(/вес.*индивидуальн.*упаковк/);
+    expect(j).toMatch(/габарит.*индивидуальн.*упаковк/);
+  });
+
+  it('does not duplicate the variant question', () => {
+    const qs = buildProductProcurementProfile(dryer()).procurement.mustAskSupplier;
+    const variantAsks = qs.filter((q) => /вариант\/sku|какой именно sku/i.test(q));
+    expect(variantAsks.length).toBe(1);
+  });
+});
+
 describe('SEO draft quality — writer prose is the single source', () => {
   const seoProse = {
     title: 'Кухонный нож цайдао 20 см из нержавеющей стали для нарезки мяса и овощей',

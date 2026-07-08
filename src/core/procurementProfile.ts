@@ -119,6 +119,10 @@ export type ProductProcurementProfile = {
     status: string;
     verdict: string;
     nextAction: string;
+    // Deterministic hard-gate questions every document must lead with (e.g. "which
+    // SKU / what's included" when the variant is unconfirmed). Already prepended to
+    // mustAskSupplier; surfaced separately so briefs can lead with them too.
+    leadQuestions: string[];
     mustAskSupplier: string[];
     mustCheckBeforeSample: string[];
     mustCheckOnSample: string[];
@@ -2849,6 +2853,96 @@ function gapContextFromProfile(
   };
 }
 
+// Normalized key for de-duplicating questions (Unicode-safe).
+function questionKey(q: string): string {
+  return q.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+// Deterministic hard-gate questions from the profile's own state. Currently: when
+// the variant is unconfirmed, force a composition-aware "which SKU / what's
+// included" question — the single most important thing to confirm before buying an
+// ambiguous listing. Category-agnostic (built from the SKU's own variant data).
+function buildLeadQuestions(
+  sku: ProductProcurementProfile["sku"],
+  pricing: ProductProcurementProfile["pricing"],
+): string[] {
+  const lead: string[] = [];
+  if (!sku.selectedSkuReliable) {
+    const priceText =
+      pricing.displayPriceText &&
+      !/не\s*указан|missing|^—$/i.test(pricing.displayPriceText.trim())
+        ? ` за ${clean(pricing.displayPriceText)}`
+        : "";
+    const variants = uniq(
+      [...sku.packageTypes, ...sku.models, ...sku.colors]
+        .map((v) => clean(v))
+        .filter(Boolean),
+      4,
+    );
+    const variantHint = variants.length
+      ? ` Что именно входит в этот комплект (в карточке есть варианты: ${variants.join(" / ")}) — сам товар или только упаковка/аксессуар?`
+      : " Входит ли в комплект сам товар, а не только упаковка/аксессуар?";
+    lead.push(
+      `Какой именно SKU соответствует цене${priceText}?${variantHint}`,
+    );
+  }
+  return lead;
+}
+
+// Composes the final supplier-question list: hard gates first, then the LLM's top
+// questions, then RESERVED slots for the universal basics — so a verbose LLM list
+// can't push logistics/compliance off the capped end. Lead questions are fed to
+// the gap engine too, so their slots (variant/price) aren't re-added generically.
+function assembleSupplierQuestions(
+  lead: string[],
+  domainQuestions: string[],
+  ctx: GapEngineContext,
+  cap: number,
+): string[] {
+  const merged = applyUniversalGaps([...lead, ...domainQuestions], ctx);
+  const leadKeys = new Set(lead.map(questionKey));
+  // Cargo essentials (packed weight, individual-package dims, carton) are required
+  // for any quote and the LLM almost never asks them; material grade likewise. They
+  // may arrive from KIND_RULES (tail of domainQuestions) or the gap engine — either
+  // way RESERVE slots for them by CONTENT so a verbose LLM list can't cap them out.
+  // Patterns match the questions' own wording, not product/category terms.
+  const isCargo = (q: string) =>
+    /вес[^.]*(с\s+упаковк|с\s+индивидуальн|брутто)|габарит[а-яё]*\s*(индивидуальн|упаковк)|транспортн[а-яё]*\s+короб|коробе|коробк|карт[оа]н|мастер-?короб/i.test(
+      q,
+    );
+  const isMaterial = (q: string) =>
+    /материал|марк[аиуе]\s*(стали|металл|пластик)|состав\s+(ткани|материал)/i.test(q);
+  // A hard-gate lead already asks "which SKU / what's included" → drop the gap
+  // engine's generic variant re-ask (its own internal string) to avoid a duplicate.
+  const body = merged.filter(
+    (q) =>
+      !leadKeys.has(questionKey(q)) &&
+      !(lead.length && /какой\s+именно\s+вариант\/sku\s+соответствует/i.test(q)),
+  );
+  const cargo = body.filter(isCargo);
+  const material = body.filter((q) => isMaterial(q) && !isCargo(q));
+  // Reserve up to 3 cargo essentials + 1 material; drop any EXTRA cargo/material
+  // from the tail so they can't produce duplicate material/packaging questions.
+  const reserved = [...cargo.slice(0, 3), ...material.slice(0, 1)];
+  const cargoMaterialKeys = new Set([...cargo, ...material].map(questionKey));
+  const rest = body.filter((q) => !cargoMaterialKeys.has(questionKey(q)));
+  // Order: hard gate → LLM's top product-specific questions → reserved
+  // cargo/material at the end. Guarantees the basics survive the cap without
+  // pushing the LLM's own priorities (e.g. a knife's HRC) below them.
+  const keptRest = rest.slice(0, Math.max(0, cap - lead.length - reserved.length));
+  const composed = [...lead, ...keptRest, ...reserved];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const q of composed) {
+    const k = questionKey(q);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(q);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
 export function buildProductProcurementProfile(
   product: any,
   opts: { sourceUrl?: string; intelligence?: ProductIntelligence | any } = {},
@@ -2983,15 +3077,21 @@ export function buildProductProcurementProfile(
     ],
     20,
   );
-  // Universal, category-agnostic gap engine: guarantees the procurement basics
-  // (packed weight, package/carton dims, exact material grade, sharp/fragile/
-  // battery transport, compliance) are present and ranked above niche detail,
-  // whatever the LLM happened to ask. Detection is keyword-based, not a category
-  // enum, so it generalizes to any 1688 product. See gapEngine.ts.
-  const mustAskSupplier = applyUniversalGaps(
+  // Hard gates (deterministic): the questions EVERY document must lead with. When
+  // the variant isn't confirmed, "which SKU / what's included" is always #1 — the
+  // more so when variants differ in contents (full item vs case/box only). Built
+  // from the profile's own SKU data, category-agnostic.
+  const leadQuestions = buildLeadQuestions(sku, pricing);
+  // Universal, category-agnostic gap engine guarantees the procurement basics
+  // (packed weight, package/carton dims, material, transport, compliance) are
+  // present. Assembly forces the hard gates first and RESERVES cap slots for the
+  // basics, so a long LLM list can't push logistics/compliance off the end.
+  const mustAskSupplier = assembleSupplierQuestions(
+    leadQuestions,
     domainQuestions,
     gapContextFromProfile(baseProfile, product),
-  ).slice(0, 10);
+    10,
+  );
   const images = collectProductIntelligenceImages(product, 3);
   const supplierRaw =
     product?.supplierType ??
@@ -3030,6 +3130,7 @@ export function buildProductProcurementProfile(
         })(),
       }),
       nextAction: "Отправьте вопросы поставщику и скачайте закупочный пакет.",
+      leadQuestions,
       mustAskSupplier,
       mustCheckBeforeSample: normalizeFragmentLines(
         uniq(
@@ -3895,11 +3996,11 @@ export function buildBuyerBriefFromProfile(
     `Заказы: ${p.supplier.orders || "—"}`,
     "",
     "## 3. Что подтвердить у поставщика (ключевое)",
-    ...list(mustConfirm, 12),
+    ...list([...(p.procurement.leadQuestions ?? []), ...mustConfirm], 12),
     "Полные формулировки вопросов — в файле 01_Вопросы_поставщику.txt.",
     "",
     "## 4. Что проверить на образце",
-    ...list(p.procurement.mustCheckOnSample, 10),
+    ...list(dedupBulletsByOverlap(p.procurement.mustCheckOnSample), 10),
     "",
     "## 5. Фото, которые нужно запросить",
     "- общий вид выбранного SKU",

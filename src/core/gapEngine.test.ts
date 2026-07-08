@@ -74,7 +74,9 @@ describe("gapEngine.applyUniversalGaps — universal procurement basics", () => 
     });
     const j = out.join(" ").toLowerCase();
     expect(j).not.toMatch(/остр|лезви|литиев|герметичн|аэрозол/); // no false hazard
-    expect(j).not.toMatch(/вес.*упаковк/); // weight already known
+    // Packed weight is ALWAYS asked — the card's bare weight is not the packed
+    // weight, which is never on a 1688 card yet required for any cargo quote.
+    expect(j).toMatch(/вес.*упаковк/);
     expect(j).toMatch(/материал|марку/); // still asks material
     expect(j).toMatch(/короб/); // still asks carton
   });

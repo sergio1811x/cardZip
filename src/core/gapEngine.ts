@@ -153,13 +153,14 @@ export function evaluateGapSlots(ctx: GapEngineContext): GapSlotStatus[] {
     },
     {
       id: "unit_weight_packed",
+      // Packed weight is never in the 1688 card (card weight = bare product) → always confirm.
       label: "вес одной единицы с индивидуальной упаковкой (брутто)",
-      state: ctx.weightKgKnown ? "in_card" : "must_confirm",
+      state: "must_confirm",
     },
     {
       id: "package_dims",
       label: "габариты индивидуальной упаковки (длина × ширина × высота)",
-      state: ctx.packageDimsKnown ? "in_card" : "must_confirm",
+      state: "must_confirm",
     },
     {
       id: "carton",
@@ -249,10 +250,12 @@ export function applyUniversalGaps(
     "dimensions",
     () => "Уточните точные габаритные размеры товара: длина, ширина, высота или диаметр (в мм/см).",
   );
-  if (!ctx.weightKgKnown)
-    addIfUncovered("unit_weight_packed", () => "Укажите вес одной единицы с индивидуальной упаковкой (брутто).");
-  if (!ctx.packageDimsKnown)
-    addIfUncovered("package_dims", () => "Укажите габариты индивидуальной упаковки (длина × ширина × высота).");
+  // Packed/individual weight, individual-package dims and carton are NEVER in the
+  // 1688 card (the card's weight is the bare product weight), yet they're required
+  // for any cargo quote — so always ask them, regardless of what bare figures the
+  // card happened to list.
+  addIfUncovered("unit_weight_packed", () => "Укажите вес одной единицы с индивидуальной упаковкой (брутто).");
+  addIfUncovered("package_dims", () => "Укажите габариты индивидуальной упаковки (длина × ширина × высота).");
   addIfUncovered("carton", () => "Сколько штук в транспортном коробе, какой вес и габариты короба?");
 
   const transport = detectTransportConstraint(text);
