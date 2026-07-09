@@ -162,6 +162,11 @@ describe('supplier questions — hard gate + cargo essentials', () => {
     expect(variantAsks.length).toBe(1);
   });
 
+  it('leads the risks with a hard SKU-composition red flag when unconfirmed', () => {
+    const p = buildProductProcurementProfile(dryer());
+    expect(p.procurement.redFlags[0].toLowerCase()).toMatch(/не тем комплектом|не только упаковк/);
+  });
+
   it('renders the paired RU+CN version from the persisted list (no CN drop)', () => {
     const ru = ['Какой SKU за 28 ¥?', 'Какова мощность?', 'Есть ли сертификаты?'];
     const cn = ['所选SKU对应28元吗？', '功率是多少？', '有认证吗？'];

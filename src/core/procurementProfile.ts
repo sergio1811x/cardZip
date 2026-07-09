@@ -2501,6 +2501,16 @@ function buildSkuProfile(
       selected.selectedSkuText = `${selected.selectedSkuText} · стандарт вилки уточнить`;
     }
   }
+  // Guard against garbage SKU labels ("+ -", "！", "-") leaking into questions/UI:
+  // a real variant label must carry meaningful alphanumeric content. Otherwise the
+  // variant is effectively unknown.
+  if (
+    selected.selectedSkuText &&
+    selected.selectedSkuText.replace(/[^\p{L}\p{N}]/gu, "").length < 2
+  ) {
+    selected.selectedSkuText = null;
+    selected.reliable = false;
+  }
   return {
     skuSummary,
     selectedSkuText: selected.selectedSkuText,
@@ -3151,6 +3161,14 @@ export function buildProductProcurementProfile(
       redFlags: normalizeFragmentLines(
         uniq(
           [
+            // Hard SKU-composition flag first: when the variant is unconfirmed and
+            // the listing has case/box-only variants, the #1 risk is receiving the
+            // wrong set (only packaging) instead of the product itself.
+            ...(sku.selectedSkuReliable
+              ? []
+              : [
+                  "Заказанный SKU может оказаться не тем комплектом — проверить, что в него входит сам товар, а не только упаковка/футляр/коробка/аксессуар",
+                ]),
             ...array<string>(draftProcurement.redFlags).map(safeRu),
             ...rules.redFlags,
             ...array<string>(intelligence?.reportRules?.riskFlags).map(safeRu),
@@ -4326,6 +4344,76 @@ function hedgeUnitIfClaimed(unit: string, featureStems: Set<string>[]): string {
 const PACKAGING_RE =
   /кейс[а-яё]*|футляр[а-яё]*|чехл[а-яё]*|чехол|подарочн[а-яё]*|комплектн[а-яё]*|в\s+подарок|готов[а-яё]*\s+подар/i;
 
+// Effect / safety claims about the user or their health ("бережно относится к
+// волосам", "предотвращает повреждение", "безопасен для кожи"). These need tests
+// to state and must never appear in a 1688 draft. Structural (about the person),
+// not category-specific product terms.
+const SAFETY_CLAIM_RE =
+  /бережн[а-яё]*|защища[а-яё]*\s+(?:волос|кож|здоров|организм|от\s+поврежд)|предотвраща[а-яё]*\s+(?:поврежд|ломк|сечени|выпаден|вред)|безопасн[а-яё]*\s+для\s+(?:волос|кож|здоров|детей|организм)|не\s+вред[а-яё]*|защит[а-яё]*\s+волос/i;
+
+// Deterministic, structured SEO title: assembled ONLY from the closed set of
+// confirmed identity facts (object + use-cases). Claimed features, packaging and
+// numbers are never in that set, so by construction they cannot appear in the
+// title. Keyword-dense and honest.
+// Strip seller-claimed feature phrases from a noun (ё/е-tolerant), so a noisy
+// object like "Высокоскоростной фен с ионизацией" loses the unconfirmed feature.
+function stripClaimedFeaturePhrases(
+  text: string,
+  claimedFeatures: string[],
+): string {
+  let out = ` ${text} `;
+  for (const f of claimedFeatures) {
+    for (const w of clean(f)
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((x) => x.length >= 5)) {
+      const pat = w
+        .slice(0, 6)
+        .split("")
+        .map((c) => (/[её]/i.test(c) ? "[её]" : escapeRegExp(c)))
+        .join("");
+      out = out.replace(
+        new RegExp(`\\s*(?:с|со|и|,|—|для)?\\s*${pat}[а-яё]*`, "giu"),
+        " ",
+      );
+    }
+  }
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
+export function buildStructuredTitle(
+  coreObject: string,
+  useCases: string[],
+  claimedFeatures: string[] = [],
+): string {
+  // "X с Y" in a product noun almost always introduces a feature ("фен с
+  // ионизацией") — cut at the first " с/со " so the object is just the noun. Then
+  // strip any remaining claimed-feature phrase as a backup. ("для волос" is part of
+  // the noun, so we never cut there.)
+  const nounOnly = clean(coreObject).split(/\s+(?:с|со)\s+/i)[0];
+  const obj =
+    capitalizeRu(stripClaimedFeaturePhrases(nounOnly, claimedFeatures)) ||
+    "Товар";
+  const objWords = new Set(
+    obj.toLowerCase().replace(/ё/g, "е").split(/[^а-яёa-z0-9]+/i).filter(Boolean),
+  );
+  const uses = uniq(
+    useCases
+      .map((u) =>
+        clean(u)
+          .replace(/^для\s+/i, "")
+          // drop words already present in the object (avoids "фен для волос — сушка волос")
+          .split(/\s+/)
+          .filter((w) => !objWords.has(w.toLowerCase().replace(/ё/g, "е")))
+          .join(" ")
+          .trim(),
+      )
+      .filter((u) => u && !/уточнит/i.test(u)),
+    5,
+  );
+  return uses.length ? `${obj} — ${uses.join(", ")}` : obj;
+}
+
 // Strip an unconfirmed packaging clause from a title (e.g. "в подарочном кейсе").
 export function stripUnconfirmedPackaging(title: string): string {
   return title
@@ -4368,18 +4456,23 @@ export function groundSeoToProfile(
   const featureStems = claimed
     .map(featureStemSet)
     .filter((s) => s.size >= 1);
+  // Uniform firewall applied to EVERY description sentence and EVERY bullet: drop
+  // effect/safety claims outright, and drop packaging/gift assertions when the
+  // variant is unconfirmed. Same rule everywhere — no surface left ungoverned.
+  const packagingRisky = p.sku?.selectedSkuReliable === false;
+  const dropUnit = (u: string) =>
+    SAFETY_CLAIM_RE.test(u) || (packagingRisky && PACKAGING_RE.test(u));
   const desc = reconcileMaterialToProfile(description, p)
     .split(/(?<=[.!?])\s+/)
+    .filter((s) => !dropUnit(s))
     .map((s) => hedgeUnitIfClaimed(s, featureStems))
     .join(" ")
     .replace(/\s{2,}/g, " ")
     .trim();
-  let bl = bullets.map((b) =>
-    hedgeUnitIfClaimed(reconcileMaterialToProfile(b, p), featureStems),
-  );
-  // Unconfirmed variant → don't sell the packaging/gift-set as guaranteed. Drop
-  // bullets whose selling point is the case/pouch/gift box.
-  if (p.sku?.selectedSkuReliable === false) bl = bl.filter((b) => !PACKAGING_RE.test(b));
+  const bl = bullets
+    .map((b) => reconcileMaterialToProfile(b, p))
+    .filter((b) => !dropUnit(b))
+    .map((b) => hedgeUnitIfClaimed(b, featureStems));
   return { description: desc, bullets: bl };
 }
 
@@ -4411,14 +4504,20 @@ export function buildSeoDraftFromProfile(
   // Prefer the SEO prose writer's title (single strong source), else the AI
   // content title, else the deterministic identity title. All go through the
   // safeSeoTitle guard (strips WB/Ozon, dangerous claims, unconfirmed measurements).
-  const proseTitle = String(product?.polishedDocs?.seoProse?.title ?? "").trim();
-  const llmTitle = proseTitle || (p.content.seoTitle ?? "").trim();
+  // Structured title: built deterministically from the closed identity fact set —
+  // the LLM's free-form title (which asserted claimed features as fact, e.g.
+  // "бесщёточный мотор") is no longer trusted for the title. safeSeoTitle still
+  // sanitizes; packaging is stripped when the variant is unconfirmed.
+  const structuredTitle = buildStructuredTitle(
+    p.identity.coreObject,
+    p.identity.useCases,
+    [...p.identity.claimedFeatures, ...p.identity.unconfirmedFeatures],
+  );
   const titleRaw = safeSeoTitle(
-    llmTitle || safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
+    structuredTitle ||
+      safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
     p.identity.productKind,
   );
-  // Unconfirmed variant → the pack contents are ambiguous; strip a packaging claim
-  // ("в подарочном кейсе") from the title so it isn't sold as a guaranteed set.
   const title = p.sku.selectedSkuReliable
     ? titleRaw
     : stripUnconfirmedPackaging(titleRaw) || titleRaw;

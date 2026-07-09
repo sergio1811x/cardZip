@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { groundSeoToProfile, stripUnconfirmedPackaging } from "./procurementProfile";
+import {
+  groundSeoToProfile,
+  stripUnconfirmedPackaging,
+  buildStructuredTitle,
+} from "./procurementProfile";
 
 // The honesty projection is the architectural guarantee that SEO copy stays a
 // PROJECTION of the profile: materials are contained to the profile's set and
@@ -87,5 +91,56 @@ describe("packaging guard — unconfirmed variant", () => {
     expect(t).not.toMatch(/кейс|подарочн/i);
     expect(t).not.toMatch(/\sв\s+для/);
     expect(t).toMatch(/фен для волос/i);
+  });
+
+  it("drops a packaging sentence from the description when the variant is unconfirmed", () => {
+    const unreliable = {
+      identity: { materials: [], claimedFeatures: [], unconfirmedFeatures: [] },
+      sku: { selectedSkuReliable: false },
+    } as any;
+    const out = groundSeoToProfile(
+      unreliable,
+      "Фен для сушки волос. Подарочный футляр в комплекте решает вопрос хранения.",
+      [],
+    );
+    expect(out.description).not.toMatch(/футляр|подарочн/i);
+    expect(out.description).toMatch(/фен для сушки/i);
+  });
+});
+
+describe("safety / effect claims", () => {
+  const p = {
+    identity: { materials: [], claimedFeatures: [], unconfirmedFeatures: [] },
+    sku: { selectedSkuReliable: true },
+  } as any;
+
+  it("drops a bullet claiming an effect on the user's hair/health", () => {
+    const out = groundSeoToProfile(p, "", [
+      "Насадка-концентратор направляет поток на пряди",
+      "Защита от перегрева бережно относится к волосам, предотвращая их повреждение",
+    ]);
+    expect(out.bullets).toHaveLength(1);
+    expect(out.bullets[0]).toMatch(/насадка/i);
+  });
+});
+
+describe("buildStructuredTitle — no claimed features by construction", () => {
+  it("excludes claimed features and packaging, stays keyword-present", () => {
+    const t = buildStructuredTitle(
+      "Высокоскоростной фен с ионизацией",
+      ["сушка волос", "укладка"],
+      ["ионизация", "бесщёточный двигатель"],
+    );
+    expect(t).not.toMatch(/ионизац/i);
+    expect(t.toLowerCase()).toContain("фен");
+    expect(t.toLowerCase()).toMatch(/сушка|укладка/);
+  });
+
+  it("does not orphan a synonym when cutting at ' с '", () => {
+    const t = buildStructuredTitle("Кухонный нож с бесщёточным мотором", ["нарезка мяса"], [
+      "бесщёточный двигатель",
+    ]);
+    expect(t).not.toMatch(/мотор/i);
+    expect(t.toLowerCase()).toContain("нож");
   });
 });
