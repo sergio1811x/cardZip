@@ -228,6 +228,21 @@ describe('SEO draft quality — writer prose is the single source', () => {
     expect(kw).toMatch(/цайдао/);
   });
 
+  it('prefers the writer title when it adds search intent without unsafe claims', () => {
+    const product = baseProduct({
+      titleRu: 'Кухонный нож для мяса',
+      productKind: 'knife',
+      polishedDocs: {
+        seoProse: {
+          ...seoProse,
+          title: 'Нож сантоку кухонный для мяса и овощей домашний поварской',
+        },
+      },
+    });
+    const title = section(buildSeoDraftFromProfile(product), '## Название').toLowerCase();
+    expect(title).toMatch(/сантоку/);
+  });
+
   it('rewrites a bald "материал изделия — X" into declared form', () => {
     const product = baseProduct({
       titleRu: 'Кухонный нож цайдао для мяса',

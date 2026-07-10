@@ -20,6 +20,7 @@ const input: SeoProseInput = {
 };
 
 const fallback = {
+  title: "Кухонный нож для мяса и овощей домашний поварской",
   description:
     "Кухонный нож для нарезки мяса и овощей на домашней кухне. Заявленный материал — нержавеющая сталь.",
   bullets: [
@@ -29,18 +30,41 @@ const fallback = {
     "Удобная рукоять",
     "Рекомендуется мыть вручную",
   ],
+  keywords: [
+    "кухонный нож",
+    "нож для мяса",
+    "нож для овощей",
+    "поварской нож",
+    "нож домашний",
+  ],
 };
 
-function verdict(obj: { description?: string; bullets?: string[] }): string {
+function verdict(obj: {
+  title?: string;
+  description?: string;
+  bullets?: string[];
+  keywords?: string[];
+}): string {
   return JSON.stringify({
+    title: obj.title ?? fallback.title,
     description: obj.description ?? fallback.description,
     bullets: obj.bullets ?? fallback.bullets,
+    keywords: obj.keywords ?? fallback.keywords,
   });
 }
 
 describe("parseGroundingVerdict — applies a valid grounded verdict", () => {
   it("keeps the grounded text when the model stripped an invented scenario", () => {
     const raw = verdict({
+      title: "Кухонный нож поварской для мяса и овощей домашний",
+      keywords: [
+        "кухонный нож",
+        "нож для мяса",
+        "нож для овощей",
+        "поварской нож",
+        "нож домашний",
+        "нож универсальный кухонный",
+      ],
       bullets: [
         "Режет мясо и овощи",
         "Заявленный материал — нержавеющая сталь",
@@ -49,8 +73,10 @@ describe("parseGroundingVerdict — applies a valid grounded verdict", () => {
       ],
     });
     const out = parseGroundingVerdict(raw, input, fallback);
+    expect(out.title).toMatch(/поварской/i);
     expect(out.bullets).toHaveLength(4);
     expect(out.bullets.some((b) => /общепит/i.test(b))).toBe(false);
+    expect(out.keywords).toContain("поварской нож");
   });
 });
 
@@ -75,6 +101,20 @@ describe("parseGroundingVerdict — falls back, never degrades", () => {
   it("returns the original when the verdict is too short", () => {
     const raw = verdict({ description: "Нож." });
     expect(parseGroundingVerdict(raw, input, fallback)).toBe(fallback);
+  });
+
+  it("keeps fallback title and keywords when the verdict adds packaging and feature spam", () => {
+    const raw = verdict({
+      title: "Кухонный нож в подарочном кейсе с ионизацией",
+      keywords: [
+        "кухонный нож в кейсе",
+        "нож с ионизацией",
+        "подарочный нож",
+      ],
+    });
+    const out = parseGroundingVerdict(raw, input, fallback);
+    expect(out.title).toBe(fallback.title);
+    expect(out.keywords).toEqual(fallback.keywords);
   });
 });
 

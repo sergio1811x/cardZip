@@ -4628,6 +4628,15 @@ export function buildSeoDraftFromProfile(
   opts: { sourceUrl?: string } = {},
 ): string {
   const p = ensureProductProcurementProfile(product, opts);
+  const prose = product?.polishedDocs?.seoProse as
+    | {
+        title?: string;
+        description?: string;
+        bullets?: string[];
+        keywords?: string[];
+        characteristics?: Array<{ name: string; value: string; status: string }>;
+      }
+    | undefined;
   // Prefer the LLM-generated SEO title when present — always through the
   // safeSeoTitle guard (strips WB/Ozon, dangerous claims, cross-border junk) —
   // else keep the deterministic identity-derived title.
@@ -4643,14 +4652,15 @@ export function buildSeoDraftFromProfile(
     p.identity.useCases,
     [...p.identity.claimedFeatures, ...p.identity.unconfirmedFeatures],
   );
-  const titleRaw = safeSeoTitle(
-    structuredTitle ||
-      safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
-    p.identity.productKind,
-  );
-  const title = p.sku.selectedSkuReliable
-    ? titleRaw
-    : stripUnconfirmedPackaging(titleRaw) || titleRaw;
+  const guardSeoTitle = (candidate: string): string => {
+    const safe = safeSeoTitle(candidate, p.identity.productKind);
+    return p.sku.selectedSkuReliable ? safe : stripUnconfirmedPackaging(safe) || safe;
+  };
+  const title =
+    (prose?.title ? guardSeoTitle(prose.title) : "") ||
+    guardSeoTitle(
+      structuredTitle || safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
+    );
   const useCases = p.identity.useCases.length
     ? p.identity.useCases.join(", ")
     : "повседневного использования";
@@ -4663,15 +4673,6 @@ export function buildSeoDraftFromProfile(
   // Prefer the LLM writer's prose (description + bullets) when it produced a
   // validated one — it has stronger anti-water / anti-invented-number control
   // than the generic seoCard generator.
-  const prose = product?.polishedDocs?.seoProse as
-    | {
-        title?: string;
-        description?: string;
-        bullets?: string[];
-        keywords?: string[];
-        characteristics?: Array<{ name: string; value: string; status: string }>;
-      }
-    | undefined;
   const bulletSource =
     prose?.bullets?.length ? prose.bullets : p.content.seoBullets ?? [];
   const llmBullets = filterDangerousBullets(bulletSource, p);

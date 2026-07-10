@@ -5,7 +5,10 @@
 // the template output. The writer may only REORGANIZE and REWRITE the facts it
 // is given — it must not invent numbers, specs, certificates or categories.
 
-import { textHasDangerousClaim } from "../core/procurementProfile";
+import {
+  assertsClaimedFeatureWord,
+  textHasDangerousClaim,
+} from "../core/procurementProfile";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // Content writing is a nuance-heavy task. Try a stronger model first for copy
@@ -230,6 +233,81 @@ function isOverloadedDisclosureBullet(text: string): boolean {
   return (hedgeHeavy && clauses >= 4) || (line.length > 190 && clauses >= 3) || separators >= 6;
 }
 
+const SEO_PACKAGING_RE =
+  /(?:кейс[а-яё]*|футляр[а-яё]*|чехл[а-яё]*|подарочн[а-яё]*|набор[а-яё]*|бокс[а-яё]*|(?:с|в)\s+коробк[а-яё]*|(?:с|в)\s+упаковк[а-яё]*)/i;
+
+function featureAuthorityWords(features: string[] = []): string[] {
+  return Array.from(
+    new Set(
+      features
+        .flatMap((f) =>
+          String(f ?? "")
+            .toLowerCase()
+            .replace(/ё/g, "е")
+            .split(/[^а-яёa-z0-9]+/i),
+        )
+        .filter((w) => w.length >= 4),
+    ),
+  );
+}
+
+function mentionsForeignPackaging(text: string, coreObject: string): boolean {
+  return SEO_PACKAGING_RE.test(text) && !SEO_PACKAGING_RE.test(coreObject);
+}
+
+function sanitizeSeoTitleCandidate(raw: unknown, input: SeoProseInput): string {
+  const title = cleanProseLine(raw);
+  if (!title) return "";
+  if (title.length < 25 || title.length > 140) return "";
+  if (/[㐀-鿿぀-ヿ]/.test(title)) return "";
+  if (textHasDangerousClaim(title)) return "";
+  if (input.forbidden.some((f) => f && title.toLowerCase().includes(f.toLowerCase())))
+    return "";
+  if (MEASUREMENT_RE.test(title)) return "";
+  if (/черновик|1688|заявлен|подтверд|уточнит|\bwb\b|\bozon\b/i.test(title))
+    return "";
+  const dashParts = title.split(/\s+[—-]\s+/).filter(Boolean);
+  if (dashParts.length > 1 && dashParts[1].split(/\s+/).filter(Boolean).length <= 5)
+    return "";
+  const featureWords = featureAuthorityWords(input.claimedFeatures ?? []);
+  if (featureWords.length && assertsClaimedFeatureWord(title, featureWords)) return "";
+  if (mentionsForeignPackaging(title, input.coreObject)) return "";
+  return title;
+}
+
+function sanitizeSeoKeywords(
+  raw: unknown,
+  input: SeoProseInput,
+  title: string,
+): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const featureWords = featureAuthorityWords(input.claimedFeatures ?? []);
+  const titleKey = title.trim().toLowerCase();
+  const out: string[] = [];
+  for (const item of raw) {
+    const keyword = cleanProseLine(item);
+    if (!keyword) continue;
+    const low = keyword.toLowerCase();
+    if (keyword.length < 3 || keyword.length > 60) continue;
+    if (/[㐀-鿿぀-ヿ]/.test(keyword)) continue;
+    if (titleKey && low === titleKey) continue;
+    if (/черновик|1688|выбранн(?:ый|ого)?\s+sku|цена\s+sku|\bwb\b|\bozon\b/i.test(low))
+      continue;
+    if (textHasDangerousClaim(keyword)) continue;
+    if (input.forbidden.some((f) => f && low.includes(f.toLowerCase()))) continue;
+    if (mentionsForeignPackaging(keyword, input.coreObject)) continue;
+    if (featureWords.length && assertsClaimedFeatureWord(keyword, featureWords))
+      continue;
+    const key = low.replace(/ё/g, "е");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(keyword);
+    if (out.length >= 18) break;
+  }
+  return out;
+}
+
 // Validate the writer's markdown against the safety floor. Any failure → null so
 // the caller keeps the deterministic template.
 export function validateWrittenDoc(
@@ -436,24 +514,10 @@ export async function writeSeoProse(
       }
       const obj = JSON.parse(jsonStr) as Record<string, unknown>;
       const description = cleanProseLine(obj.description);
-      // Title is a bonus: the deterministic safeSeoTitle guard is the real gate,
-      // so an empty/weak title here just defers to the identity title downstream.
-      const rawTitle = cleanProseLine(obj.title);
-      const title =
-        rawTitle.length >= 15 &&
-        rawTitle.length <= 120 &&
-        !/[㐀-鿿぀-ヿ]/.test(rawTitle)
-          ? rawTitle
-          : "";
-      const keywords = Array.isArray(obj.keywords)
-        ? Array.from(
-            new Set(
-              obj.keywords
-                .map(cleanProseLine)
-                .filter((k) => k && k.length <= 60 && !/[㐀-鿿぀-ヿ]/.test(k)),
-            ),
-          ).slice(0, 25)
-        : [];
+      // Title/keywords are optional upstream, but if the model produced strong,
+      // grounded search assets we preserve them for the final SEO draft.
+      const title = sanitizeSeoTitleCandidate(obj.title, input);
+      const keywords = sanitizeSeoKeywords(obj.keywords, input, title);
       let bullets = Array.isArray(obj.bullets)
         ? obj.bullets.map(cleanProseLine).filter(Boolean)
         : [];
@@ -506,8 +570,10 @@ export async function writeSeoProse(
       // failure it returns the writer's already-validated prose unchanged.
       if (shouldVerifyGrounding()) {
         const grounded = await verifySeoGrounding(input, {
+          title: prose.title,
           description: prose.description,
           bullets: prose.bullets,
+          keywords: prose.keywords,
         });
         return { ...prose, ...grounded };
       }
@@ -543,7 +609,12 @@ export function shouldVerifyGrounding(): boolean {
 
 function buildGroundingVerifyPrompt(
   input: SeoProseInput,
-  draft: { description: string; bullets: string[] },
+  draft: {
+    title: string;
+    description: string;
+    bullets: string[];
+    keywords: string[];
+  },
 ): string {
   const facts = [
     `Тип товара: ${input.coreObject}`,
@@ -565,7 +636,7 @@ function buildGroundingVerifyPrompt(
   ]
     .filter(Boolean)
     .join("\n");
-  return `Ты — сильный редактор карточек WB/Ozon. ПЕРЕПИШИ описание и буллеты так, чтобы они ПРОДАВАЛИ и читались как топовая карточка, — используя ТОЛЬКО факты о товаре ниже. Ничего не выдумывай.
+  return `Ты — сильный редактор карточек WB/Ozon. ПЕРЕПИШИ заголовок, описание, буллеты и ключевые слова так, чтобы они ПРОДАВАЛИ и читались как топовая карточка, — используя ТОЛЬКО факты о товаре ниже. Ничего не выдумывай.
 
 СНАЧАЛА ОЖИВИ (это главное — сейчас текст сухой и канцелярский):
 - УБЕРИ канцелярит и штампы: «оснащён», «предусмотрено», «предусмотрена система», «функционал включает», «устройство», «изделие», «предназначено для», «характеризуется», «представляет собой», «данный товар». Начинай буллеты по-разному, не «Оснащён… Предусмотрено… Функционал…».
@@ -580,18 +651,22 @@ function buildGroundingVerifyPrompt(
 - Сравнения и заявления о скорости/силе/качестве без числа из фактов («быстро сушит», «быстрее обычных», «мощный поток») — убери или переведи в нейтральное описание функции без оценки.
 - Заявленные фичи (мотор, ионизация, режимы, защита от перегрева) — не как факт; сгруппируй под общей оговоркой «по заявлению продавца — …; уточните перед заказом».
 - Не оставляй буллет-«простыню» с длинным перечнем спорных фич через запятые/точки с запятой. Если спорных фич слишком много, сократи до 1 короткой оговорки или убери из буллетов совсем.
+- Заголовок должен быть ПОИСКОВЫМ: тип товара + реальные поисковые уточнения. Не делай заголовок формата «тип товара — что с ним делают». Никаких неподтверждённых фич, упаковки или чужих сценариев.
+- Ключевые слова должны быть реальными запросами покупателя: 10–18 штук, смесь частотных и длинного хвоста, без дублей, без повторения полного заголовка, без упаковки/комплекта/чужих мест использования, если это не подтверждено фактами.
 - НЕ добавляй воду («мощный», «профессиональный», «эффективный», «высококачественный», «надёжный», «идеальный») и непроверенные числа/свойства.
 
 ФАКТЫ О ТОВАРЕ:
 ${facts}
 
 ТЕКУЩИЙ ТЕКСТ (перепиши живее, оставаясь строго в рамках фактов):
+заголовок: ${draft.title}
+ключевые слова: ${draft.keywords.join(", ")}
 описание: ${draft.description}
 буллеты:
 ${draft.bullets.map((b, i) => `${i + 1}. ${b}`).join("\n")}
 
-Верни строго JSON (3–5 буллетов):
-{"description":"...","bullets":["...","...","..."]}`;
+Верни строго JSON (3–5 буллетов, 10–18 keywords):
+{"title":"...","description":"...","bullets":["...","...","..."],"keywords":["...","..."]}`;
 }
 
 /**
@@ -604,8 +679,18 @@ ${draft.bullets.map((b, i) => `${i + 1}. ${b}`).join("\n")}
 export function parseGroundingVerdict(
   raw: string,
   input: SeoProseInput,
-  fallback: { description: string; bullets: string[] },
-): { description: string; bullets: string[] } {
+  fallback: {
+    title: string;
+    description: string;
+    bullets: string[];
+    keywords: string[];
+  },
+): {
+  title: string;
+  description: string;
+  bullets: string[];
+  keywords: string[];
+} {
   const jsonStr = extractJsonObject(raw);
   if (!jsonStr) return fallback;
   let obj: Record<string, unknown>;
@@ -614,6 +699,7 @@ export function parseGroundingVerdict(
   } catch {
     return fallback;
   }
+  const title = sanitizeSeoTitleCandidate(obj.title, input) || fallback.title;
   const description = cleanProseLine(obj.description);
   let bullets = Array.isArray(obj.bullets)
     ? obj.bullets.map(cleanProseLine).filter(Boolean)
@@ -622,6 +708,8 @@ export function parseGroundingVerdict(
     (b) => !bulletHasUnbackedNumber(b, input.confirmedAttributes),
   );
   bullets = bullets.filter((b) => !isOverloadedDisclosureBullet(b));
+  const keywordsRaw = sanitizeSeoKeywords(obj.keywords, input, title);
+  const keywords = keywordsRaw.length >= 5 ? keywordsRaw : fallback.keywords;
   const joined = `${description} ${bullets.join(" ")}`;
   const forbiddenHit = input.forbidden.some(
     (f) => f && joined.toLowerCase().includes(f.toLowerCase()),
@@ -636,13 +724,23 @@ export function parseGroundingVerdict(
   ) {
     return fallback;
   }
-  return { description, bullets: bullets.slice(0, 5) };
+  return { title, description, bullets: bullets.slice(0, 5), keywords };
 }
 
 export async function verifySeoGrounding(
   input: SeoProseInput,
-  draft: { description: string; bullets: string[] },
-): Promise<{ description: string; bullets: string[] }> {
+  draft: {
+    title: string;
+    description: string;
+    bullets: string[];
+    keywords: string[];
+  },
+): Promise<{
+  title: string;
+  description: string;
+  bullets: string[];
+  keywords: string[];
+}> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return draft;
   const prompt = buildGroundingVerifyPrompt(input, draft);
