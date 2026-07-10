@@ -4516,6 +4516,39 @@ export function stripUnconfirmedPackaging(title: string): string {
     .trim();
 }
 
+const SEARCH_MEASUREMENT_RE =
+  /\d+(?:[.,]\d+)?\s*(?:см|мм|м\b|кг|г\b|мл|л\b|°|градус|hrc|вт|ватт|в\b|вольт|дюйм)/i;
+const SEO_CONTEXT_RE =
+  /\b(?:салон[а-яё]*|профессионал[а-яё]*|коммерческ[а-яё]*|студи[а-яё]*|мастер(?:а|ов)?|специалист(?:а|ов)?)\b/i;
+
+function hasUnsupportedSeoContext(
+  text: string,
+  p: ProductProcurementProfile,
+): boolean {
+  const normalized = clean(text).toLowerCase().replace(/ё/g, "е");
+  const m = normalized.match(SEO_CONTEXT_RE);
+  if (!m) return false;
+  const authority = [
+    p.identity.coreObject,
+    p.identity.shortTitle,
+    ...p.identity.useCases,
+  ]
+    .join(" ")
+    .toLowerCase()
+    .replace(/ё/g, "е");
+  return !authority.includes(m[0]);
+}
+
+function hasForeignPackagingClaim(
+  text: string,
+  p: ProductProcurementProfile,
+): boolean {
+  return (
+    PACKAGING_RE.test(text) &&
+    !PACKAGING_RE.test(`${p.identity.coreObject} ${p.identity.shortTitle}`)
+  );
+}
+
 // The significant words of the profile's claimed + unconfirmed features, normalized
 // (lowercase, ё→е, punctuation-stripped). The single authority for "is this text
 // asserting an unconfirmed feature?" across keywords and infographic ideas.
@@ -4580,7 +4613,9 @@ export function groundSeoToProfile(
   // variant is unconfirmed. Same rule everywhere — no surface left ungoverned.
   const packagingRisky = p.sku?.selectedSkuReliable === false;
   const dropUnit = (u: string) =>
-    SAFETY_CLAIM_RE.test(u) || (packagingRisky && PACKAGING_RE.test(u));
+    SAFETY_CLAIM_RE.test(u) ||
+    hasUnsupportedSeoContext(u, p) ||
+    (packagingRisky && PACKAGING_RE.test(u));
   // Hedge a unit if it asserts a seller-claimed feature OR states an unconfirmed
   // physical measurement (power/size/weight). On 1688 a bare "1450 Вт" in prose is
   // an unverified spec — mark it "(заявлено)" so it can't read as a guaranteed fact.
@@ -4656,11 +4691,10 @@ export function buildSeoDraftFromProfile(
     const safe = safeSeoTitle(candidate, p.identity.productKind);
     return p.sku.selectedSkuReliable ? safe : stripUnconfirmedPackaging(safe) || safe;
   };
-  const title =
-    (prose?.title ? guardSeoTitle(prose.title) : "") ||
-    guardSeoTitle(
-      structuredTitle || safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
-    );
+  const fallbackTitle = guardSeoTitle(
+    structuredTitle || safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
+  );
+  let title = (prose?.title ? guardSeoTitle(prose.title) : "") || fallbackTitle;
   const useCases = p.identity.useCases.length
     ? p.identity.useCases.join(", ")
     : "повседневного использования";
@@ -4768,12 +4802,35 @@ export function buildSeoDraftFromProfile(
     ],
     80,
   );
+  if (
+    SEARCH_MEASUREMENT_RE.test(title) ||
+    hasUnsupportedSeoContext(title, p) ||
+    hasForeignPackagingClaim(title, p) ||
+    assertsClaimedFeatureWord(title, featureWords)
+  ) {
+    title = fallbackTitle;
+  }
+  const keywordFallback = [
+    p.identity.coreObject,
+    p.identity.shortTitle,
+    ...p.identity.useCases,
+    p.identity.coreObject && p.identity.materials[0] && !/уточнить/.test(p.identity.materials[0])
+      ? `${p.identity.coreObject} ${p.identity.materials[0]}`
+      : "",
+    ...p.sku.colors.map((c) => `${p.identity.coreObject} ${c}`),
+  ].filter(Boolean);
+  const keywordAllowed = (k: string) =>
+    !SEARCH_MEASUREMENT_RE.test(k) &&
+    !hasUnsupportedSeoContext(k, p) &&
+    !hasForeignPackagingClaim(k, p) &&
+    !assertsClaimedFeatureWord(k, featureWords) &&
+    (!skuRisky || !PACKAGING_RE.test(k));
+  const filteredKeywords = filterDangerousList(rawKeywords, p).filter(keywordAllowed);
+  const fallbackKeywords = filterDangerousList(keywordFallback, p).filter(keywordAllowed);
   const keywords = dedupKeywords(
-    filterDangerousList(rawKeywords, p).filter(
-      (k) =>
-        !skuRisky ||
-        (!PACKAGING_RE.test(k) && !assertsClaimedFeatureWord(k, featureWords)),
-    ),
+    filteredKeywords.length >= 6
+      ? filteredKeywords
+      : uniq([...filteredKeywords, ...fallbackKeywords], 18),
     12,
   ).join(", ");
 

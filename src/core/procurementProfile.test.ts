@@ -243,6 +243,42 @@ describe('SEO draft quality — writer prose is the single source', () => {
     expect(title).toMatch(/сантоку/);
   });
 
+  it('drops unconfirmed search claims from title, description and keywords', () => {
+    const product = baseProduct({
+      titleRu: 'Фен для волос',
+      productKind: 'small_appliance',
+      polishedDocs: {
+        seoProse: {
+          title: 'Фен с ионизацией 1450 Вт для салона',
+          description:
+            'Фен для сушки волос и укладки. Подходит для использования дома или в салоне.',
+          bullets: [
+            'Сушит волосы после мытья и помогает делать укладку',
+            'Подходит для работы в салоне',
+            'Удобен для ежедневного применения дома',
+          ],
+          keywords: [
+            'фен для волос',
+            'фен 1450 вт',
+            'фен для салона',
+            'фен с ионизацией',
+          ],
+          characteristics: [
+            { name: 'Ионизация', value: 'есть', status: 'заявлено, уточнить' },
+            { name: 'Мощность', value: '1450 Вт', status: 'заявлено, уточнить' },
+          ],
+        },
+      },
+    });
+    const seo = buildSeoDraftFromProfile(product);
+    const title = section(seo, '## Название').toLowerCase();
+    const desc = section(seo, '## Описание').toLowerCase();
+    const kw = section(seo, '## Ключевые слова').toLowerCase();
+    expect(title).not.toMatch(/1450\s*вт|ионизац|салон/);
+    expect(desc).not.toMatch(/салон/);
+    expect(kw).not.toMatch(/1450\s*вт|салон|ионизац/);
+  });
+
   it('rewrites a bald "материал изделия — X" into declared form', () => {
     const product = baseProduct({
       titleRu: 'Кухонный нож цайдао для мяса',

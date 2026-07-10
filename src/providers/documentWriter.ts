@@ -61,6 +61,7 @@ export interface DocWriterInput {
   mustCheckBeforeSample: string[];
   mustCheckOnSample: string[];
   redFlags: string[];
+  criticalConfirmations?: string[];
   // Cargo material is LOGISTICS-only (weight/packaging/shipping) — NOT the product
   // supplier questions (HRC, blade angle, mount type), which do not belong in a
   // cargo brief.
@@ -137,6 +138,9 @@ function materialLists(input: DocWriterInput): string {
       "",
       "Особенности груза (сырьё):",
       bullets(input.cargoConsiderations, 12) || "- (нет)",
+      "",
+      "Обязательные подтверждения для логистики и ввоза (нельзя потерять при переписывании):",
+      bullets(input.criticalConfirmations ?? [], 12) || "- (нет)",
     ].join("\n");
   }
   return [
@@ -235,6 +239,8 @@ function isOverloadedDisclosureBullet(text: string): boolean {
 
 const SEO_PACKAGING_RE =
   /(?:кейс[а-яё]*|футляр[а-яё]*|чехл[а-яё]*|подарочн[а-яё]*|набор[а-яё]*|бокс[а-яё]*|(?:с|в)\s+коробк[а-яё]*|(?:с|в)\s+упаковк[а-яё]*)/i;
+const SEO_CONTEXT_RE =
+  /\b(?:салон[а-яё]*|профессионал[а-яё]*|коммерческ[а-яё]*|студи[а-яё]*|мастер(?:а|ов)?|специалист(?:а|ов)?)\b/i;
 
 function featureAuthorityWords(features: string[] = []): string[] {
   return Array.from(
@@ -255,6 +261,86 @@ function mentionsForeignPackaging(text: string, coreObject: string): boolean {
   return SEO_PACKAGING_RE.test(text) && !SEO_PACKAGING_RE.test(coreObject);
 }
 
+function hasUnsupportedSeoContext(text: string, input: SeoProseInput): boolean {
+  const m = text.toLowerCase().replace(/ё/g, "е").match(SEO_CONTEXT_RE);
+  if (!m) return false;
+  const authority = `${input.coreObject} ${input.useCases.join(" ")}`
+    .toLowerCase()
+    .replace(/ё/g, "е");
+  return !authority.includes(m[0]);
+}
+
+const REQUIRED_CONCEPT_STOPWORDS = new Set([
+  "и",
+  "или",
+  "в",
+  "во",
+  "на",
+  "по",
+  "с",
+  "со",
+  "для",
+  "у",
+  "под",
+  "над",
+  "как",
+  "какой",
+  "какие",
+  "какая",
+  "каково",
+  "какова",
+  "ли",
+  "есть",
+  "нужно",
+  "нужны",
+  "нужен",
+  "уточните",
+  "подтвердите",
+  "пришлите",
+  "покажите",
+  "укажите",
+  "точный",
+  "точная",
+  "точные",
+  "выбранного",
+  "выбранный",
+  "выбранной",
+  "этого",
+  "этой",
+  "этот",
+  "товара",
+  "товар",
+  "изделия",
+  "именно",
+  "наличие",
+  "отсутствие",
+  "подтверждают",
+  "подтверждает",
+]);
+
+function normalizedConceptWords(text: string): string[] {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .split(/[^а-яёa-z0-9]+/i)
+    .filter((w) => w.length >= 2 && !REQUIRED_CONCEPT_STOPWORDS.has(w))
+    .map((w) => (w.length >= 6 ? w.slice(0, 6) : w));
+}
+
+function coversRequiredConcept(doc: string, required: string): boolean {
+  const req = normalizedConceptWords(required);
+  if (!req.length) return true;
+  const docWords = normalizedConceptWords(doc);
+  return req.some((token) =>
+    docWords.some((word) => {
+      if (word === token) return true;
+      const a = token.slice(0, 4);
+      const b = word.slice(0, 4);
+      return a.length >= 4 && b.length >= 4 && (word.startsWith(a) || token.startsWith(b));
+    }),
+  );
+}
+
 function sanitizeSeoTitleCandidate(raw: unknown, input: SeoProseInput): string {
   const title = cleanProseLine(raw);
   if (!title) return "";
@@ -269,6 +355,7 @@ function sanitizeSeoTitleCandidate(raw: unknown, input: SeoProseInput): string {
   const dashParts = title.split(/\s+[—-]\s+/).filter(Boolean);
   if (dashParts.length > 1 && dashParts[1].split(/\s+/).filter(Boolean).length <= 5)
     return "";
+  if (hasUnsupportedSeoContext(title, input)) return "";
   const featureWords = featureAuthorityWords(input.claimedFeatures ?? []);
   if (featureWords.length && assertsClaimedFeatureWord(title, featureWords)) return "";
   if (mentionsForeignPackaging(title, input.coreObject)) return "";
@@ -296,6 +383,8 @@ function sanitizeSeoKeywords(
       continue;
     if (textHasDangerousClaim(keyword)) continue;
     if (input.forbidden.some((f) => f && low.includes(f.toLowerCase()))) continue;
+    if (MEASUREMENT_RE.test(keyword)) continue;
+    if (hasUnsupportedSeoContext(keyword, input)) continue;
     if (mentionsForeignPackaging(keyword, input.coreObject)) continue;
     if (featureWords.length && assertsClaimedFeatureWord(keyword, featureWords))
       continue;
@@ -314,6 +403,7 @@ export function validateWrittenDoc(
   md: string,
   docType: DocType,
   forbidden: string[] = [],
+  requiredConcepts: string[] = [],
 ): boolean {
   const text = stripFences(md);
   if (text.length < 200 || text.length > 6000) return false;
@@ -337,6 +427,11 @@ export function validateWrittenDoc(
     const requestItems = countSectionListItems(text, "## Что нужно запросить для доставки");
     const extraItems = countSectionListItems(text, "## Дополнительно по этому товару");
     if (requestItems < 5 || extraItems < 1) return false;
+    if (
+      requiredConcepts.length &&
+      requiredConcepts.some((item) => !coversRequiredConcept(text, item))
+    )
+      return false;
   }
   return true;
 }
@@ -435,6 +530,7 @@ function buildSeoProsePrompt(input: SeoProseInput): string {
 - ЛЮБОЕ свойство/стойкость (качество, острота, прочность, мощность, «устойчив/защищает/не боится» влаги, коррозии, износа, нагрева и пр.) — не как факт: либо не пиши, либо «заявлено». Требовательные способности (рубить кости, замороженное, твёрдое, тяжёлое) — не утверждай, если нет в фактах.
 - НЕ придумывай числа (длину, ширину, толщину, угол, HRC, вес, мощность): нет числа в «Подтверждённых атрибутах» — не пиши его. Числа-размеры в заголовок НЕ ставь.
 - Сценарии/аудиторию/место применения бери ТОЛЬКО из строки «Применение». Не расширяй бытовой товар до профессионального/коммерческого, если этого нет в фактах.
+- Не вставляй в title и keywords неподтверждённые техпараметры с единицами измерения (Вт, В, мм, см, кг и т.п.).
 - БЕЗ оценочной воды: «высококачественный», «эффективный», «идеальный», «прочный», «долговечный», «надёжный», «профессиональный», «обеспечивает», «гарантирует».
 - НЕ вставляй служебных заметок для продавца («подтвердите у поставщика», «выбранный SKU», «реальные фото», «перед публикацией») — покупатель их видеть не должен.
 
@@ -653,6 +749,7 @@ function buildGroundingVerifyPrompt(
 - Не оставляй буллет-«простыню» с длинным перечнем спорных фич через запятые/точки с запятой. Если спорных фич слишком много, сократи до 1 короткой оговорки или убери из буллетов совсем.
 - Заголовок должен быть ПОИСКОВЫМ: тип товара + реальные поисковые уточнения. Не делай заголовок формата «тип товара — что с ним делают». Никаких неподтверждённых фич, упаковки или чужих сценариев.
 - Ключевые слова должны быть реальными запросами покупателя: 10–18 штук, смесь частотных и длинного хвоста, без дублей, без повторения полного заголовка, без упаковки/комплекта/чужих мест использования, если это не подтверждено фактами.
+- Не вставляй в title и keywords неподтверждённые техпараметры с единицами измерения (Вт, В, мм, см, кг и т.п.).
 - НЕ добавляй воду («мощный», «профессиональный», «эффективный», «высококачественный», «надёжный», «идеальный») и непроверенные числа/свойства.
 
 ФАКТЫ О ТОВАРЕ:
@@ -882,7 +979,15 @@ export async function writeDocument(
   for (const model of MODELS) {
     try {
       const md = await callModel(model, prompt, apiKey);
-      if (md && validateWrittenDoc(md, input.docType, forbidden)) {
+      if (
+        md &&
+        validateWrittenDoc(
+          md,
+          input.docType,
+          forbidden,
+          input.docType === "cargo" ? (input.criticalConfirmations ?? []) : [],
+        )
+      ) {
         console.log(`[docWriter] ${input.docType}: ok via ${model}`);
         return md;
       }

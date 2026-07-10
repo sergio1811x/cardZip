@@ -446,6 +446,7 @@ export async function continuePipeline(jobId: string) {
         mustCheckBeforeSample: profile.procurement.mustCheckBeforeSample ?? [],
         mustCheckOnSample: profile.procurement.mustCheckOnSample ?? [],
         redFlags: profile.procurement.redFlags ?? [],
+        criticalConfirmations: profile.procurement.criticalConfirmations ?? [],
         cargoMustAsk: profile.cargo.mustAsk ?? [],
         cargoWhatToRequest: profile.cargo.whatToRequest ?? [],
         cargoConsiderations: profile.cargo.likelySensitiveCargoIssues ?? [],
