@@ -201,21 +201,27 @@ describe("buildStructuredTitle — no claimed features by construction", () => {
 
 describe("assertsClaimedFeatureWord — keyword/infographic feature gate", () => {
   const feats = [
-    "ионизация",
+    "ионы",
     "бесщеточный",
     "мотор",
     "защита",
     "перегрева",
     "мощность",
+    "насадка",
   ];
 
   it("flags a keyword that asserts a claimed feature", () => {
     expect(assertsClaimedFeatureWord("фен с ионизацией", feats)).toBe(true);
     expect(assertsClaimedFeatureWord("фен с бесщёточным мотором", feats)).toBe(true);
+    expect(assertsClaimedFeatureWord("фен с насадкой", feats)).toBe(true);
   });
 
   it("aligns мощный↔мощность where fixed-length stems missed", () => {
     expect(assertsClaimedFeatureWord("фен мощный", feats)).toBe(true);
+  });
+
+  it("catches a short 3-char root (ионами↔ионизация)", () => {
+    expect(assertsClaimedFeatureWord("фен с ионами", feats)).toBe(true);
   });
 
   it("keeps an honest object/use-case keyword", () => {

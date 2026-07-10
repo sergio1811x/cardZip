@@ -3104,9 +3104,11 @@ export function buildProductProcurementProfile(
     pricing,
   } as Pick<ProductProcurementProfile, "identity" | "sku" | "pricing">;
   const draftProcurement = record(aiDraft.procurement);
-  // Single cross-cutting critical block (electrical/compliance for a powered device,
-  // composition/shrink for textile, transport docs for battery, …). Fanned into
-  // every surface below so domain coverage is consistent by construction.
+  // Single cross-cutting critical block the LLM derives from THIS product's nature
+  // (electrical/compliance for a powered device, composition/shrink for textile,
+  // transport docs for battery, …). Fanned into every surface below so domain
+  // coverage is consistent by construction. Category-agnostic: no hardcoded list —
+  // the model produces it; the deterministic layer only guarantees distribution.
   const criticalConfirmations = aiCriticalConfirmations(product);
   const domainQuestions = uniq(
     [
@@ -4475,6 +4477,10 @@ export function buildStructuredTitle(
       )
       .map((u) =>
         clean(u)
+          // Keep only the first clause of a verbose use-case — a title must stay
+          // tight. "использование дома, в салоне или в поездках" → "использование
+          // дома" (also sheds the venue speculation that follows the comma).
+          .split(/[,;–—]|\s+(?:или|и)\s+/i)[0]
           .replace(/^для\s+/i, "")
           // drop words already present in the object (avoids "фен для волос — сушка волос")
           .split(/\s+/)
@@ -4483,8 +4489,8 @@ export function buildStructuredTitle(
           .trim(),
       )
       .filter((u) => u && !/уточнит/i.test(u)),
-    // Cap at 3: more than that turns the title into a run-on summary dump.
-    3,
+    // Cap at 2: more than that turns the title into a run-on summary dump.
+    2,
   );
   return uses.length ? `${obj} — ${uses.join(", ")}` : obj;
 }
@@ -4536,9 +4542,16 @@ export function assertsClaimedFeatureWord(text: string, featureWords: string[]):
     .replace(/ё/g, "е")
     .split(/[^а-яёa-z0-9]+/i)
     .filter((w) => w.length >= 4);
-  return words.some((w) =>
-    featureWords.some((fw) => w.slice(0, 4) === fw.slice(0, 4)),
-  );
+  const shares = (a: string, b: string) => {
+    let i = 0;
+    const n = Math.min(a.length, b.length);
+    while (i < n && a[i] === b[i]) i += 1;
+    // 4-char shared prefix, OR a 3-char prefix when the shorter word is itself short
+    // (Russian roots like "ион" are only 3 chars: "ионами"↔"ионизация" share "ион",
+    // and a fixed 4-char rule — "иона" vs "иони" — missed them).
+    return i >= 4 || (i >= 3 && n <= 5);
+  };
+  return words.some((w) => featureWords.some((fw) => shares(w, fw)));
 }
 
 /**
@@ -4730,7 +4743,30 @@ export function buildSeoDraftFromProfile(
   // speculative — drop it until the SKU/комплектация/features are confirmed. Object
   // + use-case + material keywords (the honest bulk) stay.
   const skuRisky = p.sku?.selectedSkuReliable === false;
-  const featureWords = claimedFeatureWords(p);
+  // Feature-word authority = the profile's claimed features PLUS every characteristic
+  // row the table itself marks unconfirmed ("заявлено/уточнить/подтвердить"). A row
+  // like "Насадка | концентратор | заявлено" is a claim by definition, so its words
+  // gate keywords too — that's why "фен с насадкой" no longer leaks. The bare Тип /
+  // Материал rows are structural (object + material), not feature claims, so skipped.
+  const featureWords = uniq(
+    [
+      ...claimedFeatureWords(p),
+      ...characteristics
+        .filter(
+          (c) =>
+            /заявл|уточн|подтверд/i.test(c.status) &&
+            !/^(тип|материал)/i.test(clean(c.name)),
+        )
+        .flatMap((c) =>
+          `${c.name} ${c.value}`
+            .toLowerCase()
+            .replace(/ё/g, "е")
+            .split(/[^а-яёa-z0-9]+/i),
+        )
+        .filter((w) => w.length >= 5),
+    ],
+    80,
+  );
   const keywords = dedupKeywords(
     filterDangerousList(rawKeywords, p).filter(
       (k) =>
