@@ -5,10 +5,15 @@
 // invalid JSON, it returns null and the caller keeps its honest-generic floor.
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+// grok-4.3 leads: the prompt already spells out the full domain profile (e.g. the
+// whole electrical set — voltage+frequency, plug, cord, motor, certs), but
+// gemini-flash-lite under-delivered on that reasoning. A stronger model actually
+// produces the complete, correctly-prioritized question set. Gemini stays as the
+// fast, reliable fallback if grok times out.
 const DEFAULT_MODELS = [
-  "google/gemini-3.1-flash-lite",
+  "x-ai/grok-4.3",
   "google/gemini-2.5-flash",
-  "deepseek/deepseek-v4-pro",
+  "google/gemini-3.1-flash-lite",
 ];
 const DEFAULT_TIMEOUT_MS = 50_000;
 const DEFAULT_MAX_TOKENS = 2000;

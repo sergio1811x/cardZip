@@ -4464,6 +4464,37 @@ export function stripUnconfirmedPackaging(title: string): string {
     .trim();
 }
 
+// The significant words of the profile's claimed + unconfirmed features, normalized
+// (lowercase, ё→е, punctuation-stripped). The single authority for "is this text
+// asserting an unconfirmed feature?" across keywords and infographic ideas.
+function claimedFeatureWords(p: ProductProcurementProfile): string[] {
+  return uniq(
+    [...p.identity.claimedFeatures, ...p.identity.unconfirmedFeatures]
+      .flatMap((f) => clean(f).toLowerCase().replace(/ё/g, "е").split(/\s+/))
+      .map((w) => w.replace(/[^а-яёa-z0-9]/gi, ""))
+      .filter((w) => w.length >= 4),
+    60,
+  );
+}
+
+// True if any word of `text` shares a 4-char prefix with a claimed-feature word —
+// e.g. keyword "фен с ионизацией" vs claimed "ионизация". Deliberately loose (a
+// keyword is a speculative search tag, not prose; over-dropping an unconfirmed
+// feature tag when the SKU is unknown is exactly what we want). ё/е-normalized so
+// spelling variants match; prefix-based so "мощный"/"мощность" align where fixed
+// stems ("мощны" vs "мощно") missed.
+export function assertsClaimedFeatureWord(text: string, featureWords: string[]): boolean {
+  if (!featureWords.length) return false;
+  const words = text
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .split(/[^а-яёa-z0-9]+/i)
+    .filter((w) => w.length >= 4);
+  return words.some((w) =>
+    featureWords.some((fw) => w.slice(0, 4) === fw.slice(0, 4)),
+  );
+}
+
 /**
  * Projects the profile's fact confidence onto the SEO prose: contains materials to
  * the profile's set, hedges seller-claimed features, and — when the variant is
@@ -4648,12 +4679,17 @@ export function buildSeoDraftFromProfile(
         ...p.sku.colors.map((c) => `${p.identity.coreObject} ${c}`),
       ].filter(Boolean);
   // Keyword firewall: same rule as the copy. When the variant is unconfirmed, a
-  // "фен в футляре" / "подарочный фен" search term sells packaging we can't
-  // guarantee — drop it until the SKU/комплектация is confirmed.
-  const keywordsPackagingRisky = p.sku?.selectedSkuReliable === false;
+  // search term that sells packaging ("фен в футляре") OR asserts an unconfirmed
+  // feature ("фен с ионизацией", "фен мощный", "фен с бесщёточным мотором") is
+  // speculative — drop it until the SKU/комплектация/features are confirmed. Object
+  // + use-case + material keywords (the honest bulk) stay.
+  const skuRisky = p.sku?.selectedSkuReliable === false;
+  const featureWords = claimedFeatureWords(p);
   const keywords = dedupKeywords(
     filterDangerousList(rawKeywords, p).filter(
-      (k) => !keywordsPackagingRisky || !PACKAGING_RE.test(k),
+      (k) =>
+        !skuRisky ||
+        (!PACKAGING_RE.test(k) && !assertsClaimedFeatureWord(k, featureWords)),
     ),
     12,
   ).join(", ");
@@ -4715,7 +4751,20 @@ export function buildSeoDraftFromProfile(
       // Unconfirmed variant → drop packaging/gift-set infographic ideas.
       .filter((idea) => p.sku.selectedSkuReliable || !PACKAGING_RE.test(String(idea)))
       .slice(0, 6)
-      .map((idea, i) => `${i + 1}. ${idea}`),
+      .map((idea, i) => {
+        // Unconfirmed variant → a slide about a claimed feature must be marked as
+        // seller-declared, not shown as an established product fact.
+        let s = String(idea);
+        if (
+          skuRisky &&
+          assertsClaimedFeatureWord(s, featureWords) &&
+          !HEDGE_MARKER_RE.test(s) &&
+          !/по данным/i.test(s)
+        ) {
+          s = `${s.replace(/[\s.]+$/, "")} (по данным поставщика)`;
+        }
+        return `${i + 1}. ${s}`;
+      }),
   ]
     .map((line) => fixGluedFallback(line))
     .join("\n");

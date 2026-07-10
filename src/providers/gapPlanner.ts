@@ -2,10 +2,15 @@ import type { AnalysisSnapshot } from '../core/analysisSnapshot';
 import type { GapPlannerResult } from '../types';
 import { GapPlannerResultSchema, parseLlmJson } from '../core/llmSchemas';
 
+// grok-4.3 leads: the planner decides WHICH confirmations the whole package
+// hinges on — it feeds the buyer brief and the main-report question base. Stronger
+// reasoning here makes those less generic and keeps the essential base questions
+// (price/weight/certs/composition) instead of drifting to only niche technical ones.
+// Gemini stays as the fast, reliable fallback.
 const GAP_PLANNER_MODELS = [
+  'x-ai/grok-4.3',
+  'google/gemini-2.5-flash',
   'google/gemini-3.1-flash-lite',
-  'openai/gpt-5-mini',
-  'deepseek/deepseek-v4-pro',
 ];
 
 const GAP_PLANNER_PROMPT = `CardZip Gap Planner.

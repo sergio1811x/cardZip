@@ -5,10 +5,13 @@
 // keep its honest-generic floor.
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+// grok-4.3 leads: the cargo brief benefits from stronger reasoning about
+// product-specific logistics sensitivities (battery, liquid, powder, fragility).
+// Gemini stays as the fast, reliable fallback.
 const DEFAULT_MODELS = [
-  "google/gemini-3.1-flash-lite",
+  "x-ai/grok-4.3",
   "google/gemini-2.5-flash",
-  "deepseek/deepseek-v4-pro",
+  "google/gemini-3.1-flash-lite",
 ];
 const DEFAULT_TIMEOUT_MS = 50_000;
 const DEFAULT_MAX_TOKENS = 2000;

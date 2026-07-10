@@ -12,10 +12,14 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // quality, then fall back to gemini-2.5-flash which reliably completes on Railway
 // so we ALWAYS get output. Fully overridable via DOC_WRITER_MODELS. NOTE: verify
 // exact slugs on the OpenRouter models page — a wrong slug just falls through.
+// grok-4.3 leads for the ZIP docs (cargo brief, sample checklist): these are
+// off the latency-critical live reply, and a stronger model produces far less
+// generic, product-specific docs (e.g. actually covering electrical safety for a
+// powered device). Gemini stays as the fast, reliable fallback.
 const DEFAULT_MODELS = [
-  "google/gemini-3.1-flash-lite",
+  "x-ai/grok-4.3",
   "google/gemini-2.5-flash",
-  "deepseek/deepseek-v4-pro",
+  "google/gemini-3.1-flash-lite",
 ];
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 3000;

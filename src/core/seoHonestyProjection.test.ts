@@ -3,6 +3,7 @@ import {
   groundSeoToProfile,
   stripUnconfirmedPackaging,
   buildStructuredTitle,
+  assertsClaimedFeatureWord,
 } from "./procurementProfile";
 
 // The honesty projection is the architectural guarantee that SEO copy stays a
@@ -195,5 +196,34 @@ describe("buildStructuredTitle — no claimed features by construction", () => {
     );
     expect(t).not.toMatch(/подароч|комплект/i);
     expect(t.toLowerCase()).toMatch(/сушка/);
+  });
+});
+
+describe("assertsClaimedFeatureWord — keyword/infographic feature gate", () => {
+  const feats = [
+    "ионизация",
+    "бесщеточный",
+    "мотор",
+    "защита",
+    "перегрева",
+    "мощность",
+  ];
+
+  it("flags a keyword that asserts a claimed feature", () => {
+    expect(assertsClaimedFeatureWord("фен с ионизацией", feats)).toBe(true);
+    expect(assertsClaimedFeatureWord("фен с бесщёточным мотором", feats)).toBe(true);
+  });
+
+  it("aligns мощный↔мощность where fixed-length stems missed", () => {
+    expect(assertsClaimedFeatureWord("фен мощный", feats)).toBe(true);
+  });
+
+  it("keeps an honest object/use-case keyword", () => {
+    expect(assertsClaimedFeatureWord("фен для сушки волос", feats)).toBe(false);
+    expect(assertsClaimedFeatureWord("фен для дома", feats)).toBe(false);
+  });
+
+  it("is inert when the profile lists no claimed features", () => {
+    expect(assertsClaimedFeatureWord("фен с ионизацией", [])).toBe(false);
   });
 });
