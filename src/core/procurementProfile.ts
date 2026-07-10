@@ -123,6 +123,11 @@ export type ProductProcurementProfile = {
     // SKU / what's included" when the variant is unconfirmed). Already prepended to
     // mustAskSupplier; surfaced separately so briefs can lead with them too.
     leadQuestions: string[];
+    // Cross-cutting critical confirmations the LLM emits ONCE per product (e.g. the
+    // full electrical/compliance set for a powered device). Fanned deterministically
+    // into supplier questions, cargo, sample checks AND the buyer brief so the same
+    // domain block can't appear on one surface and vanish from another.
+    criticalConfirmations: string[];
     mustAskSupplier: string[];
     mustCheckBeforeSample: string[];
     mustCheckOnSample: string[];
@@ -1091,6 +1096,25 @@ function isBalaclavaProduct(product: any, intelligence?: any): boolean {
   );
 }
 
+
+// The LLM's single, cross-cutting "critical confirmations" list for this product —
+// the domain block (e.g. the electrical/compliance set for a powered device) that
+// MUST reach every surface. Emitted once by the canonicalizer so the deterministic
+// layer can fan it out consistently instead of hoping each per-surface list repeats
+// it. Category-agnostic: the model decides the content from what the product IS.
+function aiCriticalConfirmations(product: any): string[] {
+  const draft = record(
+    product?.productProcurementProfileDraft ??
+      product?.procurementProfileDraft ??
+      product?.productContext?.procurementProfileDraft ??
+      product?.productContext?.profileDraft,
+  );
+  const rules = record(draft.domainRules ?? product?.productContext?.domainRules);
+  return uniq(
+    array<string>(rules.criticalConfirmations).map(safeRu).filter(Boolean),
+    10,
+  );
+}
 
 function aiDomainRules(product: any): Partial<(typeof KIND_RULES)[ProductKind]> {
   const draft = record(
@@ -3080,8 +3104,14 @@ export function buildProductProcurementProfile(
     pricing,
   } as Pick<ProductProcurementProfile, "identity" | "sku" | "pricing">;
   const draftProcurement = record(aiDraft.procurement);
+  // Single cross-cutting critical block (electrical/compliance for a powered device,
+  // composition/shrink for textile, transport docs for battery, …). Fanned into
+  // every surface below so domain coverage is consistent by construction.
+  const criticalConfirmations = aiCriticalConfirmations(product);
   const domainQuestions = uniq(
     [
+      // Critical block first so it survives the supplier-question cap.
+      ...criticalConfirmations,
       ...array<string>(draftProcurement.mustAskSupplier).map(safeRu),
       ...buildQuestions(baseProfile, rules),
     ],
@@ -3141,14 +3171,16 @@ export function buildProductProcurementProfile(
       }),
       nextAction: "Отправьте вопросы поставщику и скачайте закупочный пакет.",
       leadQuestions,
+      criticalConfirmations,
       mustAskSupplier,
       mustCheckBeforeSample: normalizeFragmentLines(
         uniq(
           [
+            ...criticalConfirmations,
             ...array<string>(draftProcurement.mustCheckBeforeSample).map(safeRu),
             ...rules.beforeSample,
           ],
-          8,
+          10,
         ),
       ),
       mustCheckOnSample: uniq(
@@ -3190,8 +3222,12 @@ export function buildProductProcurementProfile(
           "материал товара",
           "ограничения по перевозке",
           ...rules.cargo,
+          // Cross-cutting critical block (e.g. plug/voltage/certs/power-marking for a
+          // powered device) — the compliance items a forwarder needs. Same source as
+          // the other surfaces, so cargo can't silently drop the electrical profile.
+          ...criticalConfirmations,
         ],
-        14,
+        16,
       ),
       likelySensitiveCargoIssues: uniq(
         [
@@ -4023,7 +4059,17 @@ export function buildBuyerBriefFromProfile(
     `Заказы: ${p.supplier.orders || "—"}`,
     "",
     "## 3. Что подтвердить у поставщика (ключевое)",
-    ...list([...(p.procurement.leadQuestions ?? []), ...mustConfirm], 12),
+    ...list(
+      [
+        ...(p.procurement.leadQuestions ?? []),
+        // The cross-cutting critical block (electrical/compliance for a powered
+        // device, …) so the buyer brief carries the same domain spine as the other
+        // docs instead of only the generic gap slots.
+        ...(p.procurement.criticalConfirmations ?? []),
+        ...mustConfirm,
+      ],
+      12,
+    ),
     "Полные формулировки вопросов — в файле 01_Вопросы_поставщику.txt.",
     "",
     "## 4. Что проверить на образце",

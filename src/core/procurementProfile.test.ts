@@ -268,6 +268,41 @@ describe('dedupBulletsByOverlap — drops near-duplicate bullets', () => {
   });
 });
 
+describe('criticalConfirmations — one domain spine fanned into every surface', () => {
+  // A powered device: the LLM emits the electrical block ONCE in
+  // domainRules.criticalConfirmations; it must appear in supplier questions, cargo,
+  // the buyer brief AND the sample pre-checks — not just one of them.
+  const dryer = () =>
+    baseProduct({
+      titleRu: 'Фен для волос высокоскоростной',
+      productContext: {
+        procurementProfileDraft: {
+          domainRules: {
+            criticalConfirmations: [
+              'Подтвердите сертификаты CE, RoHS, EAC.',
+              'Подтвердите отсутствие аккумулятора в устройстве.',
+              'Укажите длину сетевого шнура.',
+            ],
+          },
+        },
+      },
+    });
+
+  it('lands the spine on the profile and fans it into cargo + pre-sample', () => {
+    const p = buildProductProcurementProfile(dryer());
+    expect(p.procurement.criticalConfirmations.join(' ')).toMatch(/CE, RoHS, EAC/);
+    expect(p.cargo.mustAsk.join(' ')).toMatch(/CE, RoHS, EAC/);
+    expect(p.procurement.mustCheckBeforeSample.join(' ')).toMatch(/аккумулятор|шнур/i);
+  });
+
+  it('reaches supplier questions and the buyer brief', () => {
+    const questions = buildSupplierQuestionsFromProfile(dryer());
+    expect(JSON.stringify(questions)).toMatch(/шнур|аккумулятор|CE, RoHS, EAC/i);
+    const buyer = buildBuyerBriefFromProfile(dryer());
+    expect(buyer).toMatch(/CE, RoHS, EAC|аккумулятор|шнур/i);
+  });
+});
+
 describe('SEO bullets drop empty audience filler', () => {
   it('rejects vague marketing bullets that state no concrete fact', () => {
     const product = baseProduct({
