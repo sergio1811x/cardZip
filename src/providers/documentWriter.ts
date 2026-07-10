@@ -23,11 +23,11 @@ const DEFAULT_TEMPERATURE = 0.3;
 // SEO copy quality is worth latency here (it's a ZIP doc, not the live reply), so
 // SEO prose leads with a stronger model and falls back to the fast ones if it
 // times out. Overridable via SEO_PROSE_MODELS. Slugs must match OpenRouter.
-// z-ai/glm-5 leads: deepseek-v4-pro kept returning invalid JSON on SEO prose and
-// always fell through to gemini-2.5-flash, so we never got the stronger copy. GLM-5
-// is a strong writer with more reliable JSON. Gemini stays as the reliable fallback.
+// x-ai/grok-4.3 leads for SEO copy: strongest natural-Russian writer of the ones
+// tried, and it respects the honesty framing (hedge claims, don't assert packaging
+// when the SKU is unknown). Gemini stays as the reliable fallback if grok times out.
 const SEO_PROSE_DEFAULT_MODELS = [
-  "z-ai/glm-5",
+  "x-ai/grok-4.3",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
@@ -289,7 +289,7 @@ function buildSeoProsePrompt(input: SeoProseInput): string {
       ? `Заявленные продавцом фичи (упоминать ТОЛЬКО как «заявленные», не как факт): ${input.claimedFeatures.join(", ")}`
       : "",
     input.skuReliable === false
-      ? `ВНИМАНИЕ: точная комплектация НЕ подтверждена (варианты могут отличаться, вплоть до «только упаковка»). НЕ утверждай состав комплекта (кейс, набор, насадка) как факт — особенно в заголовке; максимум «в комплекте, по заявлению».`
+      ? `ВНИМАНИЕ: конкретный SKU/вариант НЕ подтверждён (варианты могут отличаться, вплоть до «только упаковка»). ПРАВИЛО ДЛЯ ЗАГОЛОВКА: он должен состоять ТОЛЬКО из типа товара + синонимов + реального применения (из «Применение»). В ЗАГОЛОВКЕ ЗАПРЕЩЕНО: состав комплекта (кейс/футляр/набор/насадка/«в подарок»), заявленные фичи как факт (мотор, ионизация, «мощный», «быстрая сушка», режимы воздуха), апгрейд площадки («для салона», «профессиональный»). Всё это — только в описании и ТОЛЬКО как «по заявлению продавца, уточните». Заголовок и буллеты не должны утверждать ничего, что не подтверждено.`
       : "",
     input.confirmedAttributes.length
       ? `Подтверждённые атрибуты: ${input.confirmedAttributes

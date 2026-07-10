@@ -4364,30 +4364,40 @@ const SAFETY_CLAIM_RE =
 // confirmed identity facts (object + use-cases). Claimed features, packaging and
 // numbers are never in that set, so by construction they cannot appear in the
 // title. Keyword-dense and honest.
-// Strip seller-claimed feature phrases from a noun (ё/е-tolerant), so a noisy
-// object like "Высокоскоростной фен с ионизацией" loses the unconfirmed feature.
+// Strip seller-claimed feature WORDS from a noun (ё/е-tolerant), so a noisy object
+// like "Высокоскоростной фен с ионизацией" loses the unconfirmed feature. Operates
+// WORD-BY-WORD, never on substrings: a previous version matched a feature stem
+// inside a word ("скорос" inside "Высокоскоростной") and truncated it → the broken
+// title "Высоко фен". Dropping only whole words makes an orphan fragment impossible.
 function stripClaimedFeaturePhrases(
   text: string,
   claimedFeatures: string[],
 ): string {
-  let out = ` ${text} `;
+  const norm = (w: string) =>
+    w.toLowerCase().replace(/ё/g, "е").replace(/[^а-яёa-z0-9]/gi, "");
+  const stems = new Set<string>();
   for (const f of claimedFeatures) {
-    for (const w of clean(f)
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((x) => x.length >= 5)) {
-      const pat = w
-        .slice(0, 6)
-        .split("")
-        .map((c) => (/[её]/i.test(c) ? "[её]" : escapeRegExp(c)))
-        .join("");
-      out = out.replace(
-        new RegExp(`\\s*(?:с|со|и|,|—|для)?\\s*${pat}[а-яё]*`, "giu"),
-        " ",
-      );
+    for (const w of clean(f).split(/\s+/)) {
+      const n = norm(w);
+      if (n.length >= 5) stems.add(n.slice(0, 6));
     }
   }
-  return out.replace(/\s{2,}/g, " ").trim();
+  if (!stems.size) return clean(text);
+  const kept = clean(text)
+    .split(/\s+/)
+    .filter((w) => {
+      const n = norm(w);
+      // Keep short words (connectors, the object noun); drop a word only when it is
+      // itself a claimed-feature word (shares the feature's whole 6-char stem).
+      if (n.length < 5) return true;
+      return ![...stems].some((s) => n.startsWith(s));
+    })
+    .join(" ")
+    // A leftover trailing connector ("… фен с") after dropping a feature word.
+    .replace(/\s+(?:с|со|и|для|,|—)\s*$/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return kept;
 }
 
 export function buildStructuredTitle(
@@ -4408,6 +4418,15 @@ export function buildStructuredTitle(
   );
   const uses = uniq(
     useCases
+      // Drop use-cases that smuggle packaging / gift-set / safety claims or an
+      // unconfirmed measurement into the title — same firewall as the copy. This is
+      // why "подарочный комплект для ухода за волосами" no longer reaches the title.
+      .filter(
+        (u) =>
+          !PACKAGING_RE.test(u) &&
+          !SAFETY_CLAIM_RE.test(u) &&
+          !BULLET_MEASUREMENT_RE.test(u),
+      )
       .map((u) =>
         clean(u)
           .replace(/^для\s+/i, "")
@@ -4418,7 +4437,8 @@ export function buildStructuredTitle(
           .trim(),
       )
       .filter((u) => u && !/уточнит/i.test(u)),
-    5,
+    // Cap at 3: more than that turns the title into a run-on summary dump.
+    3,
   );
   return uses.length ? `${obj} — ${uses.join(", ")}` : obj;
 }

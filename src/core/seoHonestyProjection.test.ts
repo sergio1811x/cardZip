@@ -170,4 +170,30 @@ describe("buildStructuredTitle — no claimed features by construction", () => {
     expect(t).not.toMatch(/мотор/i);
     expect(t.toLowerCase()).toContain("нож");
   });
+
+  it("never truncates a word mid-stem (no broken 'Высоко фен')", () => {
+    // A claimed feature "высокая скорость" must not chop "Высокоскоростной" into
+    // "Высоко" — the strip works word-by-word, so a word is dropped whole or kept whole.
+    const t = buildStructuredTitle(
+      "Высокоскоростной фен",
+      ["сушка волос", "укладка волос"],
+      ["высокая скорость потока", "ионизация"],
+    );
+    expect(t).not.toMatch(/высоко\s+фен/i);
+    // Every word of the object part is a whole word from the source (no fragments).
+    const objPart = t.split("—")[0].trim().toLowerCase();
+    for (const w of objPart.split(/\s+/).filter(Boolean)) {
+      expect(["высокоскоростной", "фен"]).toContain(w.replace(/[.,]/g, ""));
+    }
+  });
+
+  it("drops a packaging/gift use-case from the title", () => {
+    const t = buildStructuredTitle(
+      "Фен",
+      ["сушка волос", "подарочный комплект для ухода за волосами"],
+      [],
+    );
+    expect(t).not.toMatch(/подароч|комплект/i);
+    expect(t.toLowerCase()).toMatch(/сушка/);
+  });
 });
