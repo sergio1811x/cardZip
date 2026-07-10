@@ -92,6 +92,20 @@ describe("parseGroundingVerdict — re-gates unbacked numbers", () => {
     expect(out.bullets.some((b) => /5\s*мм/i.test(b))).toBe(false);
     expect(out.bullets.length).toBeGreaterThanOrEqual(3);
   });
+
+  it("drops an overloaded disclosure bullet with a laundry list of unconfirmed claims", () => {
+    const raw = verdict({
+      bullets: [
+        "По заявлению продавца — высокая скорость потока, ионизация, постоянная температура, бесщёточный мотор, защита от перегрева, точный стандарт вилки и сертификаты; уточните перед заказом",
+        "Режет мясо и овощи",
+        "Заявленный материал — нержавеющая сталь",
+        "Удобная рукоять",
+      ],
+    });
+    const out = parseGroundingVerdict(raw, input, fallback);
+    expect(out.bullets.some((b) => /сертификат|ионизац|бесщеточ/i.test(b))).toBe(false);
+    expect(out.bullets.length).toBeGreaterThanOrEqual(3);
+  });
 });
 
 describe("shouldVerifyGrounding — env gate, default ON", () => {

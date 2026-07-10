@@ -4949,6 +4949,15 @@ function filterDangerousBullets(
   bullets: string[],
   _p: ProductProcurementProfile,
 ): string[] {
+  const isOverloadedDisclosureSeoLine = (text: string) => {
+    const line = clean(text);
+    if (!line) return false;
+    const low = line.toLowerCase();
+    const clauses = line.split(/[;,]\s*/).filter(Boolean).length;
+    const separators = (line.match(/[;,]/g) ?? []).length;
+    const hedgeHeavy = /по\s+заявлен|уточнит|подтверд/i.test(low);
+    return (hedgeHeavy && clauses >= 4) || (line.length > 190 && clauses >= 3) || separators >= 6;
+  };
   return bullets
     .map((b) => hedgeDeclaredMaterial(fixGluedFallback(clean(b))))
     .filter(
@@ -4956,7 +4965,8 @@ function filterDangerousBullets(
         b &&
         !dangerousClaims(b).length &&
         !hasPuffery(b) &&
-        !BULLET_MEASUREMENT_RE.test(b),
+        !BULLET_MEASUREMENT_RE.test(b) &&
+        !isOverloadedDisclosureSeoLine(b),
     );
 }
 

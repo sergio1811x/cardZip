@@ -200,6 +200,36 @@ function stripFences(raw: string): string {
     .trim();
 }
 
+function isListLine(line: string): boolean {
+  return /^(\d+[.)]|[•\-*])\s+\S/.test(line.trim());
+}
+
+function countSectionListItems(md: string, header: string): number {
+  const lines = stripFences(md).split("\n");
+  let inSection = false;
+  let count = 0;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line === header) {
+      inSection = true;
+      continue;
+    }
+    if (inSection && /^#{1,6}\s/.test(line)) break;
+    if (inSection && isListLine(line)) count += 1;
+  }
+  return count;
+}
+
+function isOverloadedDisclosureBullet(text: string): boolean {
+  const line = cleanProseLine(text);
+  if (!line) return false;
+  const low = line.toLowerCase();
+  const clauses = line.split(/[;,]\s*/).filter(Boolean).length;
+  const separators = (line.match(/[;,]/g) ?? []).length;
+  const hedgeHeavy = /по\s+заявлен|уточнит|подтверд/i.test(low);
+  return (hedgeHeavy && clauses >= 4) || (line.length > 190 && clauses >= 3) || separators >= 6;
+}
+
 // Validate the writer's markdown against the safety floor. Any failure → null so
 // the caller keeps the deterministic template.
 export function validateWrittenDoc(
@@ -225,6 +255,11 @@ export function validateWrittenDoc(
   // No obvious debug/placeholder junk.
   if (/undefined|null\b|NaN|file:\/\/|\bseller\b|\bfactory\b/i.test(text))
     return false;
+  if (docType === "cargo") {
+    const requestItems = countSectionListItems(text, "## Что нужно запросить для доставки");
+    const extraItems = countSectionListItems(text, "## Дополнительно по этому товару");
+    if (requestItems < 5 || extraItems < 1) return false;
+  }
   return true;
 }
 
@@ -318,6 +353,7 @@ function buildSeoProsePrompt(input: SeoProseInput): string {
 ТЕПЕРЬ так же качественно для СВОЕГО товара, СТРОГО соблюдая честность:
 - Материал бери ТОЛЬКО из списка «Материалы» в фактах — НЕ добавляй других (если в списке «PC, ABS», то нейлона/PA и прочего быть не должно). Пиши «заявленный материал — …»; НЕ «материал изделия/товара — …», не называй марку голым фактом.
 - Фичи из «Заявленные фичи» (двигатель, защита от перегрева, ионизация, режимы) не утверждай как факт — но НЕ начинай каждый буллет со слова «Заявленный/Заявленная», это читается оборонительно и однообразно. Сделай так: сгруппируй заявленные характеристики в ОДНОМ буллете или предложении под общей оговоркой (например: «По заявлению продавца — бесщёточный мотор, ионизация и защита от перегрева; уточните перед заказом»), а остальные буллеты пиши про выгоду и применение живо, БЕЗ повтора «заявлено».
+- Если спорных фич много, НЕ сваливай их все в одну строку. Нельзя делать буллет-«простыню» с длинным перечнем мощности, температуры, шума, вилки, сертификатов, режимов и других неподтверждённых параметров через запятую или точку с запятой. Максимум одна короткая оговорка на 2–3 спорные фичи; остальное опусти.
 - ЛЮБОЕ свойство/стойкость (качество, острота, прочность, мощность, «устойчив/защищает/не боится» влаги, коррозии, износа, нагрева и пр.) — не как факт: либо не пиши, либо «заявлено». Требовательные способности (рубить кости, замороженное, твёрдое, тяжёлое) — не утверждай, если нет в фактах.
 - НЕ придумывай числа (длину, ширину, толщину, угол, HRC, вес, мощность): нет числа в «Подтверждённых атрибутах» — не пиши его. Числа-размеры в заголовок НЕ ставь.
 - Сценарии/аудиторию/место применения бери ТОЛЬКО из строки «Применение». Не расширяй бытовой товар до профессионального/коммерческого, если этого нет в фактах.
@@ -325,10 +361,10 @@ function buildSeoProsePrompt(input: SeoProseInput): string {
 - НЕ вставляй служебных заметок для продавца («подтвердите у поставщика», «выбранный SKU», «реальные фото», «перед публикацией») — покупатель их видеть не должен.
 
 ФОРМАТ (как в примере):
-- title: 70–120 символов, поисковый и продающий, начни с типа и синонимов.
+- title: 70–120 символов, поисковый и продающий, начни с типа и синонимов. Это должна быть поисковая фраза, а не объяснение процесса через тире.
 - description: 4–6 живых предложений про выгоду и применение, с поисковыми словами.
-- bullets: РОВНО 5, каждый про РАЗНОЕ, с выгодой; без дублей и пустых фраз.
-- keywords: 15–25 реальных запросов покупателя (частотные + длинный хвост), без дублей.
+- bullets: РОВНО 5, каждый про РАЗНОЕ, с выгодой; без дублей и пустых фраз. Один буллет = одна мысль, 8–18 слов, максимум одно предложение, без длинных перечислений через 5+ запятых.
+- keywords: 12–18 реальных запросов покупателя (частотные + длинный хвост), без дублей.
 - characteristics: 5–8 {name, value, status}. value ТОЛЬКО из «Подтверждённых атрибутов» (status="заявлено, уточнить"); иначе value="уточнить", status="подтвердить". Коды/марки целиком (3Cr13, не Cr13). Китайское — переводи.
 
 ФАКТЫ О ТВОЁМ ТОВАРЕ:
@@ -425,6 +461,7 @@ export async function writeSeoProse(
       bullets = bullets.filter(
         (b) => !bulletHasUnbackedNumber(b, input.confirmedAttributes),
       );
+      bullets = bullets.filter((b) => !isOverloadedDisclosureBullet(b));
       const characteristics = Array.isArray(obj.characteristics)
         ? obj.characteristics
             .map((c) => {
@@ -542,6 +579,7 @@ function buildGroundingVerifyPrompt(
 - Эффект на пользователя/результат/косметическое или медицинское действие (напр. «меньше пушится», «защищает волосы», «бережно сушит», «меньше вреда», «здоровье волос») — УДАЛИ ЦЕЛИКОМ. Такое нельзя писать даже с «по заявлению» — нужны тесты/документы, которых нет.
 - Сравнения и заявления о скорости/силе/качестве без числа из фактов («быстро сушит», «быстрее обычных», «мощный поток») — убери или переведи в нейтральное описание функции без оценки.
 - Заявленные фичи (мотор, ионизация, режимы, защита от перегрева) — не как факт; сгруппируй под общей оговоркой «по заявлению продавца — …; уточните перед заказом».
+- Не оставляй буллет-«простыню» с длинным перечнем спорных фич через запятые/точки с запятой. Если спорных фич слишком много, сократи до 1 короткой оговорки или убери из буллетов совсем.
 - НЕ добавляй воду («мощный», «профессиональный», «эффективный», «высококачественный», «надёжный», «идеальный») и непроверенные числа/свойства.
 
 ФАКТЫ О ТОВАРЕ:
@@ -552,8 +590,8 @@ ${facts}
 буллеты:
 ${draft.bullets.map((b, i) => `${i + 1}. ${b}`).join("\n")}
 
-Верни строго JSON (5 буллетов):
-{"description":"...","bullets":["...","...","...","...","..."]}`;
+Верни строго JSON (3–5 буллетов):
+{"description":"...","bullets":["...","...","..."]}`;
 }
 
 /**
@@ -583,6 +621,7 @@ export function parseGroundingVerdict(
   bullets = bullets.filter(
     (b) => !bulletHasUnbackedNumber(b, input.confirmedAttributes),
   );
+  bullets = bullets.filter((b) => !isOverloadedDisclosureBullet(b));
   const joined = `${description} ${bullets.join(" ")}`;
   const forbiddenHit = input.forbidden.some(
     (f) => f && joined.toLowerCase().includes(f.toLowerCase()),

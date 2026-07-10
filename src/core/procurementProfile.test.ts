@@ -244,6 +244,28 @@ describe('SEO draft quality — writer prose is the single source', () => {
     expect(desc).toMatch(/заявленн[а-яё]+ материал/);
     expect(desc).not.toMatch(/материал изделия/);
   });
+
+  it('drops an overloaded laundry-list bullet from polished SEO prose', () => {
+    const product = baseProduct({
+      titleRu: 'Фен для волос компактный',
+      productKind: 'small_appliance',
+      polishedDocs: {
+        seoProse: {
+          title: 'Фен для волос компактный для дома и поездок',
+          description:
+            'Компактный фен для волос подходит для домашней укладки и хранения в небольшом ящике. Заявленный материал — ABS-пластик.',
+          bullets: [
+            'По заявлению продавца — высокая скорость потока, ионизация, постоянная температура, бесщёточный мотор, защита от перегрева, точный стандарт вилки и сертификаты; уточните перед заказом',
+            'Насадка помогает направить поток воздуха для укладки отдельных прядей',
+            'Компактный корпус удобнее хранить на полке или брать с собой',
+          ],
+          keywords: ['фен для волос', 'фен компактный', 'фен дорожный'],
+        },
+      },
+    });
+    const seo = buildSeoDraftFromProfile(product).toLowerCase();
+    expect(seo).not.toMatch(/сертификат|ионизац|бесщеточ|постоянн[а-яё]* температур/);
+  });
 });
 
 describe('dedupBulletsByOverlap — drops near-duplicate bullets', () => {
