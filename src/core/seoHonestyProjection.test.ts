@@ -55,6 +55,33 @@ describe("groundSeoToProfile — claimed-feature hedging", () => {
     const bullet = "Компактный корпус удобно брать с собой в поездки";
     expect(groundSeoToProfile(profile, "", [bullet]).bullets[0]).toBe(bullet);
   });
+
+  it("hedges despite an ё/е mismatch (бесщеточный copy vs бесщёточный claim)", () => {
+    // The copy spells it with е; the profile claim with ё. Without ё→е
+    // normalization JS treats them as different chars and the claim leaks unhedged.
+    const out = groundSeoToProfile(profile, "", [
+      "Бесщеточный двигатель работает тихо и долго",
+    ]);
+    expect(out.bullets[0]).toMatch(/\(заявлено\)/);
+  });
+
+  it("hedges a claim stated with a synonym (двигатель vs claimed мотор)", () => {
+    const p = {
+      identity: { materials: [], claimedFeatures: ["бесщёточный мотор"], unconfirmedFeatures: [] },
+      sku: { selectedSkuReliable: true },
+    } as any;
+    const out = groundSeoToProfile(p, "Бесщёточный двигатель создаёт направленный поток.", []);
+    expect(out.description).toMatch(/\(заявлено\)/);
+  });
+
+  it("hedges a description sentence stating an unconfirmed power/measurement", () => {
+    const p = {
+      identity: { materials: [], claimedFeatures: [], unconfirmedFeatures: [] },
+      sku: { selectedSkuReliable: true },
+    } as any;
+    const out = groundSeoToProfile(p, "Двигатель мощностью 1450 Вт создаёт мощный поток воздуха.", []);
+    expect(out.description).toMatch(/\(заявлено\)/);
+  });
 });
 
 describe("packaging guard — unconfirmed variant", () => {

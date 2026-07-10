@@ -23,8 +23,11 @@ const DEFAULT_TEMPERATURE = 0.3;
 // SEO copy quality is worth latency here (it's a ZIP doc, not the live reply), so
 // SEO prose leads with a stronger model and falls back to the fast ones if it
 // times out. Overridable via SEO_PROSE_MODELS. Slugs must match OpenRouter.
+// z-ai/glm-5 leads: deepseek-v4-pro kept returning invalid JSON on SEO prose and
+// always fell through to gemini-2.5-flash, so we never got the stronger copy. GLM-5
+// is a strong writer with more reliable JSON. Gemini stays as the reliable fallback.
 const SEO_PROSE_DEFAULT_MODELS = [
-  "deepseek/deepseek-v4-pro",
+  "z-ai/glm-5",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];

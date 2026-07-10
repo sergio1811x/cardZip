@@ -4271,11 +4271,14 @@ export function sanitizeSeoChars(
 const HEDGE_MARKER_RE = /заявл|по заявлению|со слов|указан|производитель|продавец/i;
 
 // 5-char stems of significant words, for fuzzy matching a profile feature phrase
-// against a copy segment despite inflection.
+// against a copy segment despite inflection. ё→е is normalized FIRST: JS treats
+// them as distinct chars, so without this "бесщеточный" (е) would never match a
+// claimed "бесщёточный" (ё) and the claim would leak unhedged.
 function featureStemSet(s: string): Set<string> {
   return new Set(
     s
       .toLowerCase()
+      .replace(/ё/g, "е")
       .replace(/[^\p{L}\p{N}\s]/gu, " ")
       .split(/\s+/)
       .filter((w) => w.length >= 4)
@@ -4283,14 +4286,20 @@ function featureStemSet(s: string): Set<string> {
   );
 }
 
-// A segment "asserts" a claimed feature when most of the feature's significant
-// stems appear in it and it carries no hedge marker.
+// A segment "asserts" a claimed feature when it shares a stem with the feature and
+// carries no hedge marker. Threshold is deliberately lenient: for short features
+// (1–2 significant words) a single shared stem is enough, because synonyms and
+// inflection ("бесщёточный МОТОР" vs "бесщёточный ДВИГАТЕЛЬ") break strict overlap
+// — and OVER-hedging (adding a harmless "(заявлено)") is far safer than letting an
+// unconfirmed claim through as fact. Longer feature phrases still need 60% overlap
+// so one common stem doesn't hedge every sentence.
 function segmentAssertsFeature(segment: string, featureStems: Set<string>): boolean {
   if (featureStems.size === 0 || HEDGE_MARKER_RE.test(segment)) return false;
   const seg = featureStemSet(segment);
   let inter = 0;
   for (const t of featureStems) if (seg.has(t)) inter += 1;
-  return inter / featureStems.size >= 0.7;
+  if (inter === 0) return false;
+  return featureStems.size <= 2 || inter / featureStems.size >= 0.6;
 }
 
 // The profile's confirmed materials, cleaned of the stored confirm-suffix
@@ -4462,17 +4471,28 @@ export function groundSeoToProfile(
   const packagingRisky = p.sku?.selectedSkuReliable === false;
   const dropUnit = (u: string) =>
     SAFETY_CLAIM_RE.test(u) || (packagingRisky && PACKAGING_RE.test(u));
+  // Hedge a unit if it asserts a seller-claimed feature OR states an unconfirmed
+  // physical measurement (power/size/weight). On 1688 a bare "1450 Вт" in prose is
+  // an unverified spec — mark it "(заявлено)" so it can't read as a guaranteed fact.
+  const hedgeUnit = (u: string) => {
+    const h = hedgeUnitIfClaimed(u, featureStems);
+    if (h !== u) return h;
+    if (BULLET_MEASUREMENT_RE.test(u) && !HEDGE_MARKER_RE.test(u)) {
+      return `${u.replace(/[.\s]+$/, "")} (заявлено).`;
+    }
+    return u;
+  };
   const desc = reconcileMaterialToProfile(description, p)
     .split(/(?<=[.!?])\s+/)
     .filter((s) => !dropUnit(s))
-    .map((s) => hedgeUnitIfClaimed(s, featureStems))
+    .map(hedgeUnit)
     .join(" ")
     .replace(/\s{2,}/g, " ")
     .trim();
   const bl = bullets
     .map((b) => reconcileMaterialToProfile(b, p))
     .filter((b) => !dropUnit(b))
-    .map((b) => hedgeUnitIfClaimed(b, featureStems));
+    .map(hedgeUnit);
   return { description: desc, bullets: bl };
 }
 
@@ -4607,8 +4627,14 @@ export function buildSeoDraftFromProfile(
           : "",
         ...p.sku.colors.map((c) => `${p.identity.coreObject} ${c}`),
       ].filter(Boolean);
+  // Keyword firewall: same rule as the copy. When the variant is unconfirmed, a
+  // "фен в футляре" / "подарочный фен" search term sells packaging we can't
+  // guarantee — drop it until the SKU/комплектация is confirmed.
+  const keywordsPackagingRisky = p.sku?.selectedSkuReliable === false;
   const keywords = dedupKeywords(
-    filterDangerousList(rawKeywords, p),
+    filterDangerousList(rawKeywords, p).filter(
+      (k) => !keywordsPackagingRisky || !PACKAGING_RE.test(k),
+    ),
     12,
   ).join(", ");
 
@@ -4619,6 +4645,18 @@ export function buildSeoDraftFromProfile(
     seoDescription(p, title, prose?.description),
     bullets,
   );
+  // The firewall may drop enough bullets (safety/packaging claims) to fall below
+  // the 3–5 range the card validator requires. Refill from the honest identity pool
+  // (run through the same firewall) so we never ship a 1–2 bullet card.
+  if (grounded.bullets.length < 3) {
+    const floor = groundSeoToProfile(p, "", honestBulletPool).bullets;
+    for (const b of floor) {
+      if (grounded.bullets.length >= 3) break;
+      if (!grounded.bullets.some((x) => x.toLowerCase() === b.toLowerCase())) {
+        grounded.bullets.push(b);
+      }
+    }
+  }
 
   const out = [
     "# SEO-черновик карточки товара",
