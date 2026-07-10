@@ -4830,23 +4830,18 @@ export function buildSeoDraftFromProfile(
     "",
     "## Идеи для инфографики",
     ...p.content.infographicIdeas
-      // Unconfirmed variant → drop packaging/gift-set infographic ideas.
-      .filter((idea) => p.sku.selectedSkuReliable || !PACKAGING_RE.test(String(idea)))
+      // Unconfirmed variant → drop slides that sell packaging OR an unconfirmed
+      // feature (bare "бесщёточный двигатель", "функция ионизации") — a slide reads
+      // as an established selling point, so a soft "(по данным поставщика)" isn't
+      // enough; don't propose it as a ready idea until the SKU/feature is confirmed.
+      .filter(
+        (idea) =>
+          p.sku.selectedSkuReliable ||
+          (!PACKAGING_RE.test(String(idea)) &&
+            !assertsClaimedFeatureWord(String(idea), featureWords)),
+      )
       .slice(0, 6)
-      .map((idea, i) => {
-        // Unconfirmed variant → a slide about a claimed feature must be marked as
-        // seller-declared, not shown as an established product fact.
-        let s = String(idea);
-        if (
-          skuRisky &&
-          assertsClaimedFeatureWord(s, featureWords) &&
-          !HEDGE_MARKER_RE.test(s) &&
-          !/по данным/i.test(s)
-        ) {
-          s = `${s.replace(/[\s.]+$/, "")} (по данным поставщика)`;
-        }
-        return `${i + 1}. ${s}`;
-      }),
+      .map((idea, i) => `${i + 1}. ${idea}`),
   ]
     .map((line) => fixGluedFallback(line))
     .join("\n");
