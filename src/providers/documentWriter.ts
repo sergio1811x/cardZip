@@ -176,6 +176,7 @@ function buildPrompt(input: DocWriterInput): string {
 
 ЖЁСТКИЕ ПРАВИЛА:
 - Только факты из «сырья». НЕ придумывай числа, размеры, мощность, сертификаты, материалы, страны.
+- НЕ ДОМЫСЛИВАЙ и НЕ РАСШИРЯЙ. Если в сырье вопрос-ПОДТВЕРЖДЕНИЕ («подтвердить отсутствие аккумулятора», «есть ли сертификаты») — оставь его КАК ВОПРОС/ПРОВЕРКУ, НЕ превращай в утверждение о наличии. Пример запрещённого: сырьё «подтвердить отсутствие аккумулятора» → нельзя писать «встроенный литий-ионный аккумулятор, сертификат UN38.3, декларация DGR». Не выдумывай конкретные стандарты, коды (UN38.3, UN3481, DGR, MSDS), химию, типы батарей, если их НЕТ в сырье.
 - Убери дубли и СМЫСЛОВЫЕ повторы: если два пункта про ОДНО И ТО ЖЕ (даже разными словами) — оставь один, самый полный. Например «нет информации о твёрдости стали» и «твёрдость стали не подтверждена» — это ОДИН пункт; «риск коррозии дешёвой стали» и «проверить устойчивость к коррозии» — объедини.
 - Приоритизируй: сверху самое важное для этого товара.
 - Каждый пункт — законченная короткая фраза в одном стиле (не смешивай обрывки и предложения).
@@ -967,6 +968,53 @@ async function callModel(
   return md || null;
 }
 
+// Default ON; disable with DOC_GROUNDING_VERIFY=0.
+function shouldVerifyDocs(): boolean {
+  const v = String(process.env.DOC_GROUNDING_VERIFY ?? "1").trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "off" && v !== "no";
+}
+
+// Second-pass grounding audit for a written doc. The generative pass can invent
+// facts (e.g. flip "confirm ABSENCE of battery" into a full lithium-battery
+// shipping section with UN38.3/DGR). This focused DISCRIMINATION pass re-reads the
+// doc against the source facts and strips anything not supported — a task LLMs do
+// far more reliably than open generation. Model-agnostic, zero hardcoded product
+// terms; on any failure the caller keeps the original/template.
+function buildDocVerifyPrompt(md: string, input: DocWriterInput): string {
+  return `Ты — придирчивый аудитор закупочных документов. Ниже ИСХОДНЫЕ данные и СГЕНЕРИРОВАННЫЙ документ. Верни ИСПРАВЛЕННЫЙ документ, убрав/исправив ЛЮБОЕ утверждение-факт, которого НЕТ в исходных данных или которое им ПРОТИВОРЕЧИТ.
+
+ГЛАВНОЕ:
+- Если источник просит ПОДТВЕРДИТЬ ОТСУТСТВИЕ чего-то (аккумулятор, сертификат) — документ НЕ должен утверждать его наличие; верни это как вопрос/проверку, а не как факт.
+- Убери выдуманные стандарты и коды (UN38.3, UN3481, DGR, MSDS), типы/химию батарей, числа, сертификаты, страны и материалы, которых НЕТ в источнике.
+- Ничего не добавляй от себя. Сохрани те же markdown-заголовки и структуру, грамотный русский, без китайского.
+
+ИСХОДНЫЕ ДАННЫЕ (единственный источник фактов):
+${factSheet(input)}
+${materialLists(input)}
+
+СГЕНЕРИРОВАННЫЙ ДОКУМЕНТ:
+${md}
+
+Верни ТОЛЬКО исправленный markdown, без пояснений и без \`\`\`.`;
+}
+
+async function verifyDocGrounding(
+  md: string,
+  input: DocWriterInput,
+  apiKey: string,
+): Promise<string | null> {
+  const prompt = buildDocVerifyPrompt(md, input);
+  for (const model of MODELS) {
+    try {
+      const out = await callModel(model, prompt, apiKey);
+      if (out) return out;
+    } catch {
+      /* try next model */
+    }
+  }
+  return null;
+}
+
 // Write one document. Returns the polished markdown ONLY if it passes the safety
 // validator; otherwise null (caller keeps the deterministic template).
 export async function writeDocument(
@@ -979,15 +1027,23 @@ export async function writeDocument(
   for (const model of MODELS) {
     try {
       const md = await callModel(model, prompt, apiKey);
-      if (
-        md &&
-        validateWrittenDoc(
-          md,
-          input.docType,
-          forbidden,
-          input.docType === "cargo" ? (input.criticalConfirmations ?? []) : [],
-        )
-      ) {
+      const concepts =
+        input.docType === "cargo" ? (input.criticalConfirmations ?? []) : [];
+      if (md && validateWrittenDoc(md, input.docType, forbidden, concepts)) {
+        // Grounding audit: strip any invented facts the generative pass added. Only
+        // adopt the audited version if it still passes the safety validator; on any
+        // failure keep the original (audit can only improve, never degrade).
+        if (shouldVerifyDocs()) {
+          const grounded = await verifyDocGrounding(md, input, apiKey);
+          if (
+            grounded &&
+            grounded !== md &&
+            validateWrittenDoc(grounded, input.docType, forbidden, concepts)
+          ) {
+            console.log(`[docWriter] ${input.docType}: ok via ${model} (grounded)`);
+            return grounded;
+          }
+        }
         console.log(`[docWriter] ${input.docType}: ok via ${model}`);
         return md;
       }

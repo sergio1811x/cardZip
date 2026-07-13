@@ -4408,6 +4408,7 @@ const PACKAGING_RE =
 const SAFETY_CLAIM_RE =
   /бережн[а-яё]*|защища[а-яё]*\s+(?:волос|кож|здоров|организм|от\s+поврежд)|предотвраща[а-яё]*\s+(?:поврежд|ломк|сечени|выпаден|вред)|безопасн[а-яё]*\s+для\s+(?:волос|кож|здоров|детей|организм)|не\s+вред[а-яё]*|защит[а-яё]*\s+волос/i;
 
+
 // Deterministic, structured SEO title: assembled ONLY from the closed set of
 // confirmed identity facts (object + use-cases). Claimed features, packaging and
 // numbers are never in that set, so by construction they cannot appear in the
@@ -4518,8 +4519,11 @@ export function stripUnconfirmedPackaging(title: string): string {
 
 const SEARCH_MEASUREMENT_RE =
   /\d+(?:[.,]\d+)?\s*(?:см|мм|м\b|кг|г\b|мл|л\b|°|градус|hrc|вт|ватт|в\b|вольт|дюйм)/i;
+// NOTE: no \b anchors — JS \b is ASCII-only and NEVER matches a Cyrillic boundary,
+// which silently disabled this whole guard (салон/профессионал leaked everywhere).
+// The [а-яё]* suffixes already bound each stem to its word.
 const SEO_CONTEXT_RE =
-  /\b(?:салон[а-яё]*|профессионал[а-яё]*|коммерческ[а-яё]*|студи[а-яё]*|мастер(?:а|ов)?|специалист(?:а|ов)?)\b/i;
+  /(?:салон[а-яё]*|профессионал[а-яё]*|коммерческ[а-яё]*|студи[а-яё]*|мастерск[а-яё]*|специалист[а-яё]*)/i;
 
 function hasUnsupportedSeoContext(
   text: string,
