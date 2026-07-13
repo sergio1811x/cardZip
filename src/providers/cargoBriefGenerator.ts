@@ -5,10 +5,10 @@
 // keep its honest-generic floor.
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-// claude-haiku-4.5 leads: faithful to the source facts (grok invented battery/leather
-// box/cert standards in the cargo doc). Gemini stays as fallback. Override via
+// Для карго даём приоритет Grok, ниже — быстрые фолбэки. Override via
 // CARGO_BRIEF_MODELS.
 const DEFAULT_MODELS = [
+  "x-ai/grok-4.3",
   "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",

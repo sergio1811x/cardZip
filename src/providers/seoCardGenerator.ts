@@ -5,10 +5,12 @@
 // keep its honest-generic floor.
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+// Для SEO даём приоритет Grok, ниже — быстрые фолбэки.
 const DEFAULT_MODELS = [
-  "google/gemini-3.1-flash-lite",
-  "google/gemini-2.5-flash",
+  "x-ai/grok-4.3",
   "qwen/qwen3.7-plus",
+  "google/gemini-2.5-flash",
+  "google/gemini-3.1-flash-lite",
 ];
 const DEFAULT_TIMEOUT_MS = 55_000;
 // The SEO card JSON is large (title + description + 5 bullets + 8–15 keywords +

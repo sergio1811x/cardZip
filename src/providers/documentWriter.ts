@@ -11,16 +11,15 @@ import {
 } from "../core/procurementProfile";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-// Content writing is a nuance-heavy task. Try a stronger model first for copy
-// quality, then fall back to gemini-2.5-flash which reliably completes on Railway
-// so we ALWAYS get output. Fully overridable via DOC_WRITER_MODELS. NOTE: verify
-// exact slugs on the OpenRouter models page — a wrong slug just falls through.
-// gpt-5.6-luna-pro leads for the ZIP docs (cargo brief, sample checklist): grok-4.3
-// hallucinated facts into the cargo doc (leather box, PA plastic, invented cert
-// standards, a battery on a corded device) and the grounding pass couldn't catch its
-// own inventions; haiku-4.5 didn't move the needle. Gemini stays as fallback.
-// Override via DOC_WRITER_MODELS.
+// Базовая цепочка писателя документов: байер/чек-лист остаются на ней.
 const DEFAULT_MODELS = [
+  "qwen/qwen3.7-plus",
+  "google/gemini-2.5-flash",
+  "google/gemini-3.1-flash-lite",
+];
+// Для карго держим отдельную цепочку: Grok первым, ниже — стабильные фолбэки.
+const CARGO_DOC_DEFAULT_MODELS = [
+  "x-ai/grok-4.3",
   "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
@@ -28,15 +27,9 @@ const DEFAULT_MODELS = [
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 3000;
 const DEFAULT_TEMPERATURE = 0.3;
-// SEO copy quality is worth latency here (it's a ZIP doc, not the live reply), so
-// SEO prose leads with a stronger model and falls back to the fast ones if it
-// times out. Overridable via SEO_PROSE_MODELS. Slugs must match OpenRouter.
-// claude-haiku-4.5 leads: grok-4.3 confidently HALLUCINATED facts (invented PA
-// plastic, a leather box, a specific cert standard, a battery on a corded device)
-// and, crucially, could not catch its own inventions in the grounding pass. Haiku is
-// far more faithful to the given facts at a low price — the right tier for grounded
-// rewriting. Gemini stays as the reliable fallback. Override via SEO_PROSE_MODELS.
+// Для SEO держим отдельную цепочку: Grok первым, затем фолбэки.
 const SEO_PROSE_DEFAULT_MODELS = [
+  "x-ai/grok-4.3",
   "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
@@ -107,6 +100,14 @@ function getNumberEnv(name: string, fallback: number): number {
 }
 
 const MODELS = getEnvList("DOC_WRITER_MODELS", DEFAULT_MODELS);
+const CARGO_DOC_MODELS = getEnvList(
+  "DOC_WRITER_CARGO_MODELS",
+  CARGO_DOC_DEFAULT_MODELS,
+);
+
+function getWriterModels(docType: DocType): string[] {
+  return docType === "cargo" ? CARGO_DOC_MODELS : MODELS;
+}
 
 function bullets(list: string[], cap = 20): string {
   return list
@@ -1045,7 +1046,8 @@ export async function writeDocument(
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
   const prompt = buildPrompt(input);
-  for (const model of MODELS) {
+  const models = getWriterModels(input.docType);
+  for (const model of models) {
     try {
       const md = await callModel(model, prompt, apiKey);
       const concepts =
