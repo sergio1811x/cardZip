@@ -2998,11 +2998,12 @@ function assembleSupplierQuestions(
   const cargoDims = cargo.filter((q) =>
     /габарит[а-яё]*\s*(индивидуальн|упаковк)|размер[а-яё]*\s*(индивидуальн|упаковк)/i.test(q),
   );
-  const cargoCarton = cargo.filter((q) => /короб|карт[оа]н|мастер-?короб/i.test(q));
   const reserved = [
+    // Packed weight + package dims are the two logistics essentials worth a supplier
+    // question. The master-carton ask lives in the cargo brief (cargo.mustAsk) — a
+    // 3rd near-identical "вес/габариты короба" question here reads as nagging.
     ...cargoPacked.slice(0, 1),
     ...cargoDims.slice(0, 1),
-    ...cargoCarton.slice(0, 1),
     ...material.slice(0, 1),
     ...compliance.slice(0, 1),
     ...electrical.slice(0, 1),
