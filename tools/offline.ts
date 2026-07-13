@@ -113,6 +113,29 @@ async function understand(id: string): Promise<any> {
   return productContext;
 }
 
+// ── regen-cargo: re-run ONLY the cargo generator, keep the rest of context ──
+async function regenCargo(id: string): Promise<void> {
+  const raw = loadJson<any>(rawPath(id));
+  const productContext = loadJson<any>(ctxPath(id));
+  const genInput: GeneratorInput = {
+    titleRu: productContext.titles?.cleanRu || raw.titleEn || undefined,
+    titleCn: raw.titleCn || undefined,
+    priceYuan: Number.isFinite(raw.priceYuan) && raw.priceYuan > 0 ? raw.priceYuan : null,
+    attributes: Array.isArray(raw.attributes) ? raw.attributes.slice(0, 30) : [],
+    skuNames: Array.isArray(raw.skus) ? raw.skus.map((s: any) => String(s?.name ?? s?.raw ?? '').trim()).filter(Boolean).slice(0, 30) : [],
+    coreObject: productContext.identity?.coreObject || undefined,
+    categoryType: productContext.identity?.categoryType || raw.categoryName || undefined,
+    useCases: Array.isArray(productContext.identity?.useCases) ? productContext.identity.useCases.map(String) : [],
+    materials: Object.entries(productContext.facts ?? {}).filter(([k]) => k.includes('материал')).map(([, v]) => String(v)),
+  };
+  const genCargo = await generateCargoBrief(genInput).catch(() => null);
+  if (!genCargo) { console.error('[regen-cargo] generator returned null'); return; }
+  const dr: any = (productContext.procurementProfileDraft = productContext.procurementProfileDraft ?? {}).domainRules ??= {};
+  dr.cargo = { cargoNature: genCargo.cargoNature, sensitiveIssues: genCargo.considerations, whatToRequest: genCargo.whatToRequest, packagingNotes: '' };
+  writeFileSync(ctxPath(id), JSON.stringify(productContext, null, 2), 'utf8');
+  console.log(`[regen-cargo] ✓ ${id}: nature=${genCargo.cargoNature} req:${genCargo.whatToRequest.length} issues:${genCargo.considerations.length}`);
+}
+
 // ── docs: assemble product like the bot, render all 6 documents ─────────────
 async function docs(id: string, withWriters: boolean): Promise<void> {
   const raw = loadJson<any>(rawPath(id));
@@ -208,6 +231,7 @@ async function main() {
     case 'capture': await capture(arg); break;
     case 'ingest': await ingest(arg); break;
     case 'understand': await understand(arg); break;
+    case 'regen-cargo': await regenCargo(arg); break;
     case 'docs': await docs(arg, withWriters); break;
     case 'all': {
       const id = await capture(arg);
