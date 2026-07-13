@@ -10,7 +10,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // without inventing specifics, at a low price. Gemini stays as fallback. Override
 // via SUPPLIER_QUESTIONS_MODELS.
 const DEFAULT_MODELS = [
-  "deepseek/deepseek-v4-pro",
+  "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];

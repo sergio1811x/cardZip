@@ -77,7 +77,7 @@ export interface FullProductAnalysis {
 const SEARCH_MODELS = [
   'google/gemini-3.1-flash-lite',
   'google/gemini-2.5-flash',
-  'deepseek/deepseek-v4-pro',
+  'qwen/qwen3.7-plus',
   'meta-llama/llama-4-scout',
 ];
 

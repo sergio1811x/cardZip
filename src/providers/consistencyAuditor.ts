@@ -5,7 +5,7 @@ import { ConsistencyAuditResultSchema, parseLlmJson } from '../core/llmSchemas';
 const CONSISTENCY_AUDIT_MODELS = [
   'google/gemini-3.1-flash-lite',
   'openai/gpt-5-mini',
-  'deepseek/deepseek-v4-pro',
+  'qwen/qwen3.7-plus',
 ];
 
 const CONSISTENCY_AUDIT_PROMPT = `CardZip Consistency Auditor.

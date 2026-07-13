@@ -5,7 +5,7 @@ import { QaGateResultSchema, parseLlmJson } from '../core/llmSchemas';
 const QA_MODELS = [
   'google/gemini-3.1-flash-lite',
   'google/gemini-2.5-flash',
-  'deepseek/deepseek-v4-pro',
+  'qwen/qwen3.7-plus',
 ];
 
 const QA_GATE_PROMPT = `CardZip QA Gate.

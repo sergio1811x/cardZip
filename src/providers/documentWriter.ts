@@ -21,7 +21,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // own inventions; haiku-4.5 didn't move the needle. Gemini stays as fallback.
 // Override via DOC_WRITER_MODELS.
 const DEFAULT_MODELS = [
-  "deepseek/deepseek-v4-pro",
+  "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
@@ -37,7 +37,7 @@ const DEFAULT_TEMPERATURE = 0.3;
 // far more faithful to the given facts at a low price — the right tier for grounded
 // rewriting. Gemini stays as the reliable fallback. Override via SEO_PROSE_MODELS.
 const SEO_PROSE_DEFAULT_MODELS = [
-  "deepseek/deepseek-v4-pro",
+  "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];

@@ -4,7 +4,7 @@
 // and deepseek-v4-pro as fallbacks. Overridable via CN_TRANSLATE_MODELS.
 const CN_TRANSLATE_MODELS: string[] = (process.env.CN_TRANSLATE_MODELS
   ? process.env.CN_TRANSLATE_MODELS.split(',').map((s) => s.trim()).filter(Boolean)
-  : ['google/gemini-3.1-flash-lite', 'google/gemini-2.5-flash', 'deepseek/deepseek-v4-pro']);
+  : ['google/gemini-3.1-flash-lite', 'google/gemini-2.5-flash', 'qwen/qwen3.7-plus']);
 
 const CN_COLORS: Record<string, string> = {
   '黑色': 'чёрный', '白色': 'белый', '红色': 'красный', '蓝色': 'синий',

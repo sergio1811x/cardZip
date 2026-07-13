@@ -4,7 +4,7 @@ import { ExpertWriterResultSchema, parseLlmJson } from '../core/llmSchemas';
 const WRITER_MODELS = [
   "google/gemini-3.1-flash-lite",
   "google/gemini-2.5-flash",
-  "deepseek/deepseek-v4-pro",
+  "qwen/qwen3.7-plus",
 ];
 
 export interface ExpertWriterResult {

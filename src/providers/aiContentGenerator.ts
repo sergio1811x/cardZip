@@ -27,7 +27,7 @@ const DEFAULT_OPENROUTER_MODELS = [
   // Keep these cheap/fast by default. Override via AI_TEXT_MODELS in production.
   process.env.AI_TEXT_PRIMARY_MODEL ?? "google/gemini-3.1-flash-lite",
   process.env.AI_TEXT_FALLBACK_MODEL_1 ?? "google/gemini-2.5-flash",
-  process.env.AI_TEXT_FALLBACK_MODEL_2 ?? "deepseek/deepseek-v4-pro",
+  process.env.AI_TEXT_FALLBACK_MODEL_2 ?? "qwen/qwen3.7-plus",
   process.env.AI_TEXT_FALLBACK_MODEL_3 ?? "deepseek/deepseek-v4-flash",
 ].filter(Boolean);
 

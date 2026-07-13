@@ -9,7 +9,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // box/cert standards in the cargo doc). Gemini stays as fallback. Override via
 // CARGO_BRIEF_MODELS.
 const DEFAULT_MODELS = [
-  "deepseek/deepseek-v4-pro",
+  "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];

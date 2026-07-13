@@ -4,7 +4,7 @@ import { buildCanonicalizerClassificationInput } from './canonicalizerClassifier
 const CLASSIFIER_MODELS = [
   'google/gemini-3.1-flash-lite',
   'openai/gpt-5-mini',
-  'deepseek/deepseek-v4-pro',
+  'qwen/qwen3.7-plus',
 ];
 
 export interface CanonicalizerClassificationLlmResult {
