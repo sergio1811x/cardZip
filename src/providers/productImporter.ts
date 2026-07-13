@@ -693,6 +693,18 @@ async function fetchFromElim(productId: string, platform: Platform): Promise<Raw
   );
 }
 
+// Normalize a RAW Elim API response (saved manually via curl) into the exact
+// RawProduct1688 shape the pipeline consumes — same path as fetchFromElim, minus
+// the network call. Lets the offline harness ingest a hand-saved Elim JSON.
+export async function normalizeElimResponse(
+    json: unknown,
+    platform: Platform,
+    productId: string,
+): Promise<RawProduct1688> {
+  const product = buildNormalizedProduct(json as ElimResponse, platform, productId);
+  return sanitizeRawProduct(await safeTranslateSkuNames(product));
+}
+
 // ─── Main importer ──────────────────────────────────────────────────────────
 
 async function fetchProduct(url: string): Promise<RawProduct1688> {

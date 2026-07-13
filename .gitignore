@@ -9,3 +9,6 @@ dist/
 Thumbs.db
 dev_stdout.txt
 dev_stderr.txt
+
+# offline harness fixtures (scraped data + cached LLM output)
+tools/fixtures/
