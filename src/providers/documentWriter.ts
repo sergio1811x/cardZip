@@ -15,12 +15,13 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // quality, then fall back to gemini-2.5-flash which reliably completes on Railway
 // so we ALWAYS get output. Fully overridable via DOC_WRITER_MODELS. NOTE: verify
 // exact slugs on the OpenRouter models page — a wrong slug just falls through.
-// grok-4.3 leads for the ZIP docs (cargo brief, sample checklist): these are
-// off the latency-critical live reply, and a stronger model produces far less
-// generic, product-specific docs (e.g. actually covering electrical safety for a
-// powered device). Gemini stays as the fast, reliable fallback.
+// claude-haiku-4.5 leads for the ZIP docs (cargo brief, sample checklist): grok-4.3
+// hallucinated facts into the cargo doc (leather box, PA plastic, invented cert
+// standards, a battery on a corded device) and the grounding pass couldn't catch its
+// own inventions. Haiku is far more faithful to the source facts and cheap enough for
+// off-live ZIP docs. Gemini stays as fallback. Override via DOC_WRITER_MODELS.
 const DEFAULT_MODELS = [
-  "x-ai/grok-4.3",
+  "anthropic/claude-haiku-4.5",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
@@ -30,11 +31,13 @@ const DEFAULT_TEMPERATURE = 0.3;
 // SEO copy quality is worth latency here (it's a ZIP doc, not the live reply), so
 // SEO prose leads with a stronger model and falls back to the fast ones if it
 // times out. Overridable via SEO_PROSE_MODELS. Slugs must match OpenRouter.
-// x-ai/grok-4.3 leads for SEO copy: strongest natural-Russian writer of the ones
-// tried, and it respects the honesty framing (hedge claims, don't assert packaging
-// when the SKU is unknown). Gemini stays as the reliable fallback if grok times out.
+// claude-haiku-4.5 leads: grok-4.3 confidently HALLUCINATED facts (invented PA
+// plastic, a leather box, a specific cert standard, a battery on a corded device)
+// and, crucially, could not catch its own inventions in the grounding pass. Haiku is
+// far more faithful to the given facts at a low price — the right tier for grounded
+// rewriting. Gemini stays as the reliable fallback. Override via SEO_PROSE_MODELS.
 const SEO_PROSE_DEFAULT_MODELS = [
-  "x-ai/grok-4.3",
+  "anthropic/claude-haiku-4.5",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];

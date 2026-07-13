@@ -2,13 +2,11 @@ import type { AnalysisSnapshot } from '../core/analysisSnapshot';
 import type { GapPlannerResult } from '../types';
 import { GapPlannerResultSchema, parseLlmJson } from '../core/llmSchemas';
 
-// grok-4.3 leads: the planner decides WHICH confirmations the whole package
-// hinges on — it feeds the buyer brief and the main-report question base. Stronger
-// reasoning here makes those less generic and keeps the essential base questions
-// (price/weight/certs/composition) instead of drifting to only niche technical ones.
-// Gemini stays as the fast, reliable fallback.
+// claude-haiku-4.5 leads: faithful reasoning about which confirmations the package
+// hinges on, without inventing specifics. Feeds the buyer brief + main-report
+// question base. Gemini stays as fallback.
 const GAP_PLANNER_MODELS = [
-  'x-ai/grok-4.3',
+  'anthropic/claude-haiku-4.5',
   'google/gemini-2.5-flash',
   'google/gemini-3.1-flash-lite',
 ];

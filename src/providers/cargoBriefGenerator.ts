@@ -5,11 +5,11 @@
 // keep its honest-generic floor.
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-// grok-4.3 leads: the cargo brief benefits from stronger reasoning about
-// product-specific logistics sensitivities (battery, liquid, powder, fragility).
-// Gemini stays as the fast, reliable fallback.
+// claude-haiku-4.5 leads: faithful to the source facts (grok invented battery/leather
+// box/cert standards in the cargo doc). Gemini stays as fallback. Override via
+// CARGO_BRIEF_MODELS.
 const DEFAULT_MODELS = [
-  "x-ai/grok-4.3",
+  "anthropic/claude-haiku-4.5",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];

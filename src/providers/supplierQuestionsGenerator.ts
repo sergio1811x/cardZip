@@ -5,13 +5,12 @@
 // invalid JSON, it returns null and the caller keeps its honest-generic floor.
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-// grok-4.3 leads: the prompt already spells out the full domain profile (e.g. the
-// whole electrical set — voltage+frequency, plug, cord, motor, certs), but
-// gemini-flash-lite under-delivered on that reasoning. A stronger model actually
-// produces the complete, correctly-prioritized question set. Gemini stays as the
-// fast, reliable fallback if grok times out.
+// claude-haiku-4.5 leads: faithful instruction-following produces the complete,
+// correctly-prioritized question set (electrical set incl. certs/cord/shield photo)
+// without inventing specifics, at a low price. Gemini stays as fallback. Override
+// via SUPPLIER_QUESTIONS_MODELS.
 const DEFAULT_MODELS = [
-  "x-ai/grok-4.3",
+  "anthropic/claude-haiku-4.5",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
