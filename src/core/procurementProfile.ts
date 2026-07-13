@@ -5178,11 +5178,16 @@ export function buildSeoDraftFromProfile(
     keywords,
     "",
     "## Что уточнить перед публикацией",
+    // Full supplier questions first; bare "missing field" labels (e.g. "цена
+    // выбранного SKU") are normalized to proper lines and overlap-deduped so they
+    // don't reappear as fragments next to the fuller question they duplicate.
     ...list(
-      [
-        ...p.procurement.mustAskSupplier.slice(0, 6),
-        ...p.dataQuality.missingCriticalFields,
-      ],
+      dedupBulletsByOverlap(
+        normalizeFragmentLines([
+          ...p.procurement.mustAskSupplier.slice(0, 6),
+          ...p.dataQuality.missingCriticalFields,
+        ]),
+      ),
       10,
     ),
     "",
