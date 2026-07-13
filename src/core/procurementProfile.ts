@@ -5169,7 +5169,9 @@ export function buildSeoDraftFromProfile(
   // know (LLM selling points + honest identity pool) and stop.
   const bullets = dedupBulletsByOverlap(
     uniq([...llmBullets, ...honestBulletPool], 8),
-  ).slice(0, 5);
+  )
+    .filter((b) => !isTitleEchoBullet(b, p.identity.coreObject))
+    .slice(0, 5);
   // Prefer the writer's characteristics, else the seoCard generator's, else the
   // deterministic per-kind table. Both LLM sources go through the same sanitizer.
   const rawChars =
@@ -5467,6 +5469,22 @@ function fixGluedFallback(s: string): string {
 // "5 шт") have no physical unit and are allowed.
 const BULLET_MEASUREMENT_RE =
   /\d+(?:[.,]\d+)?\s*(?:см|мм|м\b|кг|г\b|мл|л\b|°|градус|hrc|вт|ватт|в\b|вольт|дюйм)/i;
+
+// A bullet that just restates the object + a use-case dump ("Высокоскоростной фен —
+// сушка волос, укладка, уход") echoes the title and adds no selling angle. Drop it
+// so the 5 bullets carry 5 distinct angles. Category-agnostic (keyed on coreObject).
+function isTitleEchoBullet(bullet: string, coreObject: string): boolean {
+  const objStart = clean(coreObject)
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .join(" ");
+  if (objStart.length <= 2) return false;
+  const low = clean(bullet).toLowerCase().replace(/ё/g, "е");
+  return low.startsWith(objStart) && /[—–:-]/.test(low.slice(0, objStart.length + 30));
+}
 
 function filterDangerousBullets(
   bullets: string[],
