@@ -99,7 +99,16 @@ interface ElimResponse {
   sold?: number;
   category_name?: string;
   attributes?: Array<{ name?: string; value?: string }>;
-  skus?: Array<{ name?: string; price?: number | string; quantity?: number; pic_url?: string }>;
+  skus?: Array<{
+    name?: string;
+    price?: number | string;
+    quantity?: number;
+    pic_url?: string;
+    // Elim returns the variant label under options[].value (颜色/规格), not `name`,
+    // and the image under img_url — support both shapes.
+    img_url?: string;
+    options?: Array<{ name?: string; value?: string; valueEn?: string }>;
+  }>;
   shipping_info?: Array<{ weight?: number }>;
   extra_info?: Array<Record<string, unknown>>;
   quote_type?: string;
@@ -302,15 +311,27 @@ function buildHumanSkuNames(count: number, attributes?: ElimResponse['attributes
   return Array.from({ length: count }, (_, i) => `Вариант ${i + 1}`);
 }
 
+// A variant's display label: prefer `name`, else join the options[].value labels
+// (Elim's shape — 颜色/规格). Chinese labels are translated later by safeTranslateSkuNames.
+function skuLabel(s: NonNullable<ElimResponse['skus']>[number]): string {
+  const direct = cleanText(s.name);
+  if (direct) return direct;
+  const opts = Array.isArray(s.options) ? s.options : [];
+  return opts
+    .map((o) => cleanText(o?.value || o?.valueEn))
+    .filter(Boolean)
+    .join(' / ');
+}
+
 function buildSkus(skus: ElimResponse['skus'], attributes?: ElimResponse['attributes']): ProductSku[] {
-  const raw = (skus ?? []).filter((s) => cleanText(s.name));
+  const raw = (skus ?? []).filter((s) => skuLabel(s));
   if (!raw.length) return [];
 
-  const allRawCodes = raw.every((s) => isRawSkuCode(cleanText(s.name)));
+  const allRawCodes = raw.every((s) => isRawSkuCode(skuLabel(s)));
   const humanNames = allRawCodes ? buildHumanSkuNames(raw.length, attributes) : [];
 
   return raw.map((s, i) => {
-    const rawName = cleanText(s.name);
+    const rawName = skuLabel(s);
 
     const name = allRawCodes
         ? humanNames[i] ?? `Вариант ${i + 1}`
@@ -322,7 +343,7 @@ function buildSkus(skus: ElimResponse['skus'], attributes?: ElimResponse['attrib
       name,
       price: positiveNumber(s.price),
       stock: s.quantity,
-      image: s.pic_url,
+      image: s.pic_url || s.img_url,
     };
   });
 }
