@@ -2080,7 +2080,10 @@ function normalizeMaterials(items: string[], limit = 2): string[] {
       const low = part.toLowerCase();
       if (/塑料|苯乙烯|^abs$|abs[- ]?пластик|\babs\b/i.test(low)) {
         if (!absAdded) {
-          out.push("ABS-пластик — подтвердить");
+          // Store the bare material — the confirm-hedge is added ONCE by each
+          // consumer to the whole list, so a 3rd material can't strand "—
+          // подтвердить" mid-list ("PC, ABS-пластик — подтвердить, PA").
+          out.push("ABS-пластик");
           absAdded = true;
         }
         continue;
@@ -4168,7 +4171,7 @@ export function buildBuyerBriefFromProfile(
       ? [`SKU в карточке: ${p.sku.skuSummary}`]
       : []),
     `Цвета: ${p.sku.colors.length ? p.sku.colors.join(", ") : "уточнить"}`,
-    `Материал: ${p.identity.materials.length ? p.identity.materials.join(", ") : "не указан"}`,
+    `Материал: ${p.identity.materials.length ? `${p.identity.materials.join(", ")}${/подтверд/i.test(p.identity.materials.join(" ")) ? "" : " — подтвердить"}` : "не указан"}`,
     `Вес: ${weightKg != null ? `${String(weightKg).replace(".", ",")} кг (заявлено, уточнить с упаковкой)` : "нет в карточке"}`,
     `Габариты упаковки: ${pkgDims ? `${pkgDims} см (предварительно)` : "нет в карточке"}`,
     `MOQ: ${pos(product?.moq) ? `${Math.round(pos(product?.moq)!)} шт.` : "уточнить"}`,
