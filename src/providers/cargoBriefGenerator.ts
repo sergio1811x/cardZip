@@ -9,7 +9,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // box/cert standards in the cargo doc). Gemini stays as fallback. Override via
 // CARGO_BRIEF_MODELS.
 const DEFAULT_MODELS = [
-  "openai/gpt-5.6-luna-pro",
+  "deepseek/deepseek-v4-pro",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
@@ -71,6 +71,10 @@ const MODELS = getEnvList("CARGO_BRIEF_MODELS", DEFAULT_MODELS);
 function cleanJson(raw: string): string {
   return raw
     .replace(/^﻿/, "")
+    // Reasoning models (DeepSeek) emit <think>…</think> before the JSON — strip
+    // closed and truncated-unclosed blocks so parsing doesn't choke on it.
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
+    .replace(/<think(?:ing)?>[\s\S]*$/i, "")
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/```\s*$/i, "")
@@ -103,7 +107,9 @@ function extractJsonObject(raw: string): string | null {
     if (inString) continue;
     if (char === "{") depth += 1;
     if (char === "}") depth -= 1;
-    if (depth === 0) return cleaned.slice(firstBrace, i + 1);
+    // Repair trailing commas (`,}` / `,]`) — a common reasoning-model JSON slip.
+    if (depth === 0)
+      return cleaned.slice(firstBrace, i + 1).replace(/,(\s*[}\]])/g, "$1");
   }
 
   return null;

@@ -21,7 +21,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // own inventions; haiku-4.5 didn't move the needle. Gemini stays as fallback.
 // Override via DOC_WRITER_MODELS.
 const DEFAULT_MODELS = [
-  "openai/gpt-5.6-luna-pro",
+  "deepseek/deepseek-v4-pro",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
@@ -37,7 +37,7 @@ const DEFAULT_TEMPERATURE = 0.3;
 // far more faithful to the given facts at a low price — the right tier for grounded
 // rewriting. Gemini stays as the reliable fallback. Override via SEO_PROSE_MODELS.
 const SEO_PROSE_DEFAULT_MODELS = [
-  "openai/gpt-5.6-luna-pro",
+  "deepseek/deepseek-v4-pro",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
@@ -206,7 +206,12 @@ ${input.draftMd.slice(0, 2600)}
 function stripFences(raw: string): string {
   return raw
     .replace(/^﻿/, "")
-    .replace(/^```(?:markdown|md)?\s*/i, "")
+    // Reasoning models (DeepSeek etc.) emit <think>…</think> before the answer —
+    // strip closed blocks AND an unclosed one left by truncation, so reasoning never
+    // leaks into JSON extraction or a markdown doc (it broke JSON parsing before).
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
+    .replace(/<think(?:ing)?>[\s\S]*$/i, "")
+    .replace(/^```(?:markdown|md|json)?\s*/i, "")
     .replace(/```\s*$/i, "")
     .trim();
 }
@@ -920,7 +925,9 @@ function extractJsonObject(raw: string): string | null {
     if (inString) continue;
     if (char === "{") depth += 1;
     if (char === "}") depth -= 1;
-    if (depth === 0) return cleaned.slice(firstBrace, i + 1);
+    // Repair trailing commas (`,}` / `,]`) — a common reasoning-model JSON slip.
+    if (depth === 0)
+      return cleaned.slice(firstBrace, i + 1).replace(/,(\s*[}\]])/g, "$1");
   }
   return null;
 }
