@@ -390,6 +390,10 @@ function normalizeDomainCargo(value: unknown): NormalizedDomainCargo | undefined
 function cleanJson(raw: string): string {
   return raw
     .replace(/^\uFEFF/, "")
+    // Reasoning models emit <think>\u2026</think> before the JSON \u2014 strip closed and
+    // truncated-unclosed blocks so the (large) canonicalizer JSON parses.
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
+    .replace(/<think(?:ing)?>[\s\S]*$/i, "")
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/```\s*$/i, "")
@@ -429,7 +433,8 @@ function extractJsonObject(raw: string): string | null {
     if (char === "}") depth -= 1;
 
     if (depth === 0) {
-      return cleaned.slice(firstBrace, i + 1);
+      // Repair trailing commas (`,}` / `,]`) — a common model JSON slip.
+      return cleaned.slice(firstBrace, i + 1).replace(/,(\s*[}\]])/g, "$1");
     }
   }
 
@@ -998,6 +1003,13 @@ export async function callCanonicalizerOpenRouter(
         model,
         max_tokens: maxTokens,
         temperature,
+        // Force strict JSON and turn OFF reasoning: the canonicalizer emits the
+        // LARGEST JSON in the system (profile + domainRules + SEO + cargo +
+        // criticalConfirmations); a reasoning preamble or a non-JSON wrapper
+        // corrupted it ("invalid JSON/context"), which then degraded EVERY
+        // downstream doc. Unified OpenRouter params; ignored where unsupported.
+        response_format: { type: "json_object" },
+        reasoning: { enabled: false },
         messages,
       }),
       signal: AbortSignal.timeout(timeoutMs),
