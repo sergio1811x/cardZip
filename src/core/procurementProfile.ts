@@ -3165,12 +3165,24 @@ export function buildProductProcurementProfile(
       audience: safeRu(draftIdentity.audience || identity.audience || ""),
       gender: safeRu(draftIdentity.gender || identity.gender || ""),
       season: safeRu(draftIdentity.season || identity.season || ""),
-      useCases: uniq(
+      useCases: filterUnsupportedVenueUseCases(
+        uniq(
+          [
+            ...array<string>(draftIdentity.useCases),
+            ...array<string>(identity.useCases),
+          ].map(safeRu),
+          6,
+        ),
         [
-          ...array<string>(draftIdentity.useCases),
-          ...array<string>(identity.useCases),
-        ].map(safeRu),
-        6,
+          product?.titleCn,
+          product?.titleEn,
+          product?.titleRu,
+          identity.coreObject,
+          identity.productType,
+          ...array<any>(product?.attributes).map((a) => `${a?.name} ${a?.value}`),
+        ]
+          .filter(Boolean)
+          .join(" "),
       ),
       materials: normalizeMaterials(
         uniq(
@@ -4881,6 +4893,22 @@ const SEARCH_MEASUREMENT_RE =
 // The [а-яё]* suffixes already bound each stem to its word.
 const SEO_CONTEXT_RE =
   /(?:салон[а-яё]*|профессионал[а-яё]*|коммерческ[а-яё]*|студи[а-яё]*|мастерск[а-яё]*|специалист[а-яё]*)/i;
+
+// Drop a use-case that smuggles a venue/tier claim (салон/профессиональный/…) the
+// card doesn't back. The canonicalizer likes to inflate a home device with "в
+// салоне красоты"; since use-cases feed the SEO prose writer verbatim, that venue
+// then leaks into the description/bullets. Grounded against the card's own text +
+// identity — category-agnostic, no hardcoded product terms.
+function filterUnsupportedVenueUseCases(
+  useCases: string[],
+  authorityText: string,
+): string[] {
+  const authority = authorityText.toLowerCase().replace(/ё/g, "е");
+  return useCases.filter((u) => {
+    const m = clean(u).toLowerCase().replace(/ё/g, "е").match(SEO_CONTEXT_RE);
+    return !m || authority.includes(m[0]);
+  });
+}
 
 function hasUnsupportedSeoContext(
   text: string,
