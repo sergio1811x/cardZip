@@ -9,7 +9,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // box/cert standards in the cargo doc). Gemini stays as fallback. Override via
 // CARGO_BRIEF_MODELS.
 const DEFAULT_MODELS = [
-  "anthropic/claude-haiku-4.5",
+  "openai/gpt-5.6-luna-pro",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];

@@ -10,7 +10,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // without inventing specifics, at a low price. Gemini stays as fallback. Override
 // via SUPPLIER_QUESTIONS_MODELS.
 const DEFAULT_MODELS = [
-  "anthropic/claude-haiku-4.5",
+  "openai/gpt-5.6-luna-pro",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];

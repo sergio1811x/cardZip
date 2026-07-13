@@ -15,13 +15,13 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // quality, then fall back to gemini-2.5-flash which reliably completes on Railway
 // so we ALWAYS get output. Fully overridable via DOC_WRITER_MODELS. NOTE: verify
 // exact slugs on the OpenRouter models page — a wrong slug just falls through.
-// claude-haiku-4.5 leads for the ZIP docs (cargo brief, sample checklist): grok-4.3
+// gpt-5.6-luna-pro leads for the ZIP docs (cargo brief, sample checklist): grok-4.3
 // hallucinated facts into the cargo doc (leather box, PA plastic, invented cert
 // standards, a battery on a corded device) and the grounding pass couldn't catch its
-// own inventions. Haiku is far more faithful to the source facts and cheap enough for
-// off-live ZIP docs. Gemini stays as fallback. Override via DOC_WRITER_MODELS.
+// own inventions; haiku-4.5 didn't move the needle. Gemini stays as fallback.
+// Override via DOC_WRITER_MODELS.
 const DEFAULT_MODELS = [
-  "anthropic/claude-haiku-4.5",
+  "openai/gpt-5.6-luna-pro",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
@@ -37,7 +37,7 @@ const DEFAULT_TEMPERATURE = 0.3;
 // far more faithful to the given facts at a low price — the right tier for grounded
 // rewriting. Gemini stays as the reliable fallback. Override via SEO_PROSE_MODELS.
 const SEO_PROSE_DEFAULT_MODELS = [
-  "anthropic/claude-haiku-4.5",
+  "openai/gpt-5.6-luna-pro",
   "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
