@@ -4249,6 +4249,57 @@ const CARGO_NATURE_CAUTIONS: Record<string, string> = {
     "электротовар — уточните у карго требования к перевозке техники, маркировку и совместимость с РФ/ЕАЭС по питанию",
 };
 
+function cargoAllowedSignalsText(p: ProductProcurementProfile): string {
+  return [
+    p.identity.coreObject,
+    p.identity.shortTitle,
+    p.identity.titleForReport,
+    ...p.identity.useCases,
+    ...p.identity.materials,
+    ...p.identity.visibleFeatures,
+    ...p.identity.claimedFeatures,
+    ...p.identity.unconfirmedFeatures,
+    ...(p.procurement.criticalConfirmations ?? []),
+    ...(p.cargo.mustAsk ?? []),
+  ]
+    .join(" ")
+    .toLowerCase()
+    .replace(/ё/g, "е");
+}
+
+function cargoNatureIsAllowed(nature: string, authority: string): boolean {
+  const low = nature.toLowerCase();
+  if (!low || low === "none") return true;
+  const rules: Array<[string, RegExp]> = [
+    ["battery", /аккумулятор|батаре|проводн|питани|вилк|напряжени|частот/i],
+    ["fragile", /хрупк|стекл|керамик|диспле|экран|зеркал/i],
+    ["liquid", /жидк|масл|гел|лосьон|крем|шампун/i],
+    ["aerosol", /аэрозол|спрей|баллон/i],
+    ["powder", /порош|сыпуч/i],
+    ["inflatable", /надув|клапан/i],
+    ["bladed", /лезви|остри|режущ|нож/i],
+    ["textile", /ткан|текстил|полиэстер|хлопок/i],
+    ["food_contact", /пищ|еда|напит|кухон|посуда/i],
+    ["oversized", /негабарит|объемн|габарит/i],
+  ];
+  const rule = rules.find(([key]) => low.includes(key));
+  return rule ? rule[1].test(authority) : false;
+}
+
+function sanitizeCargoAdditionalLines(
+  items: string[],
+  p: ProductProcurementProfile,
+): string[] {
+  const authority = cargoAllowedSignalsText(p);
+  return items.filter((line) => {
+    const low = clean(line).toLowerCase().replace(/ё/g, "е");
+    if (!low) return false;
+    if (/1450|ватт|вт|pa\b|кожан|подарочн|салон|профессиональн|насадк/i.test(low) && !authority.includes(low.match(/1450|ватт|вт|pa|кожан|подарочн|салон|профессиональн|насадк/i)?.[0] ?? ""))
+      return false;
+    return true;
+  });
+}
+
 function cargoRequestSlot(line: string): string | null {
   const low = clean(line).toLowerCase();
   if (!low) return null;
@@ -4297,11 +4348,16 @@ function cargoAdditionalLines(p: ProductProcurementProfile): string[] {
   // cargoNature is LLM-driven (dynamic per product); the caution dictionary fires
   // on whatever nature the LLM classified. No category-derived guessing here — when
   // the LLM gave nothing, the floor honestly defers to the freight forwarder.
-  const nature = (p.cargo.cargoNature ?? "").toLowerCase().trim();
-  const items: string[] = [
-    ...p.cargo.likelySensitiveCargoIssues,
-    ...(p.cargo.packagingNotes ? [p.cargo.packagingNotes] : []),
-  ];
+  const authority = cargoAllowedSignalsText(p);
+  const rawNature = (p.cargo.cargoNature ?? "").toLowerCase().trim();
+  const nature = cargoNatureIsAllowed(rawNature, authority) ? rawNature : "none";
+  const items: string[] = sanitizeCargoAdditionalLines(
+    [
+      ...p.cargo.likelySensitiveCargoIssues,
+      ...(p.cargo.packagingNotes ? [p.cargo.packagingNotes] : []),
+    ],
+    p,
+  );
   for (const [key, caution] of Object.entries(CARGO_NATURE_CAUTIONS)) {
     if (nature.includes(key)) items.push(caution);
   }
