@@ -10,6 +10,7 @@ import { translateQuestionsToCn } from '../src/core/cnTranslate';
 import { writeDocument, writeSeoProse, type DocWriterInput } from '../src/providers/documentWriter';
 import {
   buildProductProcurementProfile,
+  buildMainReportFromProfile,
   buildReadmeFromProfile,
   buildSupplierQuestionsFromProfile,
   translateSupplierQuestionsRuToCn,
@@ -186,6 +187,7 @@ async function docs(id: string, withWriters: boolean): Promise<void> {
       : await translateSupplierQuestionsRuToCn(q.ru).catch(() => []);
   }
   const files: Record<string, string> = {
+    '00_Главный_отчёт.txt': buildMainReportFromProfile(product, { creditsRemaining: 42 }, { sourceUrl }),
     '00_Инструкция.txt': buildReadmeFromProfile(product, { sourceUrl }),
     '01_Вопросы_поставщику.txt': formatSupplierQuestionsText(q.ru, cnList).text,
     '02_ТЗ_байеру.md': buildBuyerBriefFromProfile(product, { sourceUrl }),

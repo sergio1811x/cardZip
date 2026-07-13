@@ -2466,7 +2466,7 @@ function buildSkuProfile(
     ? dimsSummary
       ? `${count} ${pluralRu(count, "вариант", "варианта", "вариантов")} · ${dimsSummary}`
       : `${count} ${pluralRu(count, "вариант", "варианта", "вариантов")}`
-    : "SKU нужно уточнить";
+    : "не определён";
   const normalizedExamples = hasStructured
     ? uniq(
         structuredVariants
@@ -2984,8 +2984,20 @@ function assembleSupplierQuestions(
   // Reserve the universal import-critical slots so a verbose LLM list cannot cap
   // them out: cargo pack/carton, material, compliance, electrical profile,
   // battery status, exact kit contents and real photos.
+  // Reserve cargo by SUB-SLOT (packed weight / package dims / carton) — one each —
+  // instead of "first 3 cargo asks". Different sources emit several rephrasings of
+  // the same carton ask; taking one per sub-slot keeps the three reserved cargo
+  // questions DISTINCT (weight, dims, carton) with no duplicate carton rewordings.
+  // Patterns match the question wording, not any product/category term.
+  const cargoPacked = cargo.filter((q) => /вес[^.]*(упаковк|брутто)/i.test(q));
+  const cargoDims = cargo.filter((q) =>
+    /габарит[а-яё]*\s*(индивидуальн|упаковк)|размер[а-яё]*\s*(индивидуальн|упаковк)/i.test(q),
+  );
+  const cargoCarton = cargo.filter((q) => /короб|карт[оа]н|мастер-?короб/i.test(q));
   const reserved = [
-    ...cargo.slice(0, 3),
+    ...cargoPacked.slice(0, 1),
+    ...cargoDims.slice(0, 1),
+    ...cargoCarton.slice(0, 1),
     ...material.slice(0, 1),
     ...compliance.slice(0, 1),
     ...electrical.slice(0, 1),
@@ -3717,9 +3729,16 @@ export function buildMainReportFromProfile(
     "",
     "📌 <b>Товар</b>",
     `• Цена: ${escapeHtml(formatPriceForDisplay(p.pricing))}`,
-    `• Выбранный SKU: ${escapeHtml(p.sku.selectedSkuText || (p.sku.selectedSkuReliable ? "не определён" : `не определён. ${p.pricing.minPriceYuan && p.pricing.maxPriceYuan ? `Цена по SKU: ${String(p.pricing.minPriceYuan).replace(".", ",")}${p.pricing.maxPriceYuan !== p.pricing.minPriceYuan ? `–${String(p.pricing.maxPriceYuan).replace(".", ",")}` : ""} ¥.` : "Нужен выбор SKU."}`))}`,
+    // Never re-print a "Цена по SKU: N ¥" here — the price line above already
+    // carries it (and duplicated the single price as noise). When the variant is
+    // unconfirmed, say so plainly; the price line owns any range.
+    `• Выбранный SKU: ${escapeHtml(p.sku.selectedSkuText || "не определён")}`,
     `• MOQ: ${moq ? `${Math.round(moq)} шт` : "уточнить"}`,
-    `• SKU: ${escapeHtml(p.sku.skuSummary)}`,
+    // Hide the SKU-summary line when it only echoes "не определён" — the Выбранный
+    // SKU line above already said that; showing it twice reads as a duplicate.
+    p.sku.skuSummary && p.sku.skuSummary !== "не определён"
+      ? `• SKU: ${escapeHtml(p.sku.skuSummary)}`
+      : null,
     p.sku.models.length
       ? `• Модели: ${escapeHtml(p.sku.models.join(", "))}`
       : null,
