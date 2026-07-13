@@ -18,8 +18,12 @@
 export type GapSlotId =
   | "price"
   | "selected_variant"
+  | "kit_contents"
+  | "product_photos"
   | "material"
   | "dimensions"
+  | "electrical_specs"
+  | "battery_status"
   | "unit_weight_packed"
   | "package_dims"
   | "carton"
@@ -32,14 +36,18 @@ export type GapSlotId =
  * weight, packaging) come before the price ask; compliance is last. */
 const SLOT_PRIORITY: Record<GapSlotId, number> = {
   selected_variant: 0,
-  material: 1,
-  dimensions: 2,
-  unit_weight_packed: 3,
-  package_dims: 4,
-  carton: 5,
-  transport_constraint: 6,
-  price: 7,
-  compliance: 8,
+  kit_contents: 1,
+  product_photos: 2,
+  material: 3,
+  dimensions: 4,
+  electrical_specs: 5,
+  battery_status: 6,
+  unit_weight_packed: 7,
+  package_dims: 8,
+  carton: 9,
+  transport_constraint: 10,
+  price: 11,
+  compliance: 12,
 };
 
 export interface GapEngineContext {
@@ -58,6 +66,10 @@ export interface GapEngineContext {
 const SLOT_COVERAGE: Record<GapSlotId, RegExp> = {
   price: /цен[ауы9е]|стоимост|оптов/i,
   selected_variant: /как(ой|ому)\s+(именно\s+)?(вариант|sku|цвет|модел)|уточните\s+выбранн|какой\s+sku/i,
+  kit_contents:
+    /комплект|что\s+входит|входит\s+в\s+комплект|полная\s+комплектац|насадк|кабел|шнур|инструкц|кейс|футляр|чехол/i,
+  product_photos:
+    /реальн[а-яё]*\s+фото|фото\s+(?:выбранного\s+sku|комплект|упаковк|шильдик|маркировк|товара)/i,
   material:
     /состав(?!\s|$)|состав\s+(ткани|материал)|марк[аиуе]\s*(стали|металл|материал|пластик)|из\s+какого\s+материал|материал\s+(лезви|корпус|издели|товара|ручк|верх|подошв)/i,
   // The dimensions slot is only "covered" by a question asking for the full
@@ -65,6 +77,10 @@ const SLOT_COVERAGE: Record<GapSlotId, RegExp> = {
   // (e.g. only spine thickness) does not close it.
   dimensions:
     /размерн(ая|ую|ой)\s+сетк|(длин[ауы]).*(ширин|высот|диаметр)|(ширин[ауы]).*(длин|высот|диаметр)|габаритн[а-яё]+\s+размер/i,
+  electrical_specs:
+    /тип\s+вилки|стандарт\s+вилки|напряжени|частот[аы]|маркировк[аи]\s+питания|шильдик/i,
+  battery_status:
+    /аккумулятор|батаре|полностью\s+проводн|встроенн[а-яё]*\s+батар/i,
   unit_weight_packed: /вес.*(с\s+упаковк|с\s+индивидуальн|брутто|в\s+упаковк)/i,
   package_dims:
     /габарит[а-яё]*\s*(индивидуальн|упаковк)|размер[а-яё]*\s*(индивидуальн|упаковк)/i,
@@ -111,6 +127,12 @@ function detectComplianceHint(text: string): string | null {
   return null;
 }
 
+function isElectricalLikeText(text: string): boolean {
+  return /220\s*в|электр|напряжени|мощност|зарядк|\busb\b|адаптер|розетк|вилк|электромотор|нагрев/i.test(
+    text,
+  );
+}
+
 export type GapSlotState = "in_card" | "must_confirm" | "not_applicable";
 
 export interface GapSlotStatus {
@@ -130,6 +152,7 @@ export function evaluateGapSlots(ctx: GapEngineContext): GapSlotStatus[] {
   const text = ctx.productText.toLowerCase();
   const transport = detectTransportConstraint(text);
   const compliance = detectComplianceHint(text);
+  const electrical = isElectricalLikeText(text);
   return [
     {
       id: "price",
@@ -142,6 +165,16 @@ export function evaluateGapSlots(ctx: GapEngineContext): GapSlotStatus[] {
       state: ctx.selectedSkuReliable ? "in_card" : "must_confirm",
     },
     {
+      id: "kit_contents",
+      label: "точную комплектацию выбранного SKU: что входит в комплект",
+      state: ctx.selectedSkuReliable ? "not_applicable" : "must_confirm",
+    },
+    {
+      id: "product_photos",
+      label: "реальные фото выбранного SKU, полной комплектации и упаковки",
+      state: "must_confirm",
+    },
+    {
       id: "material",
       label: "точный материал и его марку/состав (не маркетинговое название)",
       state: "must_confirm",
@@ -150,6 +183,20 @@ export function evaluateGapSlots(ctx: GapEngineContext): GapSlotStatus[] {
       id: "dimensions",
       label: "точные габаритные размеры: длина, ширина, высота или диаметр",
       state: "must_confirm",
+    },
+    {
+      id: "electrical_specs",
+      label: electrical
+        ? "тип вилки, рабочее напряжение и частоту питания по выбранному SKU"
+        : "",
+      state: electrical ? "must_confirm" : "not_applicable",
+    },
+    {
+      id: "battery_status",
+      label: electrical
+        ? "есть ли внутри аккумулятор/батарея или устройство полностью проводное"
+        : "",
+      state: electrical ? "must_confirm" : "not_applicable",
     },
     {
       id: "unit_weight_packed",
@@ -224,6 +271,7 @@ export function applyUniversalGaps(
   ctx: GapEngineContext,
 ): string[] {
   const text = ctx.productText.toLowerCase();
+  const electrical = isElectricalLikeText(text);
   const covered = new Set<GapSlotId>();
   for (const q of existing) {
     const s = slotOf(q);
@@ -242,6 +290,15 @@ export function applyUniversalGaps(
     addIfUncovered("price", () => "Подтвердите актуальную цену выбранного SKU и цену при оптовом заказе.");
   if (!ctx.selectedSkuReliable)
     addIfUncovered("selected_variant", () => "Подтвердите, какой именно вариант/SKU соответствует этой цене и фото.");
+  if (!ctx.selectedSkuReliable)
+    addIfUncovered(
+      "kit_contents",
+      () => "Подтвердите точную комплектацию выбранного SKU: что входит в комплект, есть ли аксессуары, кабель, инструкция и упаковка.",
+    );
+  addIfUncovered(
+    "product_photos",
+    () => "Пришлите реальные фото выбранного SKU, полной комплектации и упаковки.",
+  );
   addIfUncovered(
     "material",
     () => "Подтвердите точный материал и его марку (например, марку стали/пластика или состав ткани — не маркетинговое название).",
@@ -250,6 +307,16 @@ export function applyUniversalGaps(
     "dimensions",
     () => "Уточните точные габаритные размеры товара: длина, ширина, высота или диаметр (в мм/см).",
   );
+  if (electrical)
+    addIfUncovered(
+      "electrical_specs",
+      () => "Подтвердите тип вилки, рабочее напряжение и частоту питания по выбранному SKU, а также пришлите фото шильдика/маркировки питания.",
+    );
+  if (electrical)
+    addIfUncovered(
+      "battery_status",
+      () => "Подтвердите, есть ли внутри аккумулятор/батарея или устройство полностью проводное без батареи.",
+    );
   // Packed/individual weight, individual-package dims and carton are NEVER in the
   // 1688 card (the card's weight is the bare product weight), yet they're required
   // for any cargo quote — so always ask them, regardless of what bare figures the

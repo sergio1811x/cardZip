@@ -1306,6 +1306,12 @@ function safeRu(v: unknown): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+function lockCoreObject(rawCoreObject: unknown, titleForReport: string): string {
+  const raw = safeRu(rawCoreObject || titleForReport);
+  const nounOnly = raw.split(/\s+(?:с|со|без)\s+/i)[0]?.trim() || raw;
+  const fallback = safeRu(titleForReport);
+  return cleanDisplayTitle(nounOnly || fallback || raw);
+}
 function num(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   const n = Number(
@@ -2946,6 +2952,21 @@ function assembleSupplierQuestions(
     );
   const isMaterial = (q: string) =>
     /материал|марк[аиуе]\s*(стали|металл|пластик)|состав\s+(ткани|материал)/i.test(q);
+  const isCompliance = (q: string) =>
+    /сертификат|деклараци|соответстви|\beac\b|\brohs\b|\bce\b/i.test(q);
+  const isElectrical = (q: string) =>
+    /тип\s+вилки|стандарт\s+вилки|напряжени|частот[аы]|шильдик|маркировк[аи]\s+питания/i.test(
+      q,
+    );
+  const isBattery = (q: string) => /аккумулятор|батаре|проводн/i.test(q);
+  const isKit = (q: string) =>
+    /комплект|что\s+входит|входит\s+в\s+комплект|насадк|кабел|шнур|инструкц|кейс|футляр|чехол/i.test(
+      q,
+    );
+  const isPhotos = (q: string) =>
+    /реальн[а-яё]*\s+фото|фото\s+(?:выбранного\s+sku|комплект|упаковк|шильдик|маркировк|товара)/i.test(
+      q,
+    );
   // A hard-gate lead already asks "which SKU / what's included" → drop the gap
   // engine's generic variant re-ask (its own internal string) to avoid a duplicate.
   const body = merged.filter(
@@ -2955,13 +2976,37 @@ function assembleSupplierQuestions(
   );
   const cargo = body.filter(isCargo);
   const material = body.filter((q) => isMaterial(q) && !isCargo(q));
-  // Reserve up to 3 cargo essentials + 1 material; drop any EXTRA cargo/material
-  // from the tail so they can't produce duplicate material/packaging questions.
-  const reserved = [...cargo.slice(0, 3), ...material.slice(0, 1)];
-  const cargoMaterialKeys = new Set([...cargo, ...material].map(questionKey));
-  const rest = body.filter((q) => !cargoMaterialKeys.has(questionKey(q)));
+  const compliance = body.filter((q) => isCompliance(q) && !isCargo(q));
+  const electrical = body.filter((q) => isElectrical(q) && !isCargo(q));
+  const battery = body.filter((q) => isBattery(q) && !isCargo(q));
+  const kit = body.filter((q) => isKit(q) && !isCargo(q));
+  const photos = body.filter((q) => isPhotos(q) && !isCargo(q));
+  // Reserve the universal import-critical slots so a verbose LLM list cannot cap
+  // them out: cargo pack/carton, material, compliance, electrical profile,
+  // battery status, exact kit contents and real photos.
+  const reserved = [
+    ...cargo.slice(0, 3),
+    ...material.slice(0, 1),
+    ...compliance.slice(0, 1),
+    ...electrical.slice(0, 1),
+    ...battery.slice(0, 1),
+    ...kit.slice(0, 1),
+    ...photos.slice(0, 1),
+  ];
+  const reservedKeys = new Set(
+    [
+      ...cargo,
+      ...material,
+      ...compliance,
+      ...electrical,
+      ...battery,
+      ...kit,
+      ...photos,
+    ].map(questionKey),
+  );
+  const rest = body.filter((q) => !reservedKeys.has(questionKey(q)));
   // Order: hard gate → LLM's top product-specific questions → reserved
-  // cargo/material at the end. Guarantees the basics survive the cap without
+  // slots at the end. Guarantees the basics survive the cap without
   // pushing the LLM's own priorities (e.g. a knife's HRC) below them.
   const keptRest = rest.slice(0, Math.max(0, cap - lead.length - reserved.length));
   const composed = [...lead, ...keptRest, ...reserved];
@@ -2975,6 +3020,44 @@ function assembleSupplierQuestions(
     if (out.length >= cap) break;
   }
   return out;
+}
+
+const SUPPLIER_COVERAGE_RULES: Array<[string, RegExp]> = [
+  ["selected_variant", /вариант|sku|что\s+входит|комплект/i],
+  ["price", /цен[ауы9е]|стоимост|оптов/i],
+  ["material", /материал|состав|марк[аиуе]\s*(стали|металл|пластик)/i],
+  ["unit_weight_packed", /вес.*(упаковк|брутто)/i],
+  ["package_dims", /габарит[а-яё]*\s*(индивидуальн|упаковк)|размер[а-яё]*\s*(индивидуальн|упаковк)/i],
+  ["carton", /короб|карт[оа]н|мастер-?короб/i],
+  ["compliance", /сертификат|деклараци|соответстви|\beac\b|\brohs\b|\bce\b/i],
+  ["electrical", /тип\s+вилки|стандарт\s+вилки|напряжени|частот[аы]|шильдик|маркировк[аи]\s+питания/i],
+  ["battery", /аккумулятор|батаре|проводн/i],
+  ["kit", /комплект|что\s+входит|насадк|кабел|шнур|инструкц|кейс|футляр|чехол/i],
+  ["photos", /реальн[а-яё]*\s+фото|фото\s+(?:выбранного\s+sku|комплект|упаковк|шильдик|маркировк|товара)/i],
+];
+
+function supplierCoverageDimensions(questions: string[]): Set<string> {
+  const joined = questions.join("\n").toLowerCase();
+  const out = new Set<string>();
+  for (const [key, re] of SUPPLIER_COVERAGE_RULES) {
+    if (re.test(joined)) out.add(key);
+  }
+  return out;
+}
+
+function shouldPreferSavedSupplierQuestions(
+  saved: string[],
+  assembled: string[],
+  lead: string[] = [],
+): boolean {
+  if (!saved.length) return false;
+  const savedDims = supplierCoverageDimensions(saved);
+  const assembledDims = supplierCoverageDimensions(assembled);
+  const leadDims = supplierCoverageDimensions(lead);
+  for (const dim of leadDims) {
+    if (!savedDims.has(dim)) return false;
+  }
+  return savedDims.size >= assembledDims.size;
 }
 
 export function buildProductProcurementProfile(
@@ -2998,7 +3081,10 @@ export function buildProductProcurementProfile(
   const draftKind = normalizeProductKind(
     record(aiDraft.identity).productKind ?? aiDraft.productKind,
   );
-  const kind = draftKind ?? classifier.productKind;
+  const kind =
+    draftKind && (draftKind !== "generic_product" || classifier.productKind === "generic_product")
+      ? draftKind
+      : classifier.productKind;
   const rules = productSpecificRules(kind, product, intelligence);
   const aiContent = aiDomainContent(product);
   const sourceUrl = opts.sourceUrl ?? product?.sourceUrl ?? product?.inputUrl;
@@ -3057,7 +3143,7 @@ export function buildProductProcurementProfile(
       titleForReport: safeTitle(titleForReport),
       titleForSeo,
       shortTitle: safeRu(identity.shortNameRu || titleForReport),
-      coreObject: safeRu(identity.coreObject || titleForReport),
+      coreObject: lockCoreObject(identity.coreObject || titleForReport, titleForReport),
       formFactor: safeRu(draftIdentity.formFactor || identity.formFactor || ""),
       audience: safeRu(draftIdentity.audience || identity.audience || ""),
       gender: safeRu(draftIdentity.gender || identity.gender || ""),
@@ -3845,6 +3931,7 @@ export function buildSupplierQuestionsFromProfile(
   opts: { sourceUrl?: string } = {},
 ): SupplierQuestionsProfileResult {
   const profile = ensureProductProcurementProfile(product, opts);
+  const assembledRu = uniq(profile.procurement.mustAskSupplier, 10).slice(0, 10);
   // Prefer the EXACT RU list the CN translation ran on (persisted upstream), so the
   // rendered RU and CN are always a matched pair of equal length. Re-deriving here
   // can differ by a question and silently drop the whole CN version.
@@ -3854,7 +3941,14 @@ export function buildSupplierQuestionsFromProfile(
     (product as any).supplierQuestionsRu.length
       ? ((product as any).supplierQuestionsRu as string[]).slice(0, 10)
       : null;
-  const ru = pairedRu ?? uniq(profile.procurement.mustAskSupplier, 10).slice(0, 10);
+  const useSaved =
+    !!pairedRu &&
+    shouldPreferSavedSupplierQuestions(
+      pairedRu,
+      assembledRu,
+      profile.procurement.leadQuestions ?? [],
+    );
+  const ru = useSaved && pairedRu ? pairedRu : assembledRu;
   const savedCn =
     profile.supplierQuestionsCnValid &&
     Array.isArray(profile.supplierQuestionsCn)
@@ -3864,7 +3958,7 @@ export function buildSupplierQuestionsFromProfile(
   // line translates faithfully (no empties); otherwise emit RU-only rather than
   // wrong-product/meta CN.
   let cn: string[];
-  if (savedCn.length === ru.length) {
+  if (useSaved && savedCn.length === ru.length) {
     cn = savedCn;
   } else {
     const det = ru.map(translateQuestionToCn);
@@ -4096,12 +4190,6 @@ export function buildCargoBriefFromProfile(
   product: any,
   opts: { sourceUrl?: string } = {},
 ): string {
-  // Prefer the LLM-polished document when the writer produced a validated one
-  // (stashed on the product during the pipeline). Falls through to the
-  // deterministic template otherwise.
-  const polished = product?.polishedDocs?.cargo;
-  if (typeof polished === "string" && polished.trim().length > 200)
-    return sanitizeUserFacingText(polished.trim());
   const p = ensureProductProcurementProfile(product, opts);
   const weight = p.logistics?.weightKg ?? extractWeightKg(product);
   const dims = p.logistics?.dimensionsCm ?? null;
@@ -4115,14 +4203,17 @@ export function buildCargoBriefFromProfile(
     "# ТЗ карго",
     "",
     "## Товар",
-    `Название: ${p.identity.titleForReport}`,
+    `Название: ${safeTitle(p.identity.coreObject, p.identity.titleForReport)}`,
     `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? "—"}`,
     `SKU: ${p.sku.selectedSkuText ?? "не определён"}`,
     `Цена: ${formatPriceForDisplay(p.pricing)}`,
     "",
     "## Что нужно запросить для доставки",
     // Product-specific requests (LLM) first, then the base logistics questions.
-    ...list(uniq([...(p.cargo.whatToRequest ?? []), ...p.cargo.mustAsk], 18), 18),
+    ...list(
+      dedupCargoRequestLines([...(p.cargo.whatToRequest ?? []), ...p.cargo.mustAsk]),
+      18,
+    ),
     "",
     ...(volLine ? ["## Объёмный вес (предварительно)", volLine, ""] : []),
     "## Дополнительно по этому товару",
@@ -4157,6 +4248,45 @@ const CARGO_NATURE_CAUTIONS: Record<string, string> = {
   powered:
     "электротовар — уточните у карго требования к перевозке техники, маркировку и совместимость с РФ/ЕАЭС по питанию",
 };
+
+function cargoRequestSlot(line: string): string | null {
+  const low = clean(line).toLowerCase();
+  if (!low) return null;
+  if (/аккумулятор|батаре|полностью\s+проводн/i.test(low)) return "battery";
+  if (/тип\s+вилки|стандарт\s+вилки|напряжени|частот[аы]|шильдик|маркировк[аи]\s+питания/i.test(low))
+    return "electrical";
+  if (/сертификат|деклараци|соответстви|\beac\b|\brohs\b|\bce\b/i.test(low))
+    return "compliance";
+  if (/вес.*(упаковк|брутто)/i.test(low)) return "unit_weight_packed";
+  if (/габарит[а-яё]*\s*(индивидуальн|упаковк)|размер[а-яё]*\s*(индивидуальн|упаковк)/i.test(low))
+    return "package_dims";
+  if (/короб|карт[оа]н|мастер-?короб/i.test(low)) return "carton";
+  if (/фото\s+(?:индивидуальн|транспортн|упаковк|короб|маркировк|шильдик)/i.test(low))
+    return "packaging_photos";
+  if (/защит|деформац|поврежден|штабел|чехол|кейс|футляр/i.test(low)) return "protection";
+  if (/ограничени[яй]\s+по\s+перевозк|маршрут|таможн/i.test(low)) return "transport";
+  if (/материал\s+товара|состав\s+груза/i.test(low)) return "material";
+  return null;
+}
+
+function dedupCargoRequestLines(lines: string[]): string[] {
+  const seenSlots = new Set<string>();
+  const seenLines = new Set<string>();
+  const out: string[] = [];
+  for (const raw of lines) {
+    const line = clean(raw);
+    if (!line) continue;
+    const key = questionKey(line);
+    if (!key || seenLines.has(key)) continue;
+    const slot = cargoRequestSlot(line);
+    if (slot && seenSlots.has(slot)) continue;
+    seenLines.add(key);
+    if (slot) seenSlots.add(slot);
+    out.push(line);
+    if (out.length >= 18) break;
+  }
+  return out;
+}
 
 /**
  * Derive a cargo nature from the product kind when the LLM did not supply one.
@@ -4696,9 +4826,45 @@ export function buildSeoDraftFromProfile(
     return p.sku.selectedSkuReliable ? safe : stripUnconfirmedPackaging(safe) || safe;
   };
   const fallbackTitle = guardSeoTitle(
-    structuredTitle || safeTitle(p.identity.titleForSeo, p.identity.titleForReport),
+    structuredTitle || safeTitle(p.identity.coreObject, p.identity.titleForSeo, p.identity.titleForReport),
   );
-  let title = (prose?.title ? guardSeoTitle(prose.title) : "") || fallbackTitle;
+  const preferredTitle = prose?.title ? guardSeoTitle(prose.title) : "";
+  const preferredTitleWords = clean(preferredTitle)
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .split(/[^а-яёa-z0-9]+/i)
+    .filter((word) => word.length >= 4);
+  const titleAnchorWords = uniq(
+    [
+      ...clean(p.identity.coreObject)
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .split(/[^а-яёa-z0-9]+/i),
+      ...clean(p.identity.shortTitle)
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .split(/[^а-яёa-z0-9]+/i),
+      ...clean(p.identity.titleForReport)
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .split(/[^а-яёa-z0-9]+/i),
+      ...clean(fallbackTitle)
+        .toLowerCase()
+        .replace(/ё/g, "е")
+        .split(/[^а-яёa-z0-9]+/i),
+    ].filter((word) => word.length >= 4),
+    24,
+  );
+  const preferredTitleAllowed =
+    !!preferredTitle &&
+    !/(?:^|\s)(?:с|со|без|и)\s*[—,:]/i.test(preferredTitle) &&
+    !/[—,:-]\s*$/.test(preferredTitle) &&
+    !SEARCH_MEASUREMENT_RE.test(preferredTitle) &&
+    !hasUnsupportedSeoContext(preferredTitle, p) &&
+    !hasForeignPackagingClaim(preferredTitle, p) &&
+    !assertsClaimedFeatureWord(preferredTitle, claimedFeatureWords(p)) &&
+    preferredTitleWords.some((word) => titleAnchorWords.includes(word));
+  let title = preferredTitleAllowed ? preferredTitle : fallbackTitle;
   const useCases = p.identity.useCases.length
     ? p.identity.useCases.join(", ")
     : "повседневного использования";

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile, buildSupplierQuestionsFromProfile, dedupBulletsByOverlap } from './procurementProfile';
+import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile, buildSupplierQuestionsFromProfile, buildCargoBriefFromProfile, dedupBulletsByOverlap } from './procurementProfile';
 
 function baseProduct(overrides: Record<string, any> = {}) {
   return {
@@ -243,6 +243,29 @@ describe('SEO draft quality — writer prose is the single source', () => {
     expect(title).toMatch(/сантоку/);
   });
 
+  it('fails closed to the deterministic title when the writer title is structurally broken', () => {
+    const product = baseProduct({
+      titleRu: 'Фен для волос',
+      productKind: 'small_appliance',
+      polishedDocs: {
+        seoProse: {
+          title: 'Фен без — сушка волос после мытья, укладка волос',
+          description: 'Фен для сушки волос дома.',
+          bullets: [
+            'Подходит для сушки волос после мытья',
+            'Удобен для домашнего использования',
+            'Компактный формат удобно хранить на полке',
+          ],
+          keywords: ['фен для волос', 'фен домашний'],
+          characteristics: [],
+        },
+      },
+    });
+    const title = section(buildSeoDraftFromProfile(product), '## Название').toLowerCase();
+    expect(title).toMatch(/фен/);
+    expect(title).not.toMatch(/без\s+—|сушка волос после/);
+  });
+
   it('drops unconfirmed search claims from title, description and keywords', () => {
     const product = baseProduct({
       titleRu: 'Фен для волос',
@@ -373,6 +396,62 @@ describe('criticalConfirmations — one domain spine fanned into every surface',
     expect(JSON.stringify(questions)).toMatch(/шнур|аккумулятор|CE, RoHS, EAC/i);
     const buyer = buildBuyerBriefFromProfile(dryer());
     expect(buyer).toMatch(/CE, RoHS, EAC|аккумулятор|шнур/i);
+  });
+
+  it('prefers assembled supplier questions over a weaker persisted RU/CN pair', () => {
+    const product = baseProduct({
+      titleRu: 'Фен для волос',
+      productKind: 'small_appliance',
+      supplierQuestionsRu: [
+        'Подтвердите цену выбранного SKU.',
+        'Пришлите реальные фото выбранного SKU.',
+        'Укажите вес с упаковкой.',
+      ],
+      supplierQuestionsCn: ['请确认所选SKU价格。', '请提供所选SKU实拍图。', '请提供含包装重量。'],
+      supplierQuestionsCnValid: true,
+      productContext: {
+        procurementProfileDraft: {
+          domainRules: {
+            criticalConfirmations: [
+              'Подтвердите сертификаты CE, RoHS, EAC.',
+              'Подтвердите отсутствие аккумулятора в устройстве.',
+            ],
+          },
+        },
+      },
+    });
+    const res = buildSupplierQuestionsFromProfile(product);
+    const joined = res.ru.join(' ').toLowerCase();
+    expect(joined).toMatch(/аккумулятор/);
+    expect(joined).toMatch(/сертификат|ce, rohs, eac/);
+  });
+});
+
+describe('cargo brief grounding', () => {
+  it('renders the deterministic cargo profile instead of reusing a hallucinated polished cargo doc', () => {
+    const cargo = buildCargoBriefFromProfile(
+      baseProduct({
+        titleRu: 'Фен для волос',
+        productKind: 'small_appliance',
+        polishedDocs: {
+          cargo: '# ТЗ карго\n\nКожаный кейс, 1450 Вт, подарочная комплектация.',
+        },
+        productContext: {
+          procurementProfileDraft: {
+            domainRules: {
+              criticalConfirmations: [
+                'Подтвердите сертификаты CE, RoHS, EAC.',
+                'Подтвердите отсутствие аккумулятора в устройстве.',
+                'Укажите тип вилки и напряжение питания.',
+              ],
+            },
+          },
+        },
+      }),
+    ).toLowerCase();
+    expect(cargo).toMatch(/# тз карго/);
+    expect(cargo).toMatch(/что нужно запросить для доставки/);
+    expect(cargo).not.toMatch(/кожан|1450|подарочн/);
   });
 });
 
