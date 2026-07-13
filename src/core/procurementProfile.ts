@@ -5157,7 +5157,11 @@ export function buildSeoDraftFromProfile(
         : objectForBullet,
       llmCoversMaterial ? undefined : materialBullet,
       p.sku.colors.length ? `Цвета на выбор: ${p.sku.colors.join(", ")}` : undefined,
-      p.sku.normalizedExamples.length > 1 || p.sku.models.length > 1
+      // "Несколько вариантов — выберите" is filler; only offer it as a variant hint
+      // when colors DON'T already cover the variety (else it duplicates the colors
+      // bullet with a weaker, salesy line).
+      p.sku.colors.length === 0 &&
+      (p.sku.normalizedExamples.length > 1 || p.sku.models.length > 1)
         ? "Несколько вариантов в карточке — выберите подходящий"
         : undefined,
     ].filter((b): b is string => Boolean(b && String(b).trim())),
