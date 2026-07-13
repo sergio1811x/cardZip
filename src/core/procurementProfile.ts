@@ -2656,15 +2656,17 @@ export function makeSelectedSkuDecision(
       reason: "В карточке один SKU.",
     };
   }
+  // Only a USER/URL-chosen SKU counts as explicit. normalized.pricing.selectedSkuName
+  // is an AUTO-picked min-price variant (the importer's display default) — trusting
+  // it as an explicit choice marked the cheapest variant reliable, which on 1688 is
+  // often the empty case/accessory (here: 28¥ "кожаный бокс БЕЗ фена" vs ~64¥ dryer).
+  // Without a real choice the SKU stays unconfirmed and the price shows as a range.
   const explicit =
     product?.selectedSku ??
     product?.selectedSkuText ??
-    product?.selectedSkuName ??
-    product?.normalized1688?.pricing?.selectedSkuName;
+    product?.selectedSkuName;
   const explicitPrice = pos(
-    product?.selectedSkuPriceYuan ??
-      product?.selectedSkuPrice ??
-      product?.normalized1688?.pricing?.selectedSkuPriceYuan,
+    product?.selectedSkuPriceYuan ?? product?.selectedSkuPrice,
   );
   if (explicit)
     return {
