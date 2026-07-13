@@ -453,6 +453,44 @@ describe('cargo brief grounding', () => {
     expect(cargo).toMatch(/что нужно запросить для доставки/);
     expect(cargo).not.toMatch(/кожан|1450|подарочн/);
   });
+
+  it('does not assert lithium dangerous-goods when battery presence is only an open question', () => {
+    const cargo = buildCargoBriefFromProfile(
+      baseProduct({
+        titleRu: 'Высокоскоростной фен',
+        productKind: 'small_appliance',
+        productContext: {
+          procurementProfileDraft: {
+            domainRules: {
+              // Battery is UNCONFIRMED — the product only asks whether it exists.
+              criticalConfirmations: [
+                'Есть ли в товаре аккумулятор, или это полностью сетевой фен без батареи?',
+                'Укажите тип вилки и напряжение питания.',
+              ],
+              // The LLM cargo pass hallucinated a full lithium dangerous-goods block.
+              cargo: {
+                cargoNature: 'battery',
+                whatToRequest: [
+                  'Точный тип и ёмкость аккумулятора (мАч)',
+                  'Наличие и номер сертификата UN38.3',
+                ],
+                sensitiveIssues: [
+                  'Литий-ионный аккумулятор в комплекте требует UN38.3 и MSDS',
+                  'Ограничение на перевозку в пассажирском салоне — только грузовой рейс',
+                  'Требуется маркировка «Lithium Battery» и изоляция контактов',
+                ],
+              },
+            },
+          },
+        },
+      }),
+    ).toLowerCase();
+    expect(cargo).toMatch(/# тз карго/);
+    // No dangerous-goods claim survives without a confirmed battery…
+    expect(cargo).not.toMatch(/un\s?38\.?3|lithium|литий-ион|msds|пассажирск/);
+    // …but the honest open question about a possible battery is kept.
+    expect(cargo).toMatch(/аккумулятор/);
+  });
 });
 
 describe('SEO bullets drop empty audience filler', () => {

@@ -407,6 +407,28 @@ function sanitizeSeoKeywords(
   return out;
 }
 
+// Dangerous-goods phrasing that asserts a transport hazard (lithium/UN38.3, mAh
+// capacity, passenger-cabin ban, aerosol pressure…) as a present fact. ё→е
+// normalized. The deterministic cargo draft already strips these when the hazard
+// isn't confirmed, so any such line the generative pass ADDS is ungrounded.
+const CARGO_HAZARD_ASSERTION_RE =
+  /un\s?38\.?3|msds|lithium|литий-?ион|литий-?полимер|\d\s*(?:мач|mah)|пассажирск[а-я]*\s+(?:салон|рейс)|опасн[а-я]*\s+груз|dangerous\s+goods|съемн[а-я]*\s+литий|коротк[а-я]*\s+замыкани|маркировк[а-я]*\s+["«]?lithium/i;
+
+// Drop hazard-assertion lines the writer invented — keep a line only if the draft
+// itself asserted that exact hazard phrase. Model-independent: whichever LLM
+// re-hallucinated a lithium block, it can't survive a clean draft.
+export function stripUngroundedCargoHazards(md: string, draftMd: string): string {
+  const draft = draftMd.toLowerCase().replace(/ё/g, "е");
+  return md
+    .split("\n")
+    .filter((line) => {
+      const low = line.toLowerCase().replace(/ё/g, "е");
+      const m = low.match(CARGO_HAZARD_ASSERTION_RE);
+      return !m || draft.includes(m[0]);
+    })
+    .join("\n");
+}
+
 // Validate the writer's markdown against the safety floor. Any failure → null so
 // the caller keeps the deterministic template.
 export function validateWrittenDoc(
@@ -1049,7 +1071,13 @@ export async function writeDocument(
   const models = getWriterModels(input.docType);
   for (const model of models) {
     try {
-      const md = await callModel(model, prompt, apiKey);
+      const raw = await callModel(model, prompt, apiKey);
+      // Strip ungrounded transport-hazard assertions the writer may have invented
+      // (the clean deterministic draft is the grounding truth).
+      const md =
+        raw && input.docType === "cargo"
+          ? stripUngroundedCargoHazards(raw, input.draftMd ?? "")
+          : raw;
       const concepts =
         input.docType === "cargo" ? (input.criticalConfirmations ?? []) : [];
       if (md && validateWrittenDoc(md, input.docType, forbidden, concepts)) {
@@ -1057,7 +1085,11 @@ export async function writeDocument(
         // adopt the audited version if it still passes the safety validator; on any
         // failure keep the original (audit can only improve, never degrade).
         if (shouldVerifyDocs()) {
-          const grounded = await verifyDocGrounding(md, input, apiKey);
+          const groundedRaw = await verifyDocGrounding(md, input, apiKey);
+          const grounded =
+            groundedRaw && input.docType === "cargo"
+              ? stripUngroundedCargoHazards(groundedRaw, input.draftMd ?? "")
+              : groundedRaw;
           if (
             grounded &&
             grounded !== md &&

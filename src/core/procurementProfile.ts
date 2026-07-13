@@ -3317,21 +3317,11 @@ export function buildProductProcurementProfile(
         ],
         16,
       ),
-      likelySensitiveCargoIssues: uniq(
-        [
-          ...aiContent.cargoSensitiveIssues,
-          ...(kind === "mini_washer" ||
-          kind === "small_appliance" ||
-          kind === "usb_device"
-            ? [
-                "питание/вилка/напряжение",
-                "аккумулятор или батарейка — уточнить",
-                "сертификаты для техники",
-              ]
-            : []),
-        ],
-        6,
-      ),
+      // No category-hardcoded seeds here (the old small_appliance branch injected
+      // "аккумулятор или батарейка", which seeded a false lithium block on any
+      // corded device). Electrical/compliance coverage comes from the dynamic
+      // criticalConfirmations spine in cargo.mustAsk instead — товар-agnostic.
+      likelySensitiveCargoIssues: uniq([...aiContent.cargoSensitiveIssues], 6),
       whatToRequest: aiContent.cargoWhatToRequest,
       cargoNature: aiContent.cargoNature || undefined,
       packagingNotes: aiContent.cargoPackagingNotes || undefined,
@@ -4155,15 +4145,20 @@ export function buildBuyerBriefFromProfile(
     `Заказы: ${p.supplier.orders || "—"}`,
     "",
     "## 3. Что подтвердить у поставщика (ключевое)",
+    // Full lead/critical questions first; bare gap-slot labels (mustConfirm) are
+    // normalized to proper lines and overlap-deduped so they can't reappear as
+    // lowercase fragments next to the fuller questions they duplicate.
     ...list(
-      [
-        ...(p.procurement.leadQuestions ?? []),
-        // The cross-cutting critical block (electrical/compliance for a powered
-        // device, …) so the buyer brief carries the same domain spine as the other
-        // docs instead of only the generic gap slots.
-        ...(p.procurement.criticalConfirmations ?? []),
-        ...mustConfirm,
-      ],
+      dedupBulletsByOverlap(
+        normalizeFragmentLines([
+          ...(p.procurement.leadQuestions ?? []),
+          // The cross-cutting critical block (electrical/compliance for a powered
+          // device, …) so the buyer brief carries the same domain spine as the
+          // other docs instead of only the generic gap slots.
+          ...(p.procurement.criticalConfirmations ?? []),
+          ...mustConfirm,
+        ]),
+      ),
       12,
     ),
     "Полные формулировки вопросов — в файле 01_Вопросы_поставщику.txt.",
@@ -4210,8 +4205,18 @@ export function buildCargoBriefFromProfile(
     "",
     "## Что нужно запросить для доставки",
     // Product-specific requests (LLM) first, then the base logistics questions.
+    // Unconfirmed hazard assertions are stripped here too so an invented UN38.3 /
+    // mAh request can't lead the list for a товар that has no confirmed battery.
     ...list(
-      dedupCargoRequestLines([...(p.cargo.whatToRequest ?? []), ...p.cargo.mustAsk]),
+      // Strip hallucinated hazard assertions BEFORE dedup so the honest open
+      // question ("есть ли аккумулятор?") isn't crowded out of its slot by an
+      // invented "ёмкость аккумулятора (мАч)" that then gets stripped anyway.
+      dedupCargoRequestLines(
+        stripUnconfirmedHazardAssertions(
+          [...(p.cargo.whatToRequest ?? []), ...p.cargo.mustAsk],
+          p,
+        ),
+      ),
       18,
     ),
     "",
@@ -4267,11 +4272,77 @@ function cargoAllowedSignalsText(p: ProductProcurementProfile): string {
     .replace(/ё/g, "е");
 }
 
+// FACTS the listing actually asserts — the ONLY basis for deciding whether a
+// cargo HAZARD class is really present. Deliberately EXCLUDES questions and
+// unconfirmed items (criticalConfirmations / mustAsk / unconfirmedFeatures): a
+// hazard word that appears only inside «есть ли … аккумулятор?» means the hazard
+// is UNCONFIRMED, not present — it must never license an asserted dangerous-goods
+// requirement. Category-agnostic: no product list, only the honesty distinction.
+function cargoConfirmedSignalsText(p: ProductProcurementProfile): string {
+  return [
+    p.identity.coreObject,
+    p.identity.shortTitle,
+    p.identity.titleForReport,
+    ...p.identity.useCases,
+    ...p.identity.materials,
+    ...p.identity.visibleFeatures,
+    ...p.identity.claimedFeatures,
+    p.sku.selectedSkuReliable ? (p.sku.selectedSkuText ?? "") : "",
+  ]
+    .join(" ")
+    .toLowerCase()
+    .replace(/ё/g, "е");
+}
+
+// Cargo hazard classes and the DANGEROUS-GOODS phrasing that asserts each as a
+// present fact (UN38.3, mAh capacity, "Lithium Battery" marking, passenger-cabin
+// ban, aerosol/pressure, liquid leakage…). Such an assertion is allowed only when
+// `confirm` matches the product's CONFIRMED signals; otherwise it is a
+// hallucination (the honest open question stays in "что запросить"). Keyed on the
+// hazard, not on any product/category — a new hazard is one row, no товар-хардкод.
+// All patterns are ё→е normalized to match the normalized signal text.
+const CARGO_HAZARD_ASSERTIONS: Array<{ confirm: RegExp; assertion: RegExp }> = [
+  {
+    confirm: /аккумулятор|батаре|литий|беспроводн|перезаряжа|\bmah\b|\bмач\b/i,
+    assertion:
+      /un\s?38\.?3|msds|lithium|литий-?ион|литий-?полимер|\d\s*(?:мач|mah)|емкост[ьи]?\s+(?:аккумулятор|батар)|пассажирск[а-я]*\s+(?:салон|рейс)|опасн[а-я]*\s+груз|dangerous\s+goods|съемн[а-я]*\s+литий|коротк[а-я]*\s+замыкани|маркировк[а-я]*\s+["«]?lithium/i,
+  },
+  {
+    confirm: /жидк|масл|гел[ья]|лосьон|крем|шампун|напит|спирт/i,
+    assertion: /пролив|утечк[аи]\s+жидкост|герметичн[а-я]*\s+тар/i,
+  },
+  {
+    confirm: /аэрозол|спрей|баллон|газ\b/i,
+    assertion: /под\s+давлени|аэрозол|огнеопасн/i,
+  },
+];
+
+// Drop lines that assert a cargo hazard the product doesn't confirm. Model- and
+// category-independent: whichever LLM invented the lithium/aerosol/liquid claim,
+// it can't survive unless the confirmed signals actually carry that hazard.
+function stripUnconfirmedHazardAssertions(
+  lines: string[],
+  p: ProductProcurementProfile,
+): string[] {
+  const confirmed = cargoConfirmedSignalsText(p);
+  return lines.filter((line) => {
+    const low = clean(line).toLowerCase().replace(/ё/g, "е");
+    if (!low) return true;
+    return !CARGO_HAZARD_ASSERTIONS.some(
+      (h) => h.assertion.test(low) && !h.confirm.test(confirmed),
+    );
+  });
+}
+
 function cargoNatureIsAllowed(nature: string, authority: string): boolean {
   const low = nature.toLowerCase();
   if (!low || low === "none") return true;
   const rules: Array<[string, RegExp]> = [
-    ["battery", /аккумулятор|батаре|проводн|питани|вилк|напряжени|частот/i],
+    // Battery is authorized ONLY by genuine battery vocabulary — NOT by
+    // mains-power words (питание/вилка/напряжение/частота), which every corded
+    // appliance has. Conflating "powered" with "battery" is what put a lithium
+    // dangerous-goods block on a corded hair dryer.
+    ["battery", /аккумулятор|батаре|литий|беспроводн|перезаряжа|\bmah\b|\bмач\b/i],
     ["fragile", /хрупк|стекл|керамик|диспле|экран|зеркал/i],
     ["liquid", /жидк|масл|гел|лосьон|крем|шампун/i],
     ["aerosol", /аэрозол|спрей|баллон/i],
@@ -4348,14 +4419,20 @@ function cargoAdditionalLines(p: ProductProcurementProfile): string[] {
   // cargoNature is LLM-driven (dynamic per product); the caution dictionary fires
   // on whatever nature the LLM classified. No category-derived guessing here — when
   // the LLM gave nothing, the floor honestly defers to the freight forwarder.
-  const authority = cargoAllowedSignalsText(p);
   const rawNature = (p.cargo.cargoNature ?? "").toLowerCase().trim();
-  const nature = cargoNatureIsAllowed(rawNature, authority) ? rawNature : "none";
-  const items: string[] = sanitizeCargoAdditionalLines(
-    [
-      ...p.cargo.likelySensitiveCargoIssues,
-      ...(p.cargo.packagingNotes ? [p.cargo.packagingNotes] : []),
-    ],
+  // Hazard natures are gated against CONFIRMED facts only, so a battery/liquid/…
+  // class asserted from a mere open question can't fire its dangerous-goods caution.
+  const nature = cargoNatureIsAllowed(rawNature, cargoConfirmedSignalsText(p))
+    ? rawNature
+    : "none";
+  const items: string[] = stripUnconfirmedHazardAssertions(
+    sanitizeCargoAdditionalLines(
+      [
+        ...p.cargo.likelySensitiveCargoIssues,
+        ...(p.cargo.packagingNotes ? [p.cargo.packagingNotes] : []),
+      ],
+      p,
+    ),
     p,
   );
   for (const [key, caution] of Object.entries(CARGO_NATURE_CAUTIONS)) {
