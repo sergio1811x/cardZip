@@ -3172,7 +3172,11 @@ export function buildProductProcurementProfile(
           [...array<string>(draftIdentity.materials).map(safeRu), ...materials],
           6,
         ),
-        2,
+        // Up to 3: a molded housing legitimately lists PC+ABS+PA. Capping at 2
+        // silently dropped the 3rd material, so the report said "PC, ABS" while SEO
+        // (built from the full canonicalizer text) said "PC, ABS, PA" — the docs
+        // contradicted each other. 3 keeps them consistent without inviting noise.
+        3,
       ),
       visibleFeatures: uniq(
         [
