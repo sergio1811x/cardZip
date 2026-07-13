@@ -4143,8 +4143,16 @@ export function buildBuyerBriefFromProfile(
   // supplier-questions list — the buyer brief used to re-dump the same questions
   // as 01_Вопросы_поставщику.txt. Full wording stays in that file; here we show a
   // compact gap checklist so the two documents don't duplicate each other.
+  // When a hard-gate lead question already asks "which SKU at what price", the
+  // price/variant gap slots only re-add their SHORT labels as bare fragments that
+  // duplicate that lead question — drop them here (category-agnostic, by slot id).
+  const leadCoversSkuPrice = (p.procurement.leadQuestions ?? []).length > 0;
   const mustConfirm = evaluateGapSlots(gapContextFromProfile(p, product))
     .filter((s) => s.state === "must_confirm" && s.label)
+    .filter(
+      (s) =>
+        !(leadCoversSkuPrice && (s.id === "price" || s.id === "selected_variant")),
+    )
     .map((s) => s.label);
   return [
     "# ТЗ байеру",
@@ -4154,7 +4162,11 @@ export function buildBuyerBriefFromProfile(
     `Ссылка: ${opts.sourceUrl ?? product?.sourceUrl ?? "—"}`,
     `Цена: ${formatPriceForDisplay(p.pricing)}`,
     `SKU: ${p.sku.selectedSkuText ?? "не определён"}`,
-    `SKU в карточке: ${p.sku.skuSummary}`,
+    // Only show the card-SKU summary when it adds something — when it just echoes
+    // "не определён" it duplicates the line above.
+    ...(p.sku.skuSummary && p.sku.skuSummary !== "не определён"
+      ? [`SKU в карточке: ${p.sku.skuSummary}`]
+      : []),
     `Цвета: ${p.sku.colors.length ? p.sku.colors.join(", ") : "уточнить"}`,
     `Материал: ${p.identity.materials.length ? p.identity.materials.join(", ") : "не указан"}`,
     `Вес: ${weightKg != null ? `${String(weightKg).replace(".", ",")} кг (заявлено, уточнить с упаковкой)` : "нет в карточке"}`,
