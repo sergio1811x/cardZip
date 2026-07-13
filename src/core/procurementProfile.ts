@@ -4815,6 +4815,60 @@ export function stripUnconfirmedPackaging(title: string): string {
     .trim();
 }
 
+// Salvage a rich LLM title by stripping ONLY the offending tokens (unconfirmed
+// measurements, venue, packaging, claimed-feature phrases) instead of discarding
+// it wholesale to a thin structured fallback. The noun + use-case core is already
+// in the right grammatical case, so "Высокоскоростной фен с ионизацией для сушки и
+// укладки волос 1450 Вт" → "Высокоскоростной фен для сушки и укладки волос". No
+// hardcode: measurement is a regex, feature words come from the profile.
+function salvageSeoTitle(
+  title: string,
+  p: ProductProcurementProfile,
+  featureWords: string[],
+): string {
+  // Drop measurement tokens first ("1450 Вт", "220 в").
+  let t = clean(title).replace(new RegExp(SEARCH_MEASUREMENT_RE.source, "gi"), " ");
+  // Words that are part of the object's identity (from coreObject) are NEVER
+  // features to strip, even if the canonicalizer also listed them as a "feature"
+  // (e.g. "высокоскоростной" is both the object descriptor and a claimed feature).
+  const objWords = new Set(
+    clean(p.identity.coreObject)
+      .toLowerCase()
+      .replace(/ё/g, "е")
+      .split(/[^а-яёa-z0-9]+/i)
+      .filter(Boolean),
+  );
+  const prepo = new Set(["с", "со", "для", "в", "на", "и"]);
+  // Token-wise strip: drop a claimed-feature token (SAME prefix logic as the
+  // detector, so "ионизацией" matched by "ионы" is actually removed) plus a
+  // preposition that led into it. Object-identity words are protected.
+  const kept: string[] = [];
+  for (const tok of t.split(/\s+/).filter(Boolean)) {
+    const bare = tok.toLowerCase().replace(/ё/g, "е").replace(/[^а-яёa-z0-9]/gi, "");
+    if (bare && !objWords.has(bare) && assertsClaimedFeatureWord(tok, featureWords)) {
+      if (kept.length && prepo.has(kept[kept.length - 1].toLowerCase())) kept.pop();
+      continue;
+    }
+    kept.push(tok);
+  }
+  let out = kept.join(" ");
+  // Drop an unsupported venue phrase ("для салона", "салонный").
+  if (hasUnsupportedSeoContext(out, p)) {
+    out = out.replace(new RegExp(`\\s*(?:для\\s+)?${SEO_CONTEXT_RE.source}`, "gi"), " ");
+  }
+  out = stripUnconfirmedPackaging(out);
+  // Cleanup: collapse spaces, drop dangling prepositions/conjunctions/separators.
+  out = out
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+(?:с|со|и|для|в|на)\s*(?=(?:—|,|$))/gi, " ")
+    .replace(/\s*[—-]\s*(?:,|$)/g, " ")
+    .replace(/\s+,/g, ",")
+    .replace(/(?:^[\s,—-]+|[\s,—-]+$)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return capitalizeRu(out);
+}
+
 const SEARCH_MEASUREMENT_RE =
   /\d+(?:[.,]\d+)?\s*(?:см|мм|м\b|кг|г\b|мл|л\b|°|градус|hrc|вт|ватт|в\b|вольт|дюйм)/i;
 // NOTE: no \b anchors — JS \b is ASCII-only and NEVER matches a Cyrillic boundary,
@@ -5121,6 +5175,17 @@ export function buildSeoDraftFromProfile(
   // like "Насадка | концентратор | заявлено" is a claim by definition, so its words
   // gate keywords too — that's why "фен с насадкой" no longer leaks. The bare Тип /
   // Материал rows are structural (object + material), not feature claims, so skipped.
+  // Words that ARE the object's identity (from coreObject, e.g. "высокоскоростной"
+  // in "высокоскоростной фен") are not speculative feature claims even if the
+  // canonicalizer also listed them as a feature — never gate them out of the
+  // title/keywords. Category-agnostic: derived from this product's own coreObject.
+  const objectIdentityWords = new Set(
+    clean(p.identity.coreObject)
+      .toLowerCase()
+      .replace(/ё/g, "е")
+      .split(/[^а-яёa-z0-9]+/i)
+      .filter((w) => w.length >= 4),
+  );
   const featureWords = uniq(
     [
       ...claimedFeatureWords(p),
@@ -5139,13 +5204,37 @@ export function buildSeoDraftFromProfile(
         .filter((w) => w.length >= 5),
     ],
     80,
-  );
-  if (
-    SEARCH_MEASUREMENT_RE.test(title) ||
-    hasUnsupportedSeoContext(title, p) ||
-    hasForeignPackagingClaim(title, p) ||
-    assertsClaimedFeatureWord(title, featureWords)
-  ) {
+  ).filter((w) => !objectIdentityWords.has(w));
+  const titleIsBad = (t: string) =>
+    // Structural breakage: a dangling preposition before a separator ("Фен без —")
+    // or a trailing separator. (No \b — ASCII-only, vacuous on Cyrillic.)
+    /(?:^|\s)(?:с|со|без|и|для|в|на)\s*[—,:]/i.test(t) ||
+    /[—,:-]\s*$/.test(t) ||
+    SEARCH_MEASUREMENT_RE.test(t) ||
+    hasUnsupportedSeoContext(t, p) ||
+    hasForeignPackagingClaim(t, p) ||
+    assertsClaimedFeatureWord(t, featureWords);
+  // Richest LLM title source (prose writer, else the seo-card generator), guarded.
+  // A clean one wins outright; a dirty-but-rich one is SALVAGED (strip just the
+  // offending tokens) rather than dropped to the thin structured fallback. This is
+  // the SEO title's main lever — a rich "Высокоскоростной фен для сушки и укладки
+  // волос" beats a bare "Фен — сушка волос".
+  // Guard ONLY a real LLM source — guardSeoTitle("") synthesizes a category default
+  // ("кухонный товар"), which must not masquerade as an LLM title and overwrite the
+  // richer structured fallback.
+  const llmTitleSource = prose?.title || p.content.seoTitle || "";
+  const rawLlmTitle = llmTitleSource ? guardSeoTitle(llmTitleSource) : "";
+  if (rawLlmTitle && !titleIsBad(rawLlmTitle)) {
+    title = rawLlmTitle;
+  } else if (rawLlmTitle) {
+    const salvaged = salvageSeoTitle(rawLlmTitle, p, featureWords);
+    const objWords = clean(p.identity.coreObject).split(/\s+/).filter(Boolean).length;
+    const salvagedWords = salvaged.split(/\s+/).filter(Boolean).length;
+    title =
+      !titleIsBad(salvaged) && salvagedWords > objWords + 1
+        ? salvaged
+        : fallbackTitle;
+  } else if (titleIsBad(title)) {
     title = fallbackTitle;
   }
   const keywordFallback = [
