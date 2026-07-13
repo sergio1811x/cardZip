@@ -15,7 +15,7 @@ const DEFAULT_MODELS = [
   "google/gemini-3.1-flash-lite",
 ];
 const DEFAULT_TIMEOUT_MS = 50_000;
-const DEFAULT_MAX_TOKENS = 2000;
+const DEFAULT_MAX_TOKENS = 4000; // headroom so a reasoning model can't truncate JSON
 const DEFAULT_TEMPERATURE = 0.2;
 
 export interface GeneratorInput {
@@ -217,6 +217,13 @@ async function callModel(
       model,
       max_tokens: maxTokens,
       temperature,
+      // Force strict JSON output and turn OFF reasoning: deepseek-v4-pro is a
+      // reasoning model that burned the token budget on internal <think> and
+      // TRUNCATED the JSON (→ "invalid JSON"). This is a structured extraction task,
+      // not one that needs chain-of-thought. Both are OpenRouter-unified params;
+      // models that don't support them ignore them.
+      response_format: { type: "json_object" },
+      reasoning: { enabled: false },
       messages: [
         { role: "system", content: SYSTEM_MSG },
         { role: "user", content: prompt },

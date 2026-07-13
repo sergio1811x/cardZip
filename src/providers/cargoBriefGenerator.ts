@@ -14,7 +14,7 @@ const DEFAULT_MODELS = [
   "google/gemini-3.1-flash-lite",
 ];
 const DEFAULT_TIMEOUT_MS = 50_000;
-const DEFAULT_MAX_TOKENS = 2000;
+const DEFAULT_MAX_TOKENS = 4000; // headroom so a reasoning model can't truncate JSON
 const DEFAULT_TEMPERATURE = 0.2;
 
 const CARGO_NATURES = [
@@ -232,6 +232,10 @@ async function callModel(
       model,
       max_tokens: maxTokens,
       temperature,
+      // Strict JSON + reasoning OFF: deepseek-v4-pro truncated JSON by spending the
+      // budget on internal reasoning. Structured extraction, not a CoT task.
+      response_format: { type: "json_object" },
+      reasoning: { enabled: false },
       messages: [
         { role: "system", content: SYSTEM_MSG },
         { role: "user", content: prompt },

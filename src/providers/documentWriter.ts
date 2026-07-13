@@ -573,7 +573,7 @@ export async function writeSeoProse(
   // Strong model → longer timeout (deepseek is slow); still falls back to the fast
   // models if it doesn't complete in time.
   const timeoutMs = getNumberEnv("SEO_PROSE_TIMEOUT_MS", 150_000);
-  const maxTokens = getNumberEnv("SEO_PROSE_MAX_TOKENS", 2200);
+  const maxTokens = getNumberEnv("SEO_PROSE_MAX_TOKENS", 4000);
   // Copy needs some life — 0.25 pushed the model into flat, "safe" spec-list
   // phrasing. The grounding verifier + deterministic guards catch any drift, so a
   // higher temperature is safe here and reads far less robotic.
@@ -597,6 +597,11 @@ export async function writeSeoProse(
           model,
           max_tokens: maxTokens,
           temperature,
+          // Strict JSON + reasoning OFF: deepseek-v4-pro truncated JSON by spending
+          // the token budget on internal reasoning. OpenRouter-unified params;
+          // unsupported models ignore them.
+          response_format: { type: "json_object" },
+          reasoning: { enabled: false },
           messages: [
             { role: "system", content: SEO_PROSE_SYSTEM },
             { role: "user", content: prompt },
@@ -869,6 +874,8 @@ export async function verifySeoGrounding(
           model,
           max_tokens: maxTokens,
           temperature: 0.1,
+          response_format: { type: "json_object" },
+          reasoning: { enabled: false },
           messages: [
             { role: "system", content: SEO_VERIFY_SYSTEM },
             { role: "user", content: prompt },
@@ -958,6 +965,10 @@ async function callModel(
       model,
       max_tokens: maxTokens,
       temperature,
+      // Reasoning OFF (this writer returns markdown, not JSON): deepseek-v4-pro's
+      // <think> otherwise ate the budget and truncated the doc. No response_format —
+      // the output is a markdown document, not a JSON object.
+      reasoning: { enabled: false },
       messages: [
         { role: "system", content: SYSTEM_MSG },
         { role: "user", content: prompt },
