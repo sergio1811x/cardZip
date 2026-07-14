@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile, buildSupplierQuestionsFromProfile, buildCargoBriefFromProfile, dedupBulletsByOverlap } from './procurementProfile';
+import { buildProductProcurementProfile, buildMainReportFromProfile, buildSeoDraftFromProfile, buildBuyerBriefFromProfile, buildSupplierQuestionsFromProfile, buildCargoBriefFromProfile, dedupBulletsByOverlap, validateCnQuestions } from './procurementProfile';
 
 function baseProduct(overrides: Record<string, any> = {}) {
   return {
@@ -560,5 +560,99 @@ describe('main report formatting', () => {
     const materialLine = text.split('\n').find(l => l.includes('Материал:')) ?? '';
     const count = materialLine.replace('• Материал:', '').split(',').filter(s => s.trim() && !/подтвердить/i.test(s)).length;
     expect(count).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('Latin-in-RU firewall (bad понимание roll)', () => {
+  // A bad LLM roll returned coreObject/titleForSeo as English "Hair Dryer" while the
+  // report title came out Russian, and leaked an English "understanding" sentence
+  // into the risk flags. RU documents must never surface either.
+  const badRollProduct = () => baseProduct({
+    titleRu: 'Высокоскоростной фен',
+    titleCn: '吹风机',
+    intelligence: {
+      productIdentity: {
+        coreObject: 'Hair Dryer',
+        shortNameRu: 'Hair Dryer',
+        displayNameRu: 'Hair Dryer',
+        categoryType: 'electronics',
+      },
+      cleanTitles: { titleForReport: 'Высокоскоростной фен', titleForSeo: 'Hair Dryer' },
+      reportRules: {
+        riskFlags: [
+          'The input describes a high-speed negative ion hair dryer, including various gift box sets and accessories like nozzles and wall mounts',
+          'Электроприбор без подтверждённых параметров',
+        ],
+      },
+    },
+  });
+
+  it('swaps an English-only coreObject/title for the Russian sibling', () => {
+    const p = buildProductProcurementProfile(badRollProduct());
+    expect(p.identity.coreObject).not.toMatch(/[A-Za-z]/);
+    expect(p.identity.titleForSeo).not.toMatch(/Hair Dryer/i);
+    expect(p.identity.coreObject.toLowerCase()).toMatch(/фен/);
+  });
+
+  it('keeps English out of the cargo and SEO documents', () => {
+    const product = badRollProduct();
+    expect(buildCargoBriefFromProfile(product)).not.toMatch(/Hair Dryer/i);
+    expect(buildSeoDraftFromProfile(product)).not.toMatch(/Hair Dryer/i);
+  });
+
+  it('strips leaked English prose from the risk list and buyer brief', () => {
+    const product = badRollProduct();
+    const p = buildProductProcurementProfile(product);
+    expect(p.procurement.redFlags.some((r) => /The input describes/i.test(r))).toBe(false);
+    expect(buildBuyerBriefFromProfile(product)).not.toMatch(/The input describes/i);
+  });
+});
+
+describe('CN validation — accessory terms grounded in the RU source', () => {
+  const cn = [
+    '请问该SKU的套装具体包含哪些内容：吹风机、风嘴数量、支架、皮盒、电源线？',
+  ];
+
+  it('does NOT flag 支架/holder when the RU question asks about комплектация', () => {
+    const ru = ['Какова точная комплектация выбранного SKU: фен, насадки, держатель, кейс, кабель?'];
+    // 支架 (stand/holder) is a faithful translation of "держатель" — not a wrong-product leak.
+    expect(validateCnQuestions(ru, cn).ok).toBe(true);
+  });
+
+  it('still flags an accessory term the RU never asked about', () => {
+    const ru = ['Какое рабочее напряжение и частота питания у выбранного SKU?'];
+    expect(validateCnQuestions(ru, cn).ok).toBe(false);
+  });
+});
+
+describe('cargo battery presupposition firewall', () => {
+  // A bad roll classified a CORDED hair dryer as cargoNature=battery and asserted a
+  // battery in the cargo lines. With no confirmed battery, only the open presence
+  // question may survive — every "capacity/charge/sensitivity" line is a hallucination.
+  const cordedDryerWithBatteryHallucination = () => baseProduct({
+    titleRu: 'Высокоскоростной фен для волос',
+    productContext: {
+      procurementProfileDraft: {
+        domainRules: {
+          cargo: {
+            cargoNature: 'battery',
+            sensitiveIssues: [
+              'Аккумулятор чувствителен к механическим повреждениям и сжатию',
+              'При комплектации в подарочный кейс нужна жёсткая внешняя упаковка',
+            ],
+            whatToRequest: [
+              'Ёмкость и тип аккумулятора (мАч, химия) для подтверждения класса опасности',
+              'Есть ли аккумулятор или товар полностью сетевой?',
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  it('strips battery-existence assertions but keeps the open presence question', () => {
+    const cargo = buildCargoBriefFromProfile(cordedDryerWithBatteryHallucination());
+    expect(cargo).not.toMatch(/ёмкость и тип аккумулятора|чувствителен к механическим/i);
+    expect(cargo).toMatch(/есть ли аккумулятор/i);
   });
 });

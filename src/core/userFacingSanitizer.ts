@@ -32,6 +32,15 @@ export function sanitizeUserFacingText(input: unknown): string {
   text = text
     .split('\n')
     .filter((line) => !LINE_DROP_RX.test(line) || /себестоимост|цена товара|закупк|карго|пакет|вопрос/i.test(line))
+    // Drop leaked English "understanding" prose ("The input describes a high-speed
+    // negative ion hair dryer …") — a bullet/line with no Cyrillic and ≥4 Latin
+    // words. Markdown headings/links/table rows here carry Cyrillic and are kept;
+    // short code lines ("CE, RoHS, EAC") stay under the 4-word threshold.
+    .filter((line) => {
+      const body = line.replace(/^\s*(?:[-*>#]+|\d+[.)])\s*/, '').trim();
+      if (/[а-яё]/i.test(body)) return true;
+      return (body.match(/[A-Za-z]{2,}/g) ?? []).length < 4;
+    })
     .join('\n');
   return text.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 }

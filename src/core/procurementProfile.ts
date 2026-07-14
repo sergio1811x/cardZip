@@ -1311,6 +1311,37 @@ function lockCoreObject(rawCoreObject: unknown, titleForReport: string): string 
   const fallback = safeRu(titleForReport);
   return cleanDisplayTitle(nounOnly || fallback || raw);
 }
+
+// ─── Latin-in-RU firewall (deterministic, category-agnostic) ────────────────
+// A bad LLM понимание roll sometimes returns an identity field as English
+// ("Hair Dryer") while a sibling came out Russian. These helpers detect the
+// English value so the caller can swap in the Russian sibling — RU docs never
+// surface "Hair Dryer" as the product name. Latin TOKENS mixed into Russian
+// (PC, ABS, USB, model codes) are legitimate and never trip this.
+function hasCyrillicText(s: string): boolean {
+  return /[а-яё]/i.test(s);
+}
+// True only when the value has Latin letters and NO Cyrillic at all (pure English).
+function isLatinOnly(s: string): boolean {
+  const t = clean(s);
+  return /[a-z]/i.test(t) && !hasCyrillicText(t);
+}
+// The candidate if it is not English-only, else the first Russian fallback, else
+// the candidate unchanged (rare all-English roll the caller can't fix here).
+function preferRu(candidate: string, ...fallbacks: string[]): string {
+  if (candidate && !isLatinOnly(candidate)) return candidate;
+  for (const f of fallbacks) if (f && !isLatinOnly(f)) return f;
+  return candidate;
+}
+// A user-facing RU line that is actually leaked English prose (an "understanding"
+// summary like "The input describes a high-speed negative ion hair dryer …").
+// Multi-word Latin with no Cyrillic → drop. Short codes (EAC, PC, ABS) never match.
+function isEnglishProseLine(s: string): boolean {
+  const t = clean(s);
+  if (hasCyrillicText(t)) return false;
+  // ≥4 Latin words → prose, not a short code line like "CE, RoHS, EAC".
+  return (t.match(/[A-Za-z]{2,}/g) ?? []).length >= 4;
+}
 function num(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   const n = Number(
@@ -1492,7 +1523,11 @@ export function normalizeFragmentLine(value: unknown): string {
 }
 
 export function normalizeFragmentLines(items: string[]): string[] {
-  return items.map((v) => normalizeFragmentLine(v)).filter(Boolean);
+  // Drop leaked English "understanding" prose ("The input describes …") that a bad
+  // LLM roll injects into RU risk/question lists — it must never reach a document.
+  return items
+    .map((v) => normalizeFragmentLine(v))
+    .filter((v) => Boolean(v) && !isEnglishProseLine(v));
 }
 
 /**
@@ -3064,20 +3099,24 @@ function supplierCoverageDimensions(questions: string[]): Set<string> {
 
 function shouldPreferSavedSupplierQuestions(
   saved: string[],
+  assembled: string[],
   critical: string[] = [],
 ): boolean {
   if (!saved.length) return false;
   const savedDims = supplierCoverageDimensions(saved);
+  const assembledDims = supplierCoverageDimensions(assembled);
   const criticalDims = supplierCoverageDimensions(critical);
   // Prefer the saved RU/CN pair — 1688 needs the bilingual version, and re-deriving
   // RU here leaves the persisted CN mismatched in length so it gets silently dropped
   // ("Китайская версия не сформирована"). Fall back to the assembled RU (sacrificing
-  // CN) ONLY when the saved pair is genuinely WEAKER: missing a critical-spine
-  // dimension (compliance/battery/electrical the domain model flagged) that the
-  // assembled list carries. Total question count is not the gate — a shorter
-  // bilingual list beats a longer RU-only one.
+  // CN) ONLY when assembled ADDS a critical-spine dimension (compliance/battery/…)
+  // that saved lacks. Crucially, when saved IS the assembled list (the common case —
+  // both are mustAskSupplier), assembled adds nothing, so we keep saved and its CN.
+  // Comparing saved against the critical list ALONE was the bug: mustAskSupplier is
+  // capped at 10 and may drop one critical dimension, and the old gate then switched
+  // to assembled — the SAME list minus its CN. Count is never the gate.
   for (const dim of criticalDims) {
-    if (!savedDims.has(dim)) return false;
+    if (assembledDims.has(dim) && !savedDims.has(dim)) return false;
   }
   return true;
 }
@@ -3140,6 +3179,17 @@ export function buildProductProcurementProfile(
       kind,
     ),
   );
+  // Latin-in-RU firewall anchor: the best Russian title among the identity fields.
+  // If any one of them came out Russian, English-only siblings (a bad roll's
+  // coreObject/titleForSeo = "Hair Dryer") are swapped to it so no RU document
+  // surfaces the English name.
+  const ruTitleAnchor =
+    [
+      titleForReport,
+      safeRu(identity.shortNameRu),
+      safeRu(identity.coreObject),
+      titleForSeo,
+    ].find((t) => t && !isLatinOnly(t)) || titleForReport;
   const missing = uniq(
     [
       ...(pricing.priceReliable ? [] : ["цена выбранного SKU"]),
@@ -3162,10 +3212,13 @@ export function buildProductProcurementProfile(
         kind === "heating_food_mat"
           ? "food_warmer"
           : safeRu(identity.subCategoryType || ""),
-      titleForReport: safeTitle(titleForReport),
-      titleForSeo,
-      shortTitle: safeRu(identity.shortNameRu || titleForReport),
-      coreObject: lockCoreObject(identity.coreObject || titleForReport, titleForReport),
+      titleForReport: preferRu(safeTitle(titleForReport), ruTitleAnchor),
+      titleForSeo: preferRu(titleForSeo, ruTitleAnchor),
+      shortTitle: preferRu(safeRu(identity.shortNameRu || titleForReport), ruTitleAnchor),
+      coreObject: preferRu(
+        lockCoreObject(identity.coreObject || titleForReport, titleForReport),
+        ruTitleAnchor,
+      ),
       formFactor: safeRu(draftIdentity.formFactor || identity.formFactor || ""),
       audience: safeRu(draftIdentity.audience || identity.audience || ""),
       gender: safeRu(draftIdentity.gender || identity.gender || ""),
@@ -3933,7 +3986,17 @@ export function validateCnQuestions(
   if (/\d+,\d+\s*元/.test(joined)) errors.push("comma decimal");
   if (/\d+[.)]\s*\d+[.)]/.test(joined)) errors.push("nested numbering");
   if (/该问题中的相关产品信息/.test(joined)) errors.push("meta CN");
-  if (/接水盘|支架|挂钩|层架|伞骨/.test(joined))
+  // Wrong-product accessory terms (drip tray / stand / hook / shelf / umbrella rib)
+  // signal a CN that describes a DIFFERENT product — but only when the RU questions
+  // never asked about parts. If the RU asks about комплектация/держатель/etc., a CN
+  // listing 支架/皮盒 is a FAITHFUL translation, not a leak. Grounding against the RU
+  // source avoids the false positive that blanket-blocked the whole CN batch (and
+  // printed "Китайская версия не сформирована") for any set that includes a holder.
+  const ruMentionsParts =
+    /комплект|что\s+входит|состав|насадк|держат|подставк|стойк|крепл|кронштейн|крюч|полк|ярус|спиц/i.test(
+      ru.join("\n"),
+    );
+  if (!ruMentionsParts && /接水盘|支架|挂钩|层架|伞骨/.test(joined))
     errors.push("wrong-product accessory term");
   return { ok: errors.length === 0, errors };
 }
@@ -3980,6 +4043,7 @@ export function buildSupplierQuestionsFromProfile(
     !!pairedRu &&
     shouldPreferSavedSupplierQuestions(
       pairedRu,
+      assembledRu,
       profile.procurement.criticalConfirmations ?? [],
     );
   const ru = useSaved && pairedRu ? pairedRu : assembledRu;
@@ -3988,11 +4052,22 @@ export function buildSupplierQuestionsFromProfile(
     Array.isArray(profile.supplierQuestionsCn)
       ? profile.supplierQuestionsCn
       : [];
+  // The persisted CN was translated against pairedRu. Use it whenever the chosen RU
+  // IS that exact list (same length AND content) — NOT only when the gate preferred
+  // the saved RU. pairedRu is usually IDENTICAL to assembledRu (both are
+  // mustAskSupplier), so a gate that returned useSaved=false was discarding a
+  // perfectly valid CN and falling back to the weaker deterministic map, which then
+  // failed validation → "Китайская версия не сформирована". This was the live
+  // 1688 hard-fail.
+  const ruIsPaired =
+    !!pairedRu &&
+    pairedRu.length === ru.length &&
+    pairedRu.every((q, i) => q === ru[i]);
   // Prefer LLM CN saved upstream. Only fall back to deterministic CN if every
   // line translates faithfully (no empties); otherwise emit RU-only rather than
   // wrong-product/meta CN.
   let cn: string[];
-  if (useSaved && savedCn.length === ru.length) {
+  if (ruIsPaired && savedCn.length === ru.length) {
     cn = savedCn;
   } else {
     const det = ru.map(translateQuestionToCn);
@@ -4373,9 +4448,24 @@ function stripUnconfirmedHazardAssertions(
   p: ProductProcurementProfile,
 ): string[] {
   const confirmed = cargoConfirmedSignalsText(p);
+  const batteryConfirmed =
+    /аккумулятор|батаре|литий|беспроводн|перезаряжа|\bmah\b|\bмач\b/i.test(
+      confirmed,
+    );
   return lines.filter((line) => {
     const low = clean(line).toLowerCase().replace(/ё/g, "е");
     if (!low) return true;
+    // Battery presupposition firewall: when no battery is confirmed, ANY line that
+    // ASSUMES a battery exists (its charge/capacity/chemistry/sensitivity/protection)
+    // is a hallucination for a corded device — enumerating phrasings is whack-a-mole.
+    // Keep ONLY the open presence question ("есть ли аккумулятор, или это сетевой…").
+    if (!batteryConfirmed && /аккумулятор|батаре/.test(low)) {
+      const isPresenceQuestion =
+        /есть\s+ли|имеется\s+ли|или\s+[а-я\s]*(?:сетев|проводн)|без\s+батаре|встроен|наличи[ем]/.test(
+          low,
+        );
+      if (!isPresenceQuestion) return false;
+    }
     return !CARGO_HAZARD_ASSERTIONS.some(
       (h) => h.assertion.test(low) && !h.confirm.test(confirmed),
     );
@@ -5084,16 +5174,25 @@ function relevantForbiddenClaims(p: ProductProcurementProfile): string[] {
     .join(" ")
     .toLowerCase();
   const generic = new Set(DANGEROUS_CLAIMS.map((c) => c.toLowerCase().trim()));
-  return p.content.seoForbiddenClaims.filter((c) => {
-    const norm = c.toLowerCase().trim();
-    if (!generic.has(norm)) return true; // contextual LLM warning → always keep
-    // Bare generic claim: keep only if actually referenced by this listing. Compare
-    // by a 6-char prefix of each significant word so "перегрева"/"перегрев" still
-    // match, without the brittleness of exact-form equality.
+  // A single segment is worth showing if it's a contextual LLM warning (not a bare
+  // generic claim) OR a generic claim actually referenced by this listing. Compare
+  // by a 6-char word prefix so "перегрева"/"перегрев" match without exact-form
+  // brittleness.
+  const segmentInPlay = (segment: string): boolean => {
+    const norm = segment.toLowerCase().trim();
+    if (!norm) return false;
+    if (!generic.has(norm)) return true;
     return norm
       .split(/\s+/)
       .some((w) => w.length >= 5 && text.includes(w.slice(0, 6)));
-  });
+  };
+  // Split comma/semicolon-joined lines so a bundle of bare generic claims
+  // ("сертифицированный, безопасный для детей, гипоаллергенный") is dropped when
+  // none of its parts is in play — the earlier version kept it because the joined
+  // string wasn't a verbatim member of the generic set.
+  return p.content.seoForbiddenClaims.filter((c) =>
+    c.split(/[,;]+/).some(segmentInPlay),
+  );
 }
 
 export function buildSeoDraftFromProfile(
