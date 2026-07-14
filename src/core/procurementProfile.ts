@@ -19,7 +19,6 @@ import { sanitizeUserFacingText } from "./userFacingSanitizer";
 import { isPlaceholderValue, safeTitle } from "./placeholderGuard";
 import {
   applyUniversalGaps,
-  evaluateGapSlots,
   type GapEngineContext,
 } from "./gapEngine";
 
@@ -3065,17 +3064,22 @@ function supplierCoverageDimensions(questions: string[]): Set<string> {
 
 function shouldPreferSavedSupplierQuestions(
   saved: string[],
-  assembled: string[],
-  lead: string[] = [],
+  critical: string[] = [],
 ): boolean {
   if (!saved.length) return false;
   const savedDims = supplierCoverageDimensions(saved);
-  const assembledDims = supplierCoverageDimensions(assembled);
-  const leadDims = supplierCoverageDimensions(lead);
-  for (const dim of leadDims) {
+  const criticalDims = supplierCoverageDimensions(critical);
+  // Prefer the saved RU/CN pair — 1688 needs the bilingual version, and re-deriving
+  // RU here leaves the persisted CN mismatched in length so it gets silently dropped
+  // ("Китайская версия не сформирована"). Fall back to the assembled RU (sacrificing
+  // CN) ONLY when the saved pair is genuinely WEAKER: missing a critical-spine
+  // dimension (compliance/battery/electrical the domain model flagged) that the
+  // assembled list carries. Total question count is not the gate — a shorter
+  // bilingual list beats a longer RU-only one.
+  for (const dim of criticalDims) {
     if (!savedDims.has(dim)) return false;
   }
-  return savedDims.size >= assembledDims.size;
+  return true;
 }
 
 export function buildProductProcurementProfile(
@@ -3976,8 +3980,7 @@ export function buildSupplierQuestionsFromProfile(
     !!pairedRu &&
     shouldPreferSavedSupplierQuestions(
       pairedRu,
-      assembledRu,
-      profile.procurement.leadQuestions ?? [],
+      profile.procurement.criticalConfirmations ?? [],
     );
   const ru = useSaved && pairedRu ? pairedRu : assembledRu;
   const savedCn =
@@ -4157,21 +4160,6 @@ export function buildBuyerBriefFromProfile(
   const p = ensureProductProcurementProfile(product, opts);
   const weightKg = extractWeightKg(product);
   const pkgDims = extractDimensionsCm(product);
-  // Slot-based "must confirm" checklist (short labels), NOT a copy of the full
-  // supplier-questions list — the buyer brief used to re-dump the same questions
-  // as 01_Вопросы_поставщику.txt. Full wording stays in that file; here we show a
-  // compact gap checklist so the two documents don't duplicate each other.
-  // When a hard-gate lead question already asks "which SKU at what price", the
-  // price/variant gap slots only re-add their SHORT labels as bare fragments that
-  // duplicate that lead question — drop them here (category-agnostic, by slot id).
-  const leadCoversSkuPrice = (p.procurement.leadQuestions ?? []).length > 0;
-  const mustConfirm = evaluateGapSlots(gapContextFromProfile(p, product))
-    .filter((s) => s.state === "must_confirm" && s.label)
-    .filter(
-      (s) =>
-        !(leadCoversSkuPrice && (s.id === "price" || s.id === "selected_variant")),
-    )
-    .map((s) => s.label);
   return [
     "# ТЗ байеру",
     "",
@@ -4198,19 +4186,23 @@ export function buildBuyerBriefFromProfile(
     `Заказы: ${p.supplier.orders || "—"}`,
     "",
     "## 3. Что подтвердить у поставщика (ключевое)",
-    // Full lead/critical questions first; bare gap-slot labels (mustConfirm) are
-    // normalized to proper lines and overlap-deduped so they can't reappear as
-    // lowercase fragments next to the fuller questions they duplicate.
+    // Full lead + critical questions first (the electrical/compliance/kit spine),
+    // then the universal gap engine APPENDS only the basics not already covered —
+    // in full question form, via slot coverage. This replaces the old terse gap-slot
+    // LABELS, which read as broken accusative fragments ("Точную комплектацию…",
+    // "Точный материал…") and duplicated a lead question the overlap dedup missed.
+    // Threshold 0.5 collapses the remaining near-duplicates (a compound
+    // "вес, габариты и упаковка" question vs the engine's precise packed-weight ask).
     ...list(
       dedupBulletsByOverlap(
-        normalizeFragmentLines([
-          ...(p.procurement.leadQuestions ?? []),
-          // The cross-cutting critical block (electrical/compliance for a powered
-          // device, …) so the buyer brief carries the same domain spine as the
-          // other docs instead of only the generic gap slots.
-          ...(p.procurement.criticalConfirmations ?? []),
-          ...mustConfirm,
-        ]),
+        applyUniversalGaps(
+          normalizeFragmentLines([
+            ...(p.procurement.leadQuestions ?? []),
+            ...(p.procurement.criticalConfirmations ?? []),
+          ]),
+          gapContextFromProfile(p, product),
+        ),
+        0.5,
       ),
       12,
     ),
@@ -4227,7 +4219,10 @@ export function buildBuyerBriefFromProfile(
     "- фото рядом с линейкой, если размер важен",
     "",
     "## 6. Риски",
-    ...list(dedupBulletsByOverlap(p.procurement.redFlags), 10),
+    // 0.5 threshold: LLM risk lists tend to restate the same hazard (e.g. "риск
+    // путаницы между комплектами" three ways); the tighter cut collapses those
+    // near-duplicates while keeping genuinely distinct risks.
+    ...list(dedupBulletsByOverlap(p.procurement.redFlags, 0.5), 10),
     "",
     "## 7. Решение",
     p.procurement.verdict,
@@ -4468,6 +4463,23 @@ function dedupCargoRequestLines(lines: string[]): string[] {
  * Keeps the per-nature cautions firing for kinds that clearly imply a nature
  * (a knife is always a bladed/sharp item) instead of falling to generic filler.
  */
+// ISO 780 handling marks are frequently written in English on the factory side
+// ("Fragile", "This Side Up"); a Russian procurement doc must show the Russian
+// equivalent. Structural international-standard logistics vocabulary — not
+// product/category text, so a fixed map is appropriate here.
+const SHIPPING_MARK_RU: Array<[RegExp, string]> = [
+  [/["«»'“”]*\bfragile\b["«»'“”]*/gi, "«Хрупкое»"],
+  [/["«»'“”]*\bthis\s+side\s+up\b["«»'“”]*/gi, "«Верх, не кантовать»"],
+  [/["«»'“”]*\bhandle\s+with\s+care\b["«»'“”]*/gi, "«Обращаться осторожно»"],
+  [/["«»'“”]*\bkeep\s+dry\b["«»'“”]*/gi, "«Беречь от влаги»"],
+  [/["«»'“”]*\bdo\s+not\s+stack\b["«»'“”]*/gi, "«Не штабелировать»"],
+];
+function translateShippingMarks(line: string): string {
+  let out = line;
+  for (const [re, ru] of SHIPPING_MARK_RU) out = out.replace(re, ru);
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
 function cargoAdditionalLines(p: ProductProcurementProfile): string[] {
   // cargoNature is LLM-driven (dynamic per product); the caution dictionary fires
   // on whatever nature the LLM classified. No category-derived guessing here — when
@@ -4487,7 +4499,7 @@ function cargoAdditionalLines(p: ProductProcurementProfile): string[] {
       p,
     ),
     p,
-  );
+  ).map(translateShippingMarks);
   for (const [key, caution] of Object.entries(CARGO_NATURE_CAUTIONS)) {
     if (nature.includes(key)) items.push(caution);
   }
@@ -5048,6 +5060,42 @@ function enforceProfileMaterialRow(
   );
 }
 
+// The "Нельзя писать как факт" section must warn only about claims IN PLAY for
+// THIS listing. profile.content.seoForbiddenClaims carries the FULL dangerous-claim
+// guardrail (needed to constrain the LLM writer), but dumping the bare generic
+// hardcode into the doc prints nonsense like "ортопедический" / "антибактериальный"
+// on a hair dryer. LLM/intelligence-authored warnings (not verbatim members of the
+// generic list) are product-specific by construction → always shown. A bare generic
+// claim is shown only if one of its significant words actually appears in the
+// product's own text — category-agnostic, no per-product mapping.
+function relevantForbiddenClaims(p: ProductProcurementProfile): string[] {
+  const text = [
+    p.identity.titleForReport,
+    p.identity.titleForSeo,
+    p.identity.coreObject,
+    p.identity.shortTitle,
+    ...p.identity.useCases,
+    ...p.identity.claimedFeatures,
+    ...p.identity.unconfirmedFeatures,
+    ...p.identity.visibleFeatures,
+    ...p.identity.materials,
+    ...p.content.seoAllowedClaims,
+  ]
+    .join(" ")
+    .toLowerCase();
+  const generic = new Set(DANGEROUS_CLAIMS.map((c) => c.toLowerCase().trim()));
+  return p.content.seoForbiddenClaims.filter((c) => {
+    const norm = c.toLowerCase().trim();
+    if (!generic.has(norm)) return true; // contextual LLM warning → always keep
+    // Bare generic claim: keep only if actually referenced by this listing. Compare
+    // by a 6-char prefix of each significant word so "перегрева"/"перегрев" still
+    // match, without the brittleness of exact-form equality.
+    return norm
+      .split(/\s+/)
+      .some((w) => w.length >= 5 && text.includes(w.slice(0, 6)));
+  });
+}
+
 export function buildSeoDraftFromProfile(
   product: any,
   opts: { sourceUrl?: string } = {},
@@ -5308,6 +5356,11 @@ export function buildSeoDraftFromProfile(
     seoDescription(p, title, prose?.description),
     bullets,
   );
+  // reconcileMaterialToProfile can rewrite two different material-mentioning
+  // bullets to the SAME "Заявленный материал — …" sentence; overlap-dedup collapses
+  // those (and any near-duplicate LLM/floor bullets) so the card never ships a
+  // repeated bullet.
+  grounded.bullets = dedupBulletsByOverlap(grounded.bullets);
   // The firewall may drop enough bullets (safety/packaging claims) to fall below
   // the 3–5 range the card validator requires. Refill from the honest identity pool
   // (run through the same firewall) so we never ship a 1–2 bullet card.
@@ -5356,7 +5409,7 @@ export function buildSeoDraftFromProfile(
     ),
     "",
     "## Нельзя писать как факт",
-    ...list(p.content.seoForbiddenClaims, 12),
+    ...list(dedupBulletsByOverlap(relevantForbiddenClaims(p)), 12),
     "",
     "## Идеи для инфографики",
     ...p.content.infographicIdeas
