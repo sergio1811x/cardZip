@@ -7,6 +7,7 @@
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 // Для SEO даём приоритет Grok, ниже — быстрые фолбэки.
 const DEFAULT_MODELS = [
+  "openai/gpt-5-mini",
   "x-ai/grok-4.3",
   "qwen/qwen3.7-plus",
   "google/gemini-2.5-flash",
@@ -133,28 +134,12 @@ function dedupCap(values: unknown, cap: number): string[] {
   return out;
 }
 
-// Enforce exactly 5 bullets: trim overflow, pad from generic-but-honest fillers
-// only if the model under-delivered (kept honest — no invented specs).
+// Keep only real model points. Padding a thin answer with generic marketing copy
+// hides an evidence problem and produces the low-value SEO the package is meant to
+// avoid. Downstream profile logic can add grounded identity facts when necessary.
 function enforceFiveBullets(bullets: string[], coreObject: string): string[] {
-  const out = bullets.slice(0, 5);
-  const obj = coreObject.trim() || "товар";
-  const fillers = [
-    `Продуманный дизайн и аккуратное исполнение`,
-    `Практичное решение для повседневного использования`,
-    `Компактный формат — удобно хранить и брать с собой`,
-    `Универсальный вариант в подарок и для себя`,
-    `Несколько вариантов на выбор в карточке`,
-  ];
-  let i = 0;
-  while (out.length < 5 && i < fillers.length) {
-    const candidate = fillers[i++];
-    if (!out.some((b) => b.toLowerCase() === candidate.toLowerCase())) {
-      out.push(candidate);
-    }
-  }
-  // Absolute guarantee of length 5 even if fillers collided.
-  while (out.length < 5) out.push(`Практичный ${obj}`);
-  return out.slice(0, 5);
+  void coreObject;
+  return bullets.slice(0, 5);
 }
 
 function normalizeCharacteristics(
@@ -258,6 +243,8 @@ async function callModel(
       model,
       max_tokens: maxTokens,
       temperature,
+      response_format: { type: "json_object" },
+      reasoning: { enabled: false },
       messages: [
         { role: "system", content: SYSTEM_MSG },
         { role: "user", content: prompt },

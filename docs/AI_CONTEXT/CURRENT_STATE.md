@@ -19,4 +19,6 @@ The MVP is a procurement assistant: a Chinese marketplace link becomes a usable 
 
 Step 5 now uses a package-level LLM editor after the factual profile and deterministic baseline are built. The editor produces all five procurement artifacts from the same profile; an independent LLM reviewer scores each artifact and may request one bounded revision. Existing deterministic validators remain the final factual-safety firewall, and the baseline remains the fallback when the LLM is unavailable.
 
+Downloads must use the reviewed `generatedFiles` saved by Step 5. Rebuilding documents from the profile at download time loses the editorial pass and is only a fallback for legacy or partial results. SEO uses structured JSON output, evidence-first copy, and no generic filler padding.
+
 Update this file after a substantial architecture, workflow, priority, or known-state change. Do not record secrets or transient command output.

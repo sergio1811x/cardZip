@@ -3,7 +3,7 @@ import type { ProductProcurementProfile } from '../core/procurementProfile';
 import { parseLlmJson } from '../core/llmSchemas';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODELS = ['qwen/qwen3.7-plus', 'google/gemini-2.5-flash', 'google/gemini-3.1-flash-lite'];
+const MODELS = ['openai/gpt-5-mini', 'x-ai/grok-4.3', 'google/gemini-2.5-flash', 'qwen/qwen3.7-plus'];
 
 const PackageSchema = z.object({
   supplierQuestionsRu: z.array(z.string().trim().min(8)).min(6).max(10),
@@ -50,10 +50,29 @@ export interface PackagePolishInput {
 }
 
 function compact(input: PackagePolishInput): string {
+  const { profile, baseline } = input;
+  // Keep the full editorial SEO seed in context. A blind `JSON.stringify(...).slice`
+  // could cut the trailing baseline documents, including SEO, and force the writer
+  // to invent structure from a partial profile.
   return JSON.stringify({
-    profile: input.profile,
-    baseline: input.baseline,
-  }).slice(0, 22000);
+    profile: {
+      identity: profile.identity,
+      sku: profile.sku,
+      pricing: profile.pricing,
+      supplier: profile.supplier,
+      procurement: profile.procurement,
+      cargo: profile.cargo,
+      content: profile.content,
+      dataQuality: profile.dataQuality,
+    },
+    baseline: {
+      supplierQuestionsRu: baseline.supplierQuestionsRu,
+      buyerBrief: baseline.buyerBrief.slice(0, 5000),
+      cargoBrief: baseline.cargoBrief.slice(0, 4000),
+      sampleChecklist: baseline.sampleChecklist.slice(0, 5000),
+      seoText: baseline.seoText.slice(0, 7000),
+    },
+  });
 }
 
 function writerPrompt(input: PackagePolishInput, revisionBrief: string[] = []): string {
@@ -72,7 +91,7 @@ function writerPrompt(input: PackagePolishInput, revisionBrief: string[] = []): 
 - buyerBrief: Markdown с разделами Товар, Что подтвердить, Что проверить на образце, Фото, Риски, Решение. Байер должен понимать действие и причину.
 - cargoBrief: Markdown для карго. Отдели известные свойства от того, что запросить. Дай только релевантные перевозочные сведения и проверяемые запросы; не выдумывай опасный груз.
 - sampleChecklist: Markdown с действиями до заказа, проверкой образца, измерениями, фото, красными флагами и решением. Каждая проверка должна быть наблюдаемой или измеримой.
-- seoText: Markdown с разделами Название, Описание, Буллеты, Характеристики, Ключевые слова, Что уточнить перед публикацией, Нельзя писать как факт, Идеи для инфографики. Это содержательный черновик карточки, не повторяющий один тезис разными словами.
+- seoText: Markdown с разделами Название, Описание, Буллеты, Характеристики, Ключевые слова, Что уточнить перед публикацией, Нельзя писать как факт, Идеи для инфографики. Это готовый редакционный черновик карточки, а не безопасное перечисление фактов: название — естественная поисковая фраза без тире-объяснения; описание — 3–4 разные по смыслу фразы; 3–5 буллетов раскрывают разные покупательские причины выбрать товар; ключевые слова — 10–15 самостоятельных поисковых намерений, а не повтор названия с цветами. Не повторяй один тезис между заголовком, описанием и буллетами.
 
 Верни ТОЛЬКО JSON:
 {"supplierQuestionsRu":["..."],"buyerBrief":"# ...","cargoBrief":"# ...","sampleChecklist":"# ...","seoText":"# ..."}
@@ -85,7 +104,7 @@ ${compact(input)}`;
 function reviewerPrompt(input: PackagePolishInput, candidate: PolishedProcurementPackage): string {
   return `Ты независимый редактор-контролёр качества закупочных пакетов. Оцени только качество и соответствие фактам; товар заново не выдумывай.
 
-Поставь каждому артефакту оценку 0–10. Оценка 8+ означает, что документ конкретен для данного объекта, даёт исполнителю следующие действия, не дублирует другие документы и не содержит воды. Для cargo особенно проверь практическую ценность для расчёта/перевозки; для SEO — поисковую естественность и отсутствие повторов; для чек-листа — наблюдаемость проверок.
+Поставь каждому артефакту оценку 0–10. Оценка 8+ означает, что документ конкретен для данного объекта, даёт исполнителю следующие действия, не дублирует другие документы и не содержит воды. Для cargo особенно проверь практическую ценность для расчёта/перевозки; для SEO — естественное поисковое название, разные смыслы в описании и буллетах, минимум 10 самостоятельных ключевых намерений и отсутствие повторов; для чек-листа — наблюдаемость проверок.
 
 Верни REVISE, если любой документ ниже 8 или средняя оценка ниже 8.2. В revisionBrief дай до 12 точных редакторских указаний без переписывания самого пакета. Не требуй несуществующих фактов как утверждений.
 

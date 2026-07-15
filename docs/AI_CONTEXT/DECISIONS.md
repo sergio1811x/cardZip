@@ -7,3 +7,4 @@
 - UI displays localized supplier types: seller → продавец, merchant → проверенный продавец, factory → фабрика, unknown → не указан.
 - Every analysis-scoped callback carries `analysisId`.
 - Procurement documents are improved as one profile-grounded package: writer → independent reviewer → at most one revision → deterministic validators. Do not add per-product or per-category prompt branches to this editorial layer.
+- The saved reviewed package is the canonical user-facing artifact for a completed job. Profile builders may regenerate only when that artifact is unavailable.

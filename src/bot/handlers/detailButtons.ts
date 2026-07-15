@@ -141,12 +141,19 @@ function buildMaterials(job: any): { product?: ProductWithContent; prefix: strin
   const imageUrls = (result?.imageUrls ?? (product as any)?.imageUrls ?? product?.images ?? []) as string[];
 
   if (product) ensureProductProcurementProfile(product, { sourceUrl: job.input_url });
-  const supplierText = product ? buildSupplierQuestionsText(product) : (generatedFiles?.supplierQuestions ?? generatedFiles?.supplierText ?? '');
-  const buyerText = product ? buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.briefText ?? '');
-  const cargoText = product ? buildCargoBriefFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.cargoText ?? '');
-  const sampleText = product ? buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.sampleChecklistText ?? generatedFiles?.sampleRecommendationText ?? generatedFiles?.riskChecklistText ?? '');
-  const seoText = product ? buildSeoDraftFromProfile(product, { sourceUrl: job.input_url }) : (generatedFiles?.seoText ?? '');
-  const readmeText = product ? buildReadmeText(product, imageUrls.length > 0) : 'CardZip — закупочный пакет';
+  // Step 5 persists the reviewed editorial package in generatedFiles. Prefer that
+  // package on every later download; rebuilding from the profile here used to
+  // silently discard the LLM editor's stronger copy and return the old template.
+  // A deterministic builder remains the backwards-compatible fallback for legacy
+  // jobs or a partially saved result.
+  const savedText = (...values: unknown[]): string =>
+    values.map((value) => String(value ?? '').trim()).find(Boolean) ?? '';
+  const supplierText = savedText(generatedFiles?.supplierQuestions, generatedFiles?.supplierText) || (product ? buildSupplierQuestionsText(product) : '');
+  const buyerText = savedText(generatedFiles?.briefText) || (product ? buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url }) : '');
+  const cargoText = savedText(generatedFiles?.cargoText) || (product ? buildCargoBriefFromProfile(product, { sourceUrl: job.input_url }) : '');
+  const sampleText = savedText(generatedFiles?.sampleChecklistText, generatedFiles?.sampleRecommendationText, generatedFiles?.riskChecklistText) || (product ? buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url }) : '');
+  const seoText = savedText(generatedFiles?.seoText) || (product ? buildSeoDraftFromProfile(product, { sourceUrl: job.input_url }) : '');
+  const readmeText = savedText(generatedFiles?.readmeText) || (product ? buildReadmeText(product, imageUrls.length > 0) : 'CardZip — закупочный пакет');
 
   let docs = [
     { filename: '01_Вопросы_поставщику.txt', text: String(supplierText), title: '💬 Вопросы поставщику — 01_Вопросы_поставщику.txt', description: 'Текст для чата 1688: цена, SKU, вес, упаковка, фото.' },
