@@ -22,10 +22,14 @@ import { buildProductFactSheet } from '../src/core/factSheet';
 import { generateSupplierQuestions, type GeneratorInput } from '../src/providers/supplierQuestionsGenerator';
 import { generateSeoCard } from '../src/providers/seoCardGenerator';
 import { generateCargoBrief } from '../src/providers/cargoBriefGenerator';
+import { polishProcurementPackage } from '../src/providers/procurementPackagePolisher';
 import { buildQualityMetricsPayload, summarizeQualityMetrics } from '../src/core/qualityMetrics';
 import type { ProductWithContent } from '../src/types';
 
-export const config = { maxDuration: 60 };
+// The package editor may make a writer, reviewer, and one revision call. Keep the
+// serverless budget above that bounded editorial loop; deterministic fallbacks
+// still ship when a provider is unavailable.
+export const config = { maxDuration: 300 };
 
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);
 
@@ -268,7 +272,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const gapPlan = result.gapPlan as { supplierQuestionsRu?: string[] } | null | undefined;
     // Cap at 10 (CLAUDE.md §10): the CN translator caps at 10, so a 11–12 RU list
     // would leave RU and CN mismatched in length and silently drop the whole CN.
-    const mergedSupplierQuestionsRu = uniqueQuestions([
+    let mergedSupplierQuestionsRu = uniqueQuestions([
       ...(supplierQuestionSet.ru ?? []),
       ...((gapPlan?.supplierQuestionsRu ?? []) as string[]),
     ])
@@ -280,11 +284,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // and CN stay length-aligned. Structural, not product/category specific.
       .filter((q) => !/[㐀-鿿]/.test(q))
       .slice(0, 10);
-    const translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch((e) => {
+    let translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch((e) => {
       console.warn('[cnQuestions] step5 translator threw:', e instanceof Error ? e.message : e);
       return supplierQuestionSet.cn;
     });
-    const formattedSupplierQuestions = formatSupplierQuestionsText(mergedSupplierQuestionsRu, translatedCn);
+    let formattedSupplierQuestions = formatSupplierQuestionsText(mergedSupplierQuestionsRu, translatedCn);
     // Pinpoints where CN dies: a length mismatch here (merged RU vs translated CN)
     // silently drops the whole Chinese version.
     console.log(
@@ -300,7 +304,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     product.supplierQuestionsRu = mergedSupplierQuestionsRu;
     product.supplierQuestionsCn = formattedSupplierQuestions.cn;
     product.supplierQuestionsCnValid = formattedSupplierQuestions.cnValid;
-    const profileForFiles = {
+    let profileForFiles = {
       ...profileValidation.fixedProfile,
       supplierQuestionsCn: formattedSupplierQuestions.cn,
       supplierQuestionsCnValid: formattedSupplierQuestions.cnValid,
@@ -316,6 +320,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let infographicText = '';
     let riskChecklistText = '';
     let sampleRecommendationText = sampleChecklistText;
+
+    // A single editorial LLM sees the complete package and the same authoritative
+    // profile that builders use. It upgrades the usefulness of every document as
+    // one coherent procurement workflow, then an independent reviewer requests at
+    // most one revision. This is intentionally product-driven: no category switch
+    // or per-product prompt branch decides what “good” means.
+    const polishedPackage = await polishProcurementPackage({
+      profile: profileForFiles,
+      baseline: {
+        supplierQuestionsRu: mergedSupplierQuestionsRu,
+        buyerBrief: briefText,
+        cargoBrief: cargoText,
+        sampleChecklist: sampleChecklistText,
+        seoText,
+      },
+    }).catch((error) => {
+      console.warn('[step5] package polisher failed; using deterministic package:', error instanceof Error ? error.message : error);
+      return null;
+    });
+    if (polishedPackage) {
+      const polishedQuestions = uniqueQuestions(polishedPackage.package.supplierQuestionsRu)
+        .filter((q) => !/[㐀-鿿]/.test(q))
+        .slice(0, 10);
+      if (polishedQuestions.length >= 6) {
+        mergedSupplierQuestionsRu = polishedQuestions;
+        translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch(() => []);
+        formattedSupplierQuestions = formatSupplierQuestionsText(mergedSupplierQuestionsRu, translatedCn);
+        product.supplierQuestionsRu = mergedSupplierQuestionsRu;
+        product.supplierQuestionsCn = formattedSupplierQuestions.cn;
+        product.supplierQuestionsCnValid = formattedSupplierQuestions.cnValid;
+        profileForFiles = {
+          ...profileValidation.fixedProfile,
+          supplierQuestionsCn: formattedSupplierQuestions.cn,
+          supplierQuestionsCnValid: formattedSupplierQuestions.cnValid,
+        };
+        product.productProcurementProfile = profileForFiles;
+        product.procurementProfile = profileForFiles;
+        supplierText = formattedSupplierQuestions.text;
+      }
+      briefText = polishedPackage.package.buyerBrief;
+      cargoText = polishedPackage.package.cargoBrief;
+      sampleChecklistText = polishedPackage.package.sampleChecklist;
+      seoText = polishedPackage.package.seoText;
+      sampleRecommendationText = sampleChecklistText;
+      console.log('[step5] package polisher review:', JSON.stringify(polishedPackage.review));
+    }
 
     progress?.step('validate');
     const docsValidation = validateDocuments([
@@ -596,6 +646,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         procurementProfile: profileForFiles,
         generatedFiles: { seoText, briefText, supplierQuestions: supplierText, supplierQuestionsCn: formattedSupplierQuestions.cn, supplierQuestionsCnValid: formattedSupplierQuestions.cnValid, cargoText, sampleChecklistText, readmeText },
         finalUserCard: finalText,
+        packagePolishReview: polishedPackage?.review ?? null,
         qaResult,
         consistencyAudit,
         qualityMetrics,
