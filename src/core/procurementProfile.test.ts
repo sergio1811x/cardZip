@@ -478,6 +478,62 @@ describe('broken SKU labels', () => {
   });
 });
 
+describe('LLM domain profile remains authoritative over category fallback', () => {
+  const product = () => baseProduct({
+    titleRu: 'Женские шорты',
+    productKind: 'clothing',
+    intelligence: {
+      productIdentity: { materials: ['нейлон', 'спандекс', '+'] },
+    },
+    productContext: {
+      procurementProfileDraft: {
+        domainRules: {
+          buyerMustCheck: [
+            'Подтвердите точные замеры выбранного SKU.',
+            'Пришлите реальные фото выбранного SKU.',
+          ],
+          mustCheckBeforeSample: ['Получите таблицу замеров выбранного SKU.'],
+          sampleMustCheck: ['Измерьте образец и сравните с таблицей поставщика.'],
+          cargoMustAsk: [
+            'Уточните вид индивидуальной упаковки и маркировку.',
+            'Уточните допустимое сжатие при перевозке.',
+          ],
+          seoForbiddenClaims: ['неподтверждённый эффект'],
+        },
+      },
+    },
+  });
+
+  it('does not merge broad-category checklist fragments into a substantive LLM profile', () => {
+    const profile = buildProductProcurementProfile(product());
+    expect(profile.procurement.mustCheckOnSample).toEqual([
+      'Измерьте образец и сравните с таблицей поставщика.',
+    ]);
+    expect(profile.identity.materials.join(' ')).not.toMatch(/\+/);
+  });
+
+  it('keeps cargo operational and removes product-QA requests from that role', () => {
+    const cargo = buildCargoBriefFromProfile(baseProduct({
+      ...product(),
+      productContext: {
+        procurementProfileDraft: {
+          domainRules: {
+            ...product().productContext.procurementProfileDraft.domainRules,
+            cargo: {
+              whatToRequest: [
+                'Проверьте усадку после стирки.',
+                'Уточните вид индивидуальной упаковки и маркировку.',
+              ],
+            },
+          },
+        },
+      },
+    }));
+    expect(cargo).toMatch(/маркировк/i);
+    expect(cargo).not.toMatch(/усадк.*стирк/i);
+  });
+});
+
 describe('cargo brief grounding', () => {
   it('renders the deterministic cargo profile instead of reusing a hallucinated polished cargo doc', () => {
     const cargo = buildCargoBriefFromProfile(

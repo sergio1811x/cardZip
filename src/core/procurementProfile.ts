@@ -1207,8 +1207,28 @@ function productSpecificRules(
   product: any,
   intelligence?: any,
 ): (typeof KIND_RULES)[ProductKind] {
-  const base = mergeRuleLists(KIND_RULES[kind] ?? KIND_RULES.generic_product, aiDomainRules(product));
-  if (kind === "clothing" && isBalaclavaProduct(product, intelligence)) {
+  const llmRules = aiDomainRules(product);
+  const hasLlmDomainProfile = [
+    llmRules.mustAskSupplier,
+    llmRules.beforeSample,
+    llmRules.onSample,
+    llmRules.cargo,
+    llmRules.redFlags,
+  ].some((items) => (items?.length ?? 0) >= 2);
+  // Static kind rules are degraded-mode fallback only. When Product Intelligence
+  // gave a concrete profile, merging category templates into it creates duplicate
+  // fragments and category assumptions that were never in this listing.
+  const emptyRules = {
+    mustAskSupplier: [], beforeSample: [], onSample: [], cargo: [], redFlags: [],
+    seoAllowed: [], seoForbidden: [], infographic: [], forbiddenCategoryWords: [],
+  } as (typeof KIND_RULES)[ProductKind];
+  const base = mergeRuleLists(
+    hasLlmDomainProfile
+      ? emptyRules
+      : (KIND_RULES[kind] ?? KIND_RULES.generic_product),
+    llmRules,
+  );
+  if (!hasLlmDomainProfile && kind === "clothing" && isBalaclavaProduct(product, intelligence)) {
     return {
       ...base,
       mustAskSupplier: [
@@ -2112,6 +2132,7 @@ function normalizeMaterials(items: string[], limit = 2): string[] {
       .map((p) => p.trim())
       .filter(Boolean);
     for (const part of parts) {
+      if (isPlaceholderValue(part)) continue;
       const low = part.toLowerCase();
       if (/塑料|苯乙烯|^abs$|abs[- ]?пластик|\babs\b/i.test(low)) {
         if (!absAdded) {
@@ -3422,11 +3443,12 @@ export function buildProductProcurementProfile(
     cargo: {
       mustAsk: uniq(
         [
-          // The LLM-derived critical spine is the authoritative priority order.
-          // Keep all cargo-relevant risk confirmations before generic logistics
-          // seeds, otherwise the 16-line cap can hide plug/docs/nameplate data.
+          // Cargo is an operational projection, not a second supplier checklist.
+          // It retains only cargo-relevant critical confirmations from the LLM
+          // profile (battery/compliance/handling), never the whole supplier list.
+          // Universal logistics fields follow below.
           ...criticalConfirmations.filter((q) => cargoRequestSlot(q) !== null),
-          ...mustAskSupplier.filter((q) => cargoRequestSlot(q) !== null),
+          ...rules.cargo.filter(isCargoOperationalRequest),
           "вес одной единицы с упаковкой",
           "габариты индивидуальной упаковки",
           "количество в транспортной коробке",
@@ -3436,7 +3458,6 @@ export function buildProductProcurementProfile(
           "фото транспортной коробки",
           "материал товара",
           "ограничения по перевозке",
-          ...rules.cargo,
           // Cross-cutting spine (plug/voltage/certs/battery/carton for a powered
           // device) — the items a forwarder needs. Sourced from the AUTHORITATIVE
           // assembled question list, filtered to the cargo-relevant slots: reading
@@ -4381,7 +4402,9 @@ export function buildCargoBriefFromProfile(
       // invented "ёмкость аккумулятора (мАч)" that then gets stripped anyway.
       dedupCargoRequestLines(
         stripUnconfirmedHazardAssertions(
-          [...(p.cargo.whatToRequest ?? []), ...p.cargo.mustAsk],
+          [...(p.cargo.whatToRequest ?? []), ...p.cargo.mustAsk].filter(
+            isCargoOperationalRequest,
+          ),
           p,
         ),
       ),
@@ -4572,6 +4595,17 @@ function cargoRequestSlot(line: string): string | null {
   if (/ограничени[яй]\s+по\s+перевозк|маршрут|таможн/i.test(low)) return "transport";
   if (/материал\s+товара|состав\s+груза/i.test(low)) return "material";
   return null;
+}
+
+// Freight requests must be actionable by a forwarder: packing, dimensions,
+// handling, marking, shipment limits, or transport evidence. This is a role
+// boundary, not a product/category vocabulary; QA such as wash tests, fit, or
+// performance belongs to supplier/buyer/sample artifacts instead.
+function isCargoOperationalRequest(line: string): boolean {
+  if (cargoRequestSlot(line) !== null) return true;
+  return /вес|габарит|размер[^\n]*(?:упаков|короб)|упаков|короб|картон|маркиров|фото|перевоз|достав|транспорт|груз|паллет|штабел|сжат|вакуум|влаг|фиксац|ограничен|защит[^\n]*(?:перевоз|упаков)/i.test(
+    clean(line),
+  );
 }
 
 function dedupCargoRequestLines(lines: string[]): string[] {
@@ -5194,6 +5228,39 @@ function openClaimFeatureWords(p: ProductProcurementProfile): string[] {
   );
 }
 
+// Word stems catch inflection, while whole unresolved phrases close the remaining
+// gap for short or multiword claims (for example a two- or three-letter activity).
+// The source is the canonical profile, so this never depends on product names.
+function uniquePublicationPhrases(p: ProductProcurementProfile): string[] {
+  const candidates = [
+    ...(p.identity.useCases ?? []),
+    ...(p.identity.claimedFeatures ?? []),
+    ...(p.identity.unconfirmedFeatures ?? []),
+    ...(p.procurement.mustAskSupplier ?? []),
+    ...(p.procurement.mustCheckBeforeSample ?? []),
+    ...(p.procurement.mustCheckOnSample ?? []),
+  ];
+  return uniq(
+    candidates
+      .map((item) => clean(item).toLowerCase().replace(/ё/g, "е"))
+      .filter((item) => item.length >= 3 && item.split(/\s+/).length <= 5),
+    80,
+  );
+}
+
+function containsPublicationPhrase(text: string, phrases: string[]): boolean {
+  const normalized = clean(text)
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  return phrases.some((phrase) =>
+    normalized.includes(
+      phrase.replace(/[^\p{L}\p{N}]+/gu, " ").trim(),
+    ),
+  );
+}
+
 /**
  * Projects the profile's fact confidence onto the SEO prose: contains materials to
  * the profile's set, hedges seller-claimed features, and — when the variant is
@@ -5340,7 +5407,7 @@ export function buildSeoDraftFromProfile(
   // "бесщёточный мотор") is no longer trusted for the title. safeSeoTitle still
   // sanitizes; packaging is stripped when the variant is unconfirmed.
   const structuredTitle = buildStructuredTitle(
-    p.identity.coreObject,
+    p.identity.shortTitle || p.identity.coreObject,
     // Use cases are useful procurement hypotheses, but not publication evidence
     // until the supplier/profile confirms them.
     [],
@@ -5452,7 +5519,42 @@ export function buildSeoDraftFromProfile(
   const rawChars =
     (prose?.characteristics?.length ? prose.characteristics : p.content.seoCharacteristics) ??
     [];
-  const llmChars = sanitizeSeoChars(rawChars, p);
+  const unresolvedPhrases = uniq(
+    [
+      ...uniquePublicationPhrases(p),
+      ...rawChars
+        .filter((c) => /заявл|уточн|подтверд/i.test(clean(c?.status)))
+        .flatMap((c) => [clean(c?.name), clean(c?.value), `${clean(c?.name)} ${clean(c?.value)}`]),
+    ].filter((value) => value.length >= 3),
+    100,
+  );
+  const unresolvedCharacteristicTokens = uniq(
+    rawChars
+      .filter(
+        (c) =>
+          /заявл|уточн|подтверд/i.test(clean(c?.status)) &&
+          !/^(тип|материал)/i.test(clean(c?.name)),
+      )
+      .flatMap((c) => clean(c?.value).split(/[^\p{L}\p{N}]+/u))
+      .map((token) => token.toLowerCase().replace(/ё/g, "е"))
+      .filter((token) => token.length >= 3),
+    80,
+  );
+  const llmChars = sanitizeSeoChars(
+    rawChars.filter((c) => {
+      const name = clean(c?.name);
+      // Type and material are structural card rows. Any other unresolved
+      // capability/usage row is withheld rather than made publishable by a
+      // "заявлено" status.
+      if (/^(тип|материал)/i.test(name)) return true;
+      if (/заявл|уточн|подтверд/i.test(clean(c?.status))) return false;
+      return !containsPublicationPhrase(
+        `${name} ${clean(c?.value)}`,
+        unresolvedPhrases,
+      );
+    }),
+    p,
+  );
   const characteristics = enforceProfileMaterialRow(
     llmChars.length ? llmChars : seoCharacteristics(p),
     p,
@@ -5499,6 +5601,21 @@ export function buildSeoDraftFromProfile(
   const featureWords = uniq(
     [
       ...claimedFeatureWords(p),
+      // An unconfirmed characteristic row is an explicit claim source even if
+      // an upstream model forgot to mirror it into identity.claimedFeatures.
+      ...rawChars
+        .filter(
+          (c) =>
+            /заявл|уточн|подтверд/i.test(clean(c?.status)) &&
+            !/^(тип|материал)/i.test(clean(c?.name)),
+        )
+        .flatMap((c) =>
+          `${clean(c?.name)} ${clean(c?.value)}`
+            .toLowerCase()
+            .replace(/ё/g, "е")
+            .split(/[^а-яёa-z0-9]+/i),
+        )
+        .filter((w) => w.length >= 3),
       ...characteristics
         .filter(
           (c) =>
@@ -5527,6 +5644,7 @@ export function buildSeoDraftFromProfile(
     SEARCH_MEASUREMENT_RE.test(t) ||
     hasUnsupportedSeoContext(t, p) ||
     hasForeignPackagingClaim(t, p) ||
+    containsPublicationPhrase(t, unresolvedPhrases) ||
     assertsClaimedFeatureWord(t, publicationBlockedWords);
   // Richest LLM title source (prose writer, else the seo-card generator), guarded.
   // A clean one wins outright; a dirty-but-rich one is SALVAGED (strip just the
@@ -5564,6 +5682,14 @@ export function buildSeoDraftFromProfile(
     !SEARCH_MEASUREMENT_RE.test(k) &&
     !hasUnsupportedSeoContext(k, p) &&
     !hasForeignPackagingClaim(k, p) &&
+    !containsPublicationPhrase(k, unresolvedPhrases) &&
+    !containsPublicationPhrase(k, unresolvedCharacteristicTokens) &&
+    !rawChars.some(
+      (c) =>
+        /заявл|уточн|подтверд/i.test(clean(c?.status)) &&
+        !/^(тип|материал)/i.test(clean(c?.name)) &&
+        containsPublicationPhrase(k, [clean(c?.value)]),
+    ) &&
     !assertsClaimedFeatureWord(k, featureWords) &&
     !assertsClaimedFeatureWord(k, openClaimFeatureWords(p)) &&
     (!skuRisky || !PACKAGING_RE.test(k));

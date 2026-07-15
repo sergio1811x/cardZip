@@ -170,13 +170,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Generate every user-facing document from the single ProductProcurementProfile.
     // No document builder is allowed to re-detect productKind or infer category from raw attributes.
     const supplierQuestionSet = buildSupplierQuestionsFromProfile(product, { sourceUrl: job.input_url });
-    const gapPlan = result.gapPlan as { supplierQuestionsRu?: string[] } | null | undefined;
-    // Cap at 10 (CLAUDE.md §10): the CN translator caps at 10, so a 11–12 RU list
-    // would leave RU and CN mismatched in length and silently drop the whole CN.
-    let mergedSupplierQuestionsRu = uniqueQuestions([
-      ...(supplierQuestionSet.ru ?? []),
-      ...((gapPlan?.supplierQuestionsRu ?? []) as string[]),
-    ])
+    // The canonical profile is the sole author of this sequence. `gapPlan` is an
+    // earlier lossy LLM artifact; merging it here could displace the mandatory
+    // SKU/price opener before translation and delivery.
+    let mergedSupplierQuestionsRu = uniqueQuestions(supplierQuestionSet.ru ?? [])
       // A RU question carrying raw CJK is a half-translated hybrid — the SKU
       // normalizer glues an untranslated variant name into Russian text
       // («Какой стандарт вилки у SKU «落日玫瑰单嘴+чёрныйрозовый皮盒»?»). It is

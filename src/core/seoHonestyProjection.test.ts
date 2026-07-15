@@ -237,6 +237,41 @@ describe("infographic ideas use the same evidence boundary as SEO copy", () => {
   });
 });
 
+describe("SEO profile phrases are publication gates", () => {
+  it("does not publish a short inferred use case or claimed attribute in title, rows, or keywords", () => {
+    const product = {
+      titleRu: "Женские спортивные шорты",
+      priceYuan: 18,
+      intelligence: {
+        productIdentity: {
+          coreObject: "женские спортивные шорты",
+          shortNameRu: "женские спортивные шорты",
+          materials: ["нейлон", "спандекс", "+"],
+          useCases: ["бег", "йога"],
+          claimedFeatures: ["высокая посадка", "эффект пуш-ап"],
+        },
+      },
+      productContext: {
+        procurementProfileDraft: {
+          domainRules: {
+            seo: {
+              title: "Женские спортивные шорты для бега с высокой посадкой",
+              keywords: ["шорты для бега", "шорты для йоги", "шорты пуш-ап"],
+              characteristics: [
+                { name: "Посадка", value: "высокая", status: "заявлено, уточнить" },
+                { name: "Особенности", value: "эффект пуш-ап", status: "заявлено, уточнить" },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const seo = buildSeoDraftFromProfile(product).toLowerCase();
+    expect(seo).not.toMatch(/для бега|для йоги|пуш-ап|высокая посадка/);
+    expect(seo).not.toMatch(/нейлон, спандекс, \+/);
+  });
+});
+
 describe("safety / effect claims", () => {
   const p = {
     identity: { materials: [], claimedFeatures: [], unconfirmedFeatures: [] },

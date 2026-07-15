@@ -104,8 +104,8 @@ interface ElimResponse {
     price?: number | string;
     quantity?: number;
     pic_url?: string;
-    // Elim returns the variant label under options[].value (颜色/规格), not `name`,
-    // and the image under img_url — support both shapes.
+    // Elim may return the variant label under options[].value (颜色/规格), not
+    // `name`, and the image under img_url — support both shapes.
     img_url?: string;
     options?: Array<{ name?: string; value?: string; valueEn?: string }>;
   }>;
@@ -311,27 +311,39 @@ function buildHumanSkuNames(count: number, attributes?: ElimResponse['attributes
   return Array.from({ length: count }, (_, i) => `Вариант ${i + 1}`);
 }
 
-// A variant's display label: prefer `name`, else join the options[].value labels
-// (Elim's shape — 颜色/规格). Chinese labels are translated later by safeTranslateSkuNames.
-function skuLabel(s: NonNullable<ElimResponse['skus']>[number]): string {
+// A variant's display label can arrive in two competing fields.  Some Elim
+// responses put only a separator or an internal property code in `name`, while
+// `options[].value` holds the actual colour/model/kit values.  Do not let that
+// transport placeholder become the user-visible SKU label.
+export function resolveSkuLabel(s: {
+  name?: string;
+  options?: Array<{ value?: string; valueEn?: string }>;
+}): string {
   const direct = cleanText(s.name);
-  if (direct) return direct;
   const opts = Array.isArray(s.options) ? s.options : [];
-  return opts
+  const optionLabel = opts
     .map((o) => cleanText(o?.value || o?.valueEn))
     .filter(Boolean)
     .join(' / ');
+  // A real label needs a visible word/code atom. A lone "+", "-" or similar
+  // delimiter is an API artifact, not a selectable option. Internal `id:id`
+  // codes are equally unsuitable when the API also supplied option values.
+  const directHasMeaning = /[A-Za-zА-Яа-яЁё0-9\u4e00-\u9fff]/.test(direct);
+  if (direct && directHasMeaning && !(optionLabel && isRawSkuCode(direct))) {
+    return direct;
+  }
+  return optionLabel || direct;
 }
 
 function buildSkus(skus: ElimResponse['skus'], attributes?: ElimResponse['attributes']): ProductSku[] {
-  const raw = (skus ?? []).filter((s) => skuLabel(s));
+  const raw = (skus ?? []).filter((s) => resolveSkuLabel(s));
   if (!raw.length) return [];
 
-  const allRawCodes = raw.every((s) => isRawSkuCode(skuLabel(s)));
+  const allRawCodes = raw.every((s) => isRawSkuCode(resolveSkuLabel(s)));
   const humanNames = allRawCodes ? buildHumanSkuNames(raw.length, attributes) : [];
 
   return raw.map((s, i) => {
-    const rawName = skuLabel(s);
+    const rawName = resolveSkuLabel(s);
 
     const name = allRawCodes
         ? humanNames[i] ?? `Вариант ${i + 1}`

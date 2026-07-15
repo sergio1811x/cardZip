@@ -17,6 +17,7 @@ export function isPlaceholderValue(value: unknown): boolean {
     .toLowerCase()
     .replace(/[«»"“”]/g, "");
   if (!v) return true;
+  if (!/[\p{L}\p{N}]/u.test(v)) return true;
   return PLACEHOLDERS.includes(v);
 }
 
