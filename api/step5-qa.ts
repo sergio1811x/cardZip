@@ -282,6 +282,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log(
       `[cnQuestions] step5: mergedRu=${mergedSupplierQuestionsRu.length} cn=${translatedCn.length} cnValid=${formattedSupplierQuestions.cnValid} setCn=${(supplierQuestionSet.cn ?? []).length} setCnValid=${supplierQuestionSet.cnValid}`,
     );
+    // Persist the RU/CN PAIR on the product itself. The ZIP and the "Вопросы
+    // поставщику" button RE-RENDER from `product` (buildSupplierQuestionsFromProfile)
+    // instead of reusing this text, and without supplierQuestionsRu the pair can't be
+    // matched: the freshly translated CN was discarded and the shipped file said
+    // "Китайская версия не сформирована" even though translation had succeeded
+    // (cnValid=true right here). product is persisted into result_json below, so every
+    // later re-render now reproduces the same bilingual pair.
+    product.supplierQuestionsRu = mergedSupplierQuestionsRu;
+    product.supplierQuestionsCn = formattedSupplierQuestions.cn;
+    product.supplierQuestionsCnValid = formattedSupplierQuestions.cnValid;
     const profileForFiles = {
       ...profileValidation.fixedProfile,
       supplierQuestionsCn: formattedSupplierQuestions.cn,
