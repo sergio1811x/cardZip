@@ -68,8 +68,11 @@ const SLOT_COVERAGE: Record<GapSlotId, RegExp> = {
   selected_variant: /как(ой|ому)\s+(именно\s+)?(вариант|sku|цвет|модел)|уточните\s+выбранн|какой\s+sku/i,
   kit_contents:
     /комплект|что\s+входит|входит\s+в\s+комплект|полная\s+комплектац|насадк|кабел|шнур|инструкц|кейс|футляр|чехол/i,
+  // A nameplate/marking photo is a COMPLIANCE ask, not proof of the product itself —
+  // "включая фото шильдика" must not count as covering real photos of the SKU, its
+  // full kit and packaging, or that ask silently disappears from the brief.
   product_photos:
-    /реальн[а-яё]*\s+фото|фото\s+(?:выбранного\s+sku|комплект|упаковк|шильдик|маркировк|товара)/i,
+    /реальн[а-яё]*\s+фото|фото\s+(?:выбранного\s+sku|комплект|упаковк|товара)/i,
   material:
     /состав(?!\s|$)|состав\s+(ткани|материал)|марк[аиуе]\s*(стали|металл|материал|пластик)|из\s+какого\s+материал|материал\s+(лезви|корпус|издели|товара|ручк|верх|подошв)/i,
   // The dimensions slot is only "covered" by a question asking for the full

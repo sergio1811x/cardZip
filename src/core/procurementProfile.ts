@@ -4257,8 +4257,10 @@ export function buildBuyerBriefFromProfile(
     // in full question form, via slot coverage. This replaces the old terse gap-slot
     // LABELS, which read as broken accusative fragments ("Точную комплектацию…",
     // "Точный материал…") and duplicated a lead question the overlap dedup missed.
-    // Threshold 0.5 collapses the remaining near-duplicates (a compound
-    // "вес, габариты и упаковка" question vs the engine's precise packed-weight ask).
+    // Dedup at the DEFAULT 0.6: a 0.5 threshold merged semantically different
+    // questions that only share interrogative filler ("Какой материал корпуса…" vs
+    // "Какой стандарт вилки…" overlap solely on какой/выбранного → 2/4 = 0.5), which
+    // silently dropped the material question from this section.
     ...list(
       dedupBulletsByOverlap(
         applyUniversalGaps(
@@ -4268,7 +4270,6 @@ export function buildBuyerBriefFromProfile(
           ]),
           gapContextFromProfile(p, product),
         ),
-        0.5,
       ),
       12,
     ),
