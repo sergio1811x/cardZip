@@ -271,7 +271,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const mergedSupplierQuestionsRu = uniqueQuestions([
       ...(supplierQuestionSet.ru ?? []),
       ...((gapPlan?.supplierQuestionsRu ?? []) as string[]),
-    ]).slice(0, 10);
+    ])
+      // A RU question carrying raw CJK is a half-translated hybrid — the SKU
+      // normalizer glues an untranslated variant name into Russian text
+      // («Какой стандарт вилки у SKU «落日玫瑰单嘴+чёрныйрозовый皮盒»?»). It is
+      // unusable for the buyer and always duplicates a clean question that asks
+      // the same thing about "выбранный SKU". Dropped BEFORE translation so RU
+      // and CN stay length-aligned. Structural, not product/category specific.
+      .filter((q) => !/[㐀-鿿]/.test(q))
+      .slice(0, 10);
     const translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch((e) => {
       console.warn('[cnQuestions] step5 translator threw:', e instanceof Error ? e.message : e);
       return supplierQuestionSet.cn;

@@ -304,7 +304,10 @@ export function applyUniversalGaps(
   );
   addIfUncovered(
     "material",
-    () => "Подтвердите точный материал и его марку (например, марку стали/пластика или состав ткани — не маркетинговое название).",
+    // No category examples here: "марку стали/пластика или состав ткани" leaked steel
+    // and fabric into a hair-dryer brief. The ask is the same for every product —
+    // the factual grade/composition of the parts, not a marketing name.
+    () => "Подтвердите точный материал и марку/состав основных частей товара — фактическую, а не маркетинговое название.",
   );
   addIfUncovered(
     "dimensions",

@@ -2947,12 +2947,12 @@ function buildLeadQuestions(
   pricing: ProductProcurementProfile["pricing"],
 ): string[] {
   const lead: string[] = [];
+  const priceText =
+    pricing.displayPriceText &&
+    !/не\s*указан|missing|^—$/i.test(pricing.displayPriceText.trim())
+      ? ` за ${clean(pricing.displayPriceText)}`
+      : "";
   if (!sku.selectedSkuReliable) {
-    const priceText =
-      pricing.displayPriceText &&
-      !/не\s*указан|missing|^—$/i.test(pricing.displayPriceText.trim())
-        ? ` за ${clean(pricing.displayPriceText)}`
-        : "";
     const variants = uniq(
       [...sku.packageTypes, ...sku.models, ...sku.colors]
         .map((v) => clean(v))
@@ -2964,6 +2964,16 @@ function buildLeadQuestions(
       : " Входит ли в комплект сам товар, а не только упаковка/аксессуар?";
     lead.push(
       `Какой именно SKU соответствует цене${priceText}?${variantHint}`,
+    );
+  } else if (sku.selectedSkuText) {
+    // A PICKED variant is not a SUPPLIER-CONFIRMED one. On 1688 the variant label is
+    // seller text, and a listing routinely mixes bundles that ship only the case /
+    // accessory without the product itself at a much lower price. Until the supplier
+    // states what is inside, "does this SKU contain the product?" stays the #1 gate —
+    // previously picking a variant (e.g. via the URL's SKU id) silenced it entirely.
+    // Category-agnostic: built from the profile's own SKU text and price.
+    lead.push(
+      `Подтвердите: в SKU «${clean(sku.selectedSkuText)}»${priceText} входит сам товар, а не только упаковка/футляр/аксессуар? Что именно в комплекте?`,
     );
   }
   return lead;
