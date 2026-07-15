@@ -75,20 +75,26 @@ const SLOT_COVERAGE: Record<GapSlotId, RegExp> = {
     /реальн[а-яё]*\s+фото|фото\s+(?:выбранного\s+sku|комплект|упаковк|товара)/i,
   material:
     /состав(?!\s|$)|состав\s+(ткани|материал)|марк[аиуе]\s*(стали|металл|материал|пластик)|из\s+какого\s+материал|материал\s+(лезви|корпус|издели|товара|ручк|верх|подошв)/i,
-  // The dimensions slot is only "covered" by a question asking for the full
-  // dimensional picture (2+ axes) or an explicit size grid — a single-axis ask
-  // (e.g. only spine thickness) does not close it.
-  dimensions:
-    /размерн(ая|ую|ой)\s+сетк|(длин[ауы]).*(ширин|высот|диаметр)|(ширин[ауы]).*(длин|высот|диаметр)|габаритн[а-яё]+\s+размер/i,
   electrical_specs:
     /тип\s+вилки|стандарт\s+вилки|напряжени|частот[аы]|маркировк[аи]\s+питания|шильдик/i,
   battery_status:
     /аккумулятор|батаре|полностью\s+проводн|встроенн[а-яё]*\s+батар/i,
   unit_weight_packed: /вес.*(с\s+упаковк|с\s+индивидуальн|брутто|в\s+упаковк)/i,
+  // package_dims and carton are matched BEFORE the generic product `dimensions`
+  // slot: slotOf() returns the FIRST match, and "габариты индивидуальной упаковки
+  // (длина × ширина × высота)" satisfies the dimensions pattern too. Ordered the
+  // other way round it both marked the PRODUCT-dimensions slot covered by a
+  // PACKAGE question (so the product-size ask vanished) and left package_dims
+  // looking uncovered (so a duplicate package ask was appended).
   package_dims:
     /габарит[а-яё]*\s*(индивидуальн|упаковк)|размер[а-яё]*\s*(индивидуальн|упаковк)/i,
   carton:
     /короб|карт[оа]н|транспортн[а-яё]*\s*(упаковк|коробк|короб)|шт[а-яё.]*\s*в\s*короб|в\s+коробке\s+штук/i,
+  // The dimensions slot is only "covered" by a question asking for the full
+  // dimensional picture (2+ axes) or an explicit size grid — a single-axis ask
+  // (e.g. only spine thickness) does not close it.
+  dimensions:
+    /размерн(ая|ую|ой)\s+сетк|(длин[ауы]).*(ширин|высот|диаметр)|(ширин[ауы]).*(длин|высот|диаметр)|габаритн[а-яё]+\s+размер/i,
   transport_constraint:
     /перевозк|защищен[оа].*(лезви|остри|стекл)|блистер|обрешёт|обрешет|герметичн|защит[аы].*(от\s+боя|при\s+транспорт)/i,
   compliance:

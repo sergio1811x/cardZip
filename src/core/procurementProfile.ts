@@ -3412,10 +3412,14 @@ export function buildProductProcurementProfile(
           "материал товара",
           "ограничения по перевозке",
           ...rules.cargo,
-          // Cross-cutting critical block (e.g. plug/voltage/certs/power-marking for a
-          // powered device) — the compliance items a forwarder needs. Same source as
-          // the other surfaces, so cargo can't silently drop the electrical profile.
-          ...criticalConfirmations,
+          // Cross-cutting spine (plug/voltage/certs/battery/carton for a powered
+          // device) — the items a forwarder needs. Sourced from the AUTHORITATIVE
+          // assembled question list, filtered to the cargo-relevant slots: reading
+          // criticalConfirmations alone collapsed this brief to the generic seeds on
+          // every roll where the model filled mustAskSupplier but left
+          // criticalConfirmations empty. The slot function decides relevance, so no
+          // product/category words are hardcoded here.
+          ...mustAskSupplier.filter((q) => cargoRequestSlot(q) !== null),
         ],
         16,
       ),
@@ -4276,12 +4280,21 @@ export function buildBuyerBriefFromProfile(
         applyUniversalGaps(
           normalizeFragmentLines([
             ...(p.procurement.leadQuestions ?? []),
-            ...(p.procurement.criticalConfirmations ?? []),
+            // Source the spine from the AUTHORITATIVE assembled list, not from
+            // criticalConfirmations alone: on any roll where the model fills
+            // mustAskSupplier but leaves criticalConfirmations empty, this section
+            // collapsed to nothing but generic gap-engine filler while 01_Вопросы
+            // carried the real domain questions. mustAskSupplier already contains
+            // criticalConfirmations, so nothing is lost when the model does fill it.
+            ...(p.procurement.mustAskSupplier ?? []),
           ]),
           gapContextFromProfile(p, product),
         ),
       ),
-      12,
+      // 14, not 12: mustAskSupplier already fills ~10 slots, and the universal basics
+      // the gap engine appends (material, overall dimensions, carton) must survive the
+      // cap rather than be truncated off the end.
+      14,
     ),
     "Полные формулировки вопросов — в файле 01_Вопросы_поставщику.txt.",
     "",
