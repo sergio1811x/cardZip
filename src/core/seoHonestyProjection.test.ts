@@ -120,6 +120,37 @@ describe("groundSeoToProfile — unresolved supplier facts", () => {
     expect(out.bullets.join("\n")).not.toMatch(/насадк|поток/i);
     expect(out.bullets.join("\n")).toMatch(/сушки волос/i);
   });
+
+  it("treats sample and cargo checks as unresolved publication claims too", () => {
+    const p = {
+      identity: {
+        coreObject: "товар для ухода",
+        shortTitle: "товар для ухода",
+        titleForReport: "Товар для ухода",
+        useCases: [],
+        materials: [],
+        claimedFeatures: [],
+        unconfirmedFeatures: [],
+      },
+      procurement: {
+        mustAskSupplier: [],
+        mustCheckBeforeSample: ["Подтвердите комплектацию и режимы работы выбранного SKU."],
+        mustCheckOnSample: ["Проверьте удобство удержания и защиту при хранении."],
+      },
+      cargo: { mustAsk: ["Уточните тип питания и комплектацию для перевозки."] },
+      dataQuality: { missingCriticalFields: [] },
+      sku: { selectedSkuReliable: true },
+    } as any;
+    const out = groundSeoToProfile(
+      p,
+      "Режимы работы помогают в уходе, а комплект защищён при хранении.",
+      ["Удобно лежит в руке и поставляется в полной комплектации."],
+    );
+
+    expect(`${out.description}\n${out.bullets.join("\n")}`).not.toMatch(
+      /режим|защищ|хранени|удобн|комплектац|питани/i,
+    );
+  });
 });
 
 describe("packaging guard — unconfirmed variant", () => {

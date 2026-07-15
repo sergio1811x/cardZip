@@ -340,31 +340,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return null;
     });
     if (polishedPackage) {
-      const polishedQuestions = uniqueQuestions(polishedPackage.package.supplierQuestionsRu)
-        .filter((q) => !/[㐀-鿿]/.test(q))
-        .slice(0, 10);
-      if (polishedQuestions.length >= 6) {
-        mergedSupplierQuestionsRu = polishedQuestions;
-        translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch(() => []);
-        formattedSupplierQuestions = formatSupplierQuestionsText(mergedSupplierQuestionsRu, translatedCn);
-        product.supplierQuestionsRu = mergedSupplierQuestionsRu;
-        product.supplierQuestionsCn = formattedSupplierQuestions.cn;
-        product.supplierQuestionsCnValid = formattedSupplierQuestions.cnValid;
-        profileForFiles = {
-          ...profileValidation.fixedProfile,
-          supplierQuestionsCn: formattedSupplierQuestions.cn,
-          supplierQuestionsCnValid: formattedSupplierQuestions.cnValid,
-        };
-        product.productProcurementProfile = profileForFiles;
-        product.procurementProfile = profileForFiles;
-        supplierText = formattedSupplierQuestions.text;
-      }
-      briefText = polishedPackage.package.buyerBrief;
-      // Cargo, sample and SEO are evidence-sensitive operational documents. The
-      // LLM has already contributed structured domain rules upstream; never ship
-      // its free-form version directly, because it can duplicate logistics slots
-      // or turn an open product question into an operational fact. Re-project from
-      // the authoritative profile instead.
+      // The package editor is a language candidate, not a second procurement
+      // source. Its short free-form questions can omit a critical confirmation
+      // already derived in the profile. Final operational artifacts must therefore
+      // be projections of the profile's complete critical spine.
+      briefText = buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url });
       cargoText = buildCargoBriefFromProfile(product, { sourceUrl: job.input_url });
       sampleChecklistText = buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url });
       // The LLM offers wording only. Route it through profile-grounding so an

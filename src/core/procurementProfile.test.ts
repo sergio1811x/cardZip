@@ -398,6 +398,14 @@ describe('criticalConfirmations — one domain spine fanned into every surface',
     expect(buyer).toMatch(/CE, RoHS, EAC|аккумулятор|шнур/i);
   });
 
+  it('keeps critical confirmations in the main report and cargo even when the supplier list is capped', () => {
+    const product = dryer();
+    const main = buildMainReportFromProfile(product);
+    const cargo = buildCargoBriefFromProfile(product);
+    expect(main).toMatch(/CE, RoHS, EAC|аккумулятор|шнур/i);
+    expect(cargo).toMatch(/CE, RoHS, EAC|аккумулятор|шнур/i);
+  });
+
   it('prefers assembled supplier questions over a weaker persisted RU/CN pair', () => {
     const product = baseProduct({
       titleRu: 'Фен для волос',

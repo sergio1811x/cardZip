@@ -25,4 +25,8 @@ LLM SEO is an untrusted language candidate: before delivery it is reprojected th
 
 Cargo and sample documents are also profile projections, not free-form LLM artifacts. The LLM may enrich structured domain rules, but the final operational document applies role separation and semantic slot deduplication from the profile.
 
+The profile's `criticalConfirmations` are a cross-artifact spine. A package editor cannot replace the profile-derived supplier questions or buyer brief; the main report, buyer brief and cargo brief preserve applicable critical confirmations even when a short supplier chat is capped. SEO treats every unresolved supplier, sample, or cargo check as negative evidence for publication across prose, keywords, and infographic ideas.
+
+SKU translation is also non-authoritative: a translated option must be informative and preserve the source option's compound structure. Empty, punctuation-only, truncated, or partially translated labels fall back to the supplier's original SKU instead of changing the user's selectable configuration.
+
 Update this file after a substantial architecture, workflow, priority, or known-state change. Do not record secrets or transient command output.

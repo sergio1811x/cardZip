@@ -438,7 +438,19 @@ export async function handleMaterialsZip(ctx: Context): Promise<void> {
   } else {
     zip.addFile('06_Фото_товара.zip', Buffer.from('Фото не удалось скачать автоматически. Используйте фото из карточки 1688 вручную.\n', 'utf-8'));
   }
-  await ctx.telegram.sendDocument(ctx.chat!.id, Input.fromBuffer(zip.toBuffer(), `${prefix}.zip`)).catch(() => {});
+  const sent = await ctx.telegram
+    .sendDocument(ctx.chat!.id, Input.fromBuffer(zip.toBuffer(), `${prefix}.zip`))
+    .then(() => true)
+    .catch(() => false);
+  if (!sent) {
+    await ctx.reply('Не удалось отправить ZIP. Попробуйте скачать его ещё раз.', materialsKeyboard(jobId)).catch(() => {});
+    return;
+  }
+
+  // The callback came from the package message. Remove its keyboard before
+  // posting the next-step keyboard below, otherwise Telegram shows two copies
+  // of the same actions under one completed download flow.
+  await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
   await ctx.reply('✅ ZIP отправлен. Начните с 01_Вопросы_поставщику.txt: отправьте вопросы поставщику, затем передайте ТЗ байеру и карго.', afterZipKeyboard(jobId)).catch(() => {});
 }
 

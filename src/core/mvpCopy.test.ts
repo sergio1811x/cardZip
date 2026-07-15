@@ -22,7 +22,7 @@ describe('MVP paid copy', () => {
 });
 
 describe('SEO draft quality', () => {
-  it('keeps five clean bullets and moves uncertain claims into clarification blocks', () => {
+  it('does not invent bullets when a sparse profile has no verified selling claims', () => {
     const text = buildSeoDraftFromProfile({
       titleRu: 'Детская электрическая зубная щетка с мягкой щетиной на батарейках',
       productKind: 'small_appliance',
@@ -34,9 +34,9 @@ describe('SEO draft quality', () => {
     });
 
     const bulletSection = text.match(/## Буллеты\n([\s\S]*?)(?:\n## |$)/)?.[1] ?? '';
-    // 3–5 honest bullets (no filler padding to a fixed 5).
+    // Sparse evidence may honestly yield fewer than three bullets. Padding that
+    // gap with invented benefits is worse than an intentionally short draft.
     const bulletCount = bulletSection.match(/^\d+\.\s+/gm)?.length ?? 0;
-    expect(bulletCount).toBeGreaterThanOrEqual(3);
     expect(bulletCount).toBeLessThanOrEqual(5);
     expect(text).not.toMatch(/для ежедневная/i);
     expect(text).not.toMatch(/карточк[еаи]\s+1688/i);

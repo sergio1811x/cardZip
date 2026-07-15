@@ -3419,6 +3419,7 @@ export function buildProductProcurementProfile(
           // every roll where the model filled mustAskSupplier but left
           // criticalConfirmations empty. The slot function decides relevance, so no
           // product/category words are hardcoded here.
+          ...criticalConfirmations.filter((q) => cargoRequestSlot(q) !== null),
           ...mustAskSupplier.filter((q) => cargoRequestSlot(q) !== null),
         ],
         16,
@@ -3855,8 +3856,17 @@ export function buildMainReportFromProfile(
     "<b>🟡 Статус: нужны данные поставщика</b>",
     "",
     "⚠️ <b>Что уточнить</b>",
-    ...p.procurement.mustAskSupplier
-      .slice(0, 5)
+    // The report is often the only artifact a user reads. Lead and critical
+    // confirmations precede the short supplier list, so a capped chat list cannot
+    // hide a cross-cutting risk discovered by product intelligence.
+    ...dedupBulletsByOverlap(
+      normalizeFragmentLines([
+        ...(p.procurement.leadQuestions ?? []),
+        ...(p.procurement.criticalConfirmations ?? []),
+        ...(p.procurement.mustAskSupplier ?? []),
+      ]),
+    )
+      .slice(0, 8)
       .map((q) => `• ${escapeHtml(q)}`),
     "",
     "💸 <b>Предварительная себестоимость</b>",
@@ -4280,12 +4290,9 @@ export function buildBuyerBriefFromProfile(
         applyUniversalGaps(
           normalizeFragmentLines([
             ...(p.procurement.leadQuestions ?? []),
-            // Source the spine from the AUTHORITATIVE assembled list, not from
-            // criticalConfirmations alone: on any roll where the model fills
-            // mustAskSupplier but leaves criticalConfirmations empty, this section
-            // collapsed to nothing but generic gap-engine filler while 01_Вопросы
-            // carried the real domain questions. mustAskSupplier already contains
-            // criticalConfirmations, so nothing is lost when the model does fill it.
+            // The short supplier list is intentionally capped; retain the full
+            // critical spine here because a buyer needs every distinct risk slot.
+            ...(p.procurement.criticalConfirmations ?? []),
             ...(p.procurement.mustAskSupplier ?? []),
           ]),
           gapContextFromProfile(p, product),
@@ -5143,6 +5150,10 @@ function openClaimFeatureWords(p: ProductProcurementProfile): string[] {
     ...(procurement.leadQuestions ?? []),
     ...(procurement.criticalConfirmations ?? []),
     ...(procurement.mustAskSupplier ?? []),
+    ...(procurement.mustCheckBeforeSample ?? []),
+    ...(procurement.mustCheckOnSample ?? []),
+    ...(p.cargo?.mustAsk ?? []),
+    ...(p.cargo?.whatToRequest ?? []),
     ...(dataQuality.missingCriticalFields ?? []),
   ];
   return uniq(
@@ -5522,6 +5533,7 @@ export function buildSeoDraftFromProfile(
     !hasUnsupportedSeoContext(k, p) &&
     !hasForeignPackagingClaim(k, p) &&
     !assertsClaimedFeatureWord(k, featureWords) &&
+    !assertsClaimedFeatureWord(k, openClaimFeatureWords(p)) &&
     (!skuRisky || !PACKAGING_RE.test(k));
   const filteredKeywords = filterDangerousList(rawKeywords, p).filter(keywordAllowed);
   const fallbackKeywords = filterDangerousList(keywordFallback, p).filter(keywordAllowed);
@@ -5604,7 +5616,8 @@ export function buildSeoDraftFromProfile(
         (idea) =>
           p.sku.selectedSkuReliable ||
           (!PACKAGING_RE.test(String(idea)) &&
-            !assertsClaimedFeatureWord(String(idea), featureWords)),
+            !assertsClaimedFeatureWord(String(idea), featureWords) &&
+            !assertsClaimedFeatureWord(String(idea), openClaimFeatureWords(p))),
       )
       .slice(0, 6)
       .map((idea, i) => `${i + 1}. ${idea}`),

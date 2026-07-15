@@ -49,6 +49,48 @@ export function hasChinese(text: string): boolean {
   return /[一-鿿]/.test(text);
 }
 
+const RU_COLOR_WORD = "чёрный|черный|белый|красный|синий|зелёный|зеленый|жёлтый|желтый|розовый|фиолетовый|серый|коричневый|оранжевый|бежевый|голубой|тёмно-синий|темно-синий|тёмно-серый|темно-серый|бордовый|серебристый|золотистый|хаки|фуксия";
+
+function separateAdjacentColorWords(text: string): string {
+  // Dictionary substitutions may turn 蓝红 into "синийкрасный". A separator is
+  // presentation only; it restores two visible option values without guessing
+  // what either value means for a particular product.
+  const nextColor = new RegExp(`(${RU_COLOR_WORD})(?=${RU_COLOR_WORD})`, 'gi');
+  return text.replace(nextColor, '$1 · ');
+}
+
+/**
+ * Translation is an aid for choosing a variant, not a source of SKU facts.
+ * A model occasionally returns a fragment (for example just "+") or drops
+ * one side of a compound option. Never replace the supplier's label with such
+ * a result: the user could then select a different configuration and price.
+ */
+export function keepUsableSkuTranslations(sourceNames: string[], translatedNames: string[]): string[] {
+  return sourceNames.map((source, index) => {
+    const original = String(source ?? '').trim();
+    const translated = separateAdjacentColorWords(String(translatedNames[index] ?? ''))
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!original || !translated) return original;
+    if (hasChinese(translated)) return original;
+
+    // A SKU label must contain a meaningful atom, not only separators/punctuation.
+    const atoms = translated.match(/[A-Za-zА-Яа-яЁё0-9]+/g) ?? [];
+    if (!atoms.length || atoms.every((atom) => atom.length < 2 && !/^\d+$/.test(atom))) {
+      return original;
+    }
+
+    // Preserve the shape of a compound option. It is how 1688 distinguishes
+    // colour/model/kit combinations even when their words are otherwise similar.
+    const sourceParts = original.split(/[+/／|·]/).map((part) => part.trim()).filter(Boolean);
+    const translatedParts = translated.split(/[+/／|·,;]/).map((part) => part.trim()).filter(Boolean);
+    if (sourceParts.length > 1 && translatedParts.length < sourceParts.length) return original;
+
+    return translated;
+  });
+}
+
 
 function tryParseStringArray(raw: string): string[] | null {
   const cleaned = String(raw ?? '')
@@ -77,7 +119,7 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
   // First try local dictionary
   const localTranslated = names.map(translateSkuName);
   const stillChinese = localTranslated.filter(hasChinese);
-  if (stillChinese.length === 0) return localTranslated;
+  if (stillChinese.length === 0) return keepUsableSkuTranslations(names, localTranslated);
 
   // LLM fallback for remaining Chinese names
   const apiKey = process.env.OPENROUTER_API_KEY;
@@ -88,6 +130,7 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
 - переводи смысл цвета/размера на русский;
 - артикулы, коды моделей и стандарты НЕ искажай: 美规→US, 欧规→EU, 英规→UK, 日规→JP, 韩规→KR, 澳规→AU, 国标→CN;
 - сохраняй числа и единицы (10kg, 5L, 300ml) как есть;
+- не сокращай составной вариант: сохрани каждую часть, разделённую в оригинале +, /, · или |;
 - ровно один перевод на каждый вход, тот же порядок.
 Верни только JSON-массив строк, без markdown.
 
@@ -117,19 +160,21 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
 
       if (!translated || translated.length !== stillChinese.length) continue;
 
-      // Merge LLM translations back
+      // Merge LLM translations back, but keep the original supplier option if
+      // the model produced an incomplete/meaningless label.
       let llmIdx = 0;
-      return localTranslated.map(name => {
+      const merged = localTranslated.map(name => {
         if (hasChinese(name) && llmIdx < translated.length) {
           return translated[llmIdx++];
         }
         return name;
       });
+      return keepUsableSkuTranslations(names, merged);
     } catch (e) {
       console.log(`[cnTranslate] SKU ${model} skipped:`, (e as Error).message);
     }
   }
-  return localTranslated;
+  return keepUsableSkuTranslations(names, localTranslated);
 }
 
 // ─── RU→CN faithful translation of supplier questions ──────────────────────
