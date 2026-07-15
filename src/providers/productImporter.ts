@@ -341,6 +341,7 @@ function buildSkus(skus: ElimResponse['skus'], attributes?: ElimResponse['attrib
 
     return {
       name,
+      sourceName: rawName,
       price: positiveNumber(s.price),
       stock: s.quantity,
       image: s.pic_url || s.img_url,
@@ -441,6 +442,7 @@ async function safeTranslateSkuNames(product: RawProduct1688): Promise<RawProduc
 
   try {
     const names = product.skus.map((s) => s.name);
+    product.skus.forEach((sku) => { sku.sourceName = sku.sourceName || sku.name; });
     const shouldTranslate = names.some((name) => hasChinese(name));
 
     if (!shouldTranslate) return product;
@@ -453,6 +455,7 @@ async function safeTranslateSkuNames(product: RawProduct1688): Promise<RawProduc
 
     if (product.normalized1688?.skuVariants) {
       product.normalized1688.skuVariants.forEach((s, i) => {
+        s.sourceName = s.sourceName || s.name;
         if (translated[i]) s.name = translated[i];
       });
     }

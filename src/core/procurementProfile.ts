@@ -3402,6 +3402,11 @@ export function buildProductProcurementProfile(
     cargo: {
       mustAsk: uniq(
         [
+          // The LLM-derived critical spine is the authoritative priority order.
+          // Keep all cargo-relevant risk confirmations before generic logistics
+          // seeds, otherwise the 16-line cap can hide plug/docs/nameplate data.
+          ...criticalConfirmations.filter((q) => cargoRequestSlot(q) !== null),
+          ...mustAskSupplier.filter((q) => cargoRequestSlot(q) !== null),
           "вес одной единицы с упаковкой",
           "габариты индивидуальной упаковки",
           "количество в транспортной коробке",
@@ -3419,8 +3424,6 @@ export function buildProductProcurementProfile(
           // every roll where the model filled mustAskSupplier but left
           // criticalConfirmations empty. The slot function decides relevance, so no
           // product/category words are hardcoded here.
-          ...criticalConfirmations.filter((q) => cargoRequestSlot(q) !== null),
-          ...mustAskSupplier.filter((q) => cargoRequestSlot(q) !== null),
         ],
         16,
       ),
@@ -5140,12 +5143,14 @@ function openClaimFeatureWords(p: ProductProcurementProfile): string[] {
       identity.coreObject,
       identity.shortTitle,
       identity.titleForReport,
-      ...(identity.useCases ?? []),
     ]
       .flatMap((value) => clean(value).toLowerCase().replace(/ё/g, "е").split(/[^а-яёa-z0-9]+/i))
       .filter((word) => word.length >= 4),
   );
   const unresolved = [
+    // Use cases are model inferences unless the source has explicitly confirmed
+    // them. They may guide procurement, but are not publication evidence.
+    ...(identity.useCases ?? []),
     ...(identity.unconfirmedFeatures ?? []),
     ...(procurement.leadQuestions ?? []),
     ...(procurement.criticalConfirmations ?? []),
@@ -5316,7 +5321,9 @@ export function buildSeoDraftFromProfile(
   // sanitizes; packaging is stripped when the variant is unconfirmed.
   const structuredTitle = buildStructuredTitle(
     p.identity.coreObject,
-    p.identity.useCases,
+    // Use cases are useful procurement hypotheses, but not publication evidence
+    // until the supplier/profile confirms them.
+    [],
     [...p.identity.claimedFeatures, ...p.identity.unconfirmedFeatures],
   );
   const guardSeoTitle = (candidate: string): string => {
@@ -5361,6 +5368,7 @@ export function buildSeoDraftFromProfile(
     !hasUnsupportedSeoContext(preferredTitle, p) &&
     !hasForeignPackagingClaim(preferredTitle, p) &&
     !assertsClaimedFeatureWord(preferredTitle, claimedFeatureWords(p)) &&
+    !assertsClaimedFeatureWord(preferredTitle, openClaimFeatureWords(p)) &&
     preferredTitleWords.some((word) => titleAnchorWords.includes(word));
   let title = preferredTitleAllowed ? preferredTitle : fallbackTitle;
   const useCases = p.identity.useCases.length
@@ -5487,6 +5495,10 @@ export function buildSeoDraftFromProfile(
     ],
     80,
   ).filter((w) => !objectIdentityWords.has(w));
+  const publicationBlockedWords = uniq(
+    [...featureWords, ...openClaimFeatureWords(p)],
+    100,
+  );
   const titleIsBad = (t: string) =>
     // Structural breakage: a dangling preposition before a separator ("Фен без —")
     // or a trailing separator. (No \b — ASCII-only, vacuous on Cyrillic.)
@@ -5495,7 +5507,7 @@ export function buildSeoDraftFromProfile(
     SEARCH_MEASUREMENT_RE.test(t) ||
     hasUnsupportedSeoContext(t, p) ||
     hasForeignPackagingClaim(t, p) ||
-    assertsClaimedFeatureWord(t, featureWords);
+    assertsClaimedFeatureWord(t, publicationBlockedWords);
   // Richest LLM title source (prose writer, else the seo-card generator), guarded.
   // A clean one wins outright; a dirty-but-rich one is SALVAGED (strip just the
   // offending tokens) rather than dropped to the thin structured fallback. This is
@@ -5509,7 +5521,7 @@ export function buildSeoDraftFromProfile(
   if (rawLlmTitle && !titleIsBad(rawLlmTitle)) {
     title = rawLlmTitle;
   } else if (rawLlmTitle) {
-    const salvaged = salvageSeoTitle(rawLlmTitle, p, featureWords);
+    const salvaged = salvageSeoTitle(rawLlmTitle, p, publicationBlockedWords);
     const objWords = clean(p.identity.coreObject).split(/\s+/).filter(Boolean).length;
     const salvagedWords = salvaged.split(/\s+/).filter(Boolean).length;
     title =
@@ -5738,21 +5750,14 @@ function seoDescription(
     p.identity.shortTitle,
     title,
   );
-  const useCases = p.identity.useCases.length
-    ? p.identity.useCases.slice(0, 3).join(", ")
-    : "";
   const materialPart =
     p.identity.materials.length &&
     p.identity.materials[0] !== "уточнить у поставщика"
       ? ` Материал: ${p.identity.materials.slice(0, 2).join(", ")}.`
       : "";
-  // Honest-generic floor (used only when the LLM gave no description): state the
-  // object and its use cases if known, otherwise openly defer to the supplier —
-  // never the filler "подходит для повседневного использования", never category
-  // guesses. The real, product-specific description comes from the LLM above.
-  return useCases
-    ? `${capitalizeRu(objectName)} — ${useCases}.${materialPart}`
-    : `${capitalizeRu(objectName)}.${materialPart}`.trim();
+  // Honest-generic floor: use cases are not asserted merely because an LLM inferred
+  // them from the product type. The real description may add only confirmed claims.
+  return `${capitalizeRu(objectName)}.${materialPart}`.trim();
 }
 
 function capitalizeRu(s: string): string {

@@ -1,10 +1,10 @@
 import type { RawProductForCanonicalizer } from './productCanonicalizer';
 import { buildCanonicalizerPolicyInput } from './canonicalizerPolicyBuilder';
 
-const POLICY_MODELS = [
-  'google/gemini-3.1-flash-lite',
+export const POLICY_MODELS = [
   'openai/gpt-5-mini',
   'qwen/qwen3.7-plus',
+  'google/gemini-3.1-flash-lite',
 ];
 
 export interface CanonicalizerPolicyLlmResult {

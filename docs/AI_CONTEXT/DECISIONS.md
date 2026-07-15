@@ -15,3 +15,11 @@
 Free-form package editing may improve wording but must not replace profile projections for operational artifacts. `criticalConfirmations` are generated once from the LLM's structured product-nature analysis and are then fanned into the user-facing report, supplier workflow, buyer brief, and cargo requests; a capped chat list cannot erase them.
 
 For SEO, any detail still requested from a supplier, sample, or cargo is publication-negative evidence. It may be displayed as an item to clarify, but cannot appear as a consumer claim, keyword, or infographic idea until the profile is refreshed with confirmation.
+
+# One fact-authoring LLM boundary
+
+Product Intelligence/canonicalization is the only LLM stage allowed to author the structured procurement profile. Step-5 focused question, cargo, SEO, and package-writing calls are not run as fact sources because their abbreviated inputs can overwrite or contradict the profile. They may be restored only as read-only evaluators with an explicit, validated edit contract.
+
+# Structured role model order
+
+Classification, SKU resolution, and policy guard accept the first response that passes their JSON parser. Their default order is therefore capability-first: GPT-5 mini, Qwen 3.7 Plus, then Gemini 3.1 Flash-Lite as a fast availability fallback. The vision canonicalizer remains GPT-5.4 mini, Gemini 3.1 Flash-Lite, Gemini 2.5 Flash. Deployment may override a chain only through an explicit, reviewed environment setting.

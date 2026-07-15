@@ -435,6 +435,21 @@ describe('criticalConfirmations — one domain spine fanned into every surface',
   });
 });
 
+describe('broken SKU labels', () => {
+  it('never interpolates a punctuation-only SKU into supplier-facing text', () => {
+    const product = baseProduct({
+      selectedSkuName: ' + ',
+      skus: [{ name: ' + ', price: 64.55 }],
+    });
+    const profile = buildProductProcurementProfile(product);
+    const questions = buildSupplierQuestionsFromProfile(product).ru.join('\n');
+    const buyer = buildBuyerBriefFromProfile(product);
+
+    expect(profile.sku.selectedSkuText).not.toMatch(/\+/);
+    expect(`${questions}\n${buyer}`).not.toMatch(/SKU\s*[«"]?\s*\+\s*[»"]?/i);
+  });
+});
+
 describe('cargo brief grounding', () => {
   it('renders the deterministic cargo profile instead of reusing a hallucinated polished cargo doc', () => {
     const cargo = buildCargoBriefFromProfile(

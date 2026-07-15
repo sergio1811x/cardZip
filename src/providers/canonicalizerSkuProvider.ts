@@ -1,10 +1,10 @@
 import type { RawProductForCanonicalizer } from './productCanonicalizer';
 import { buildCanonicalizerSkuResolutionInput } from './canonicalizerSkuResolver';
 
-const SKU_MODELS = [
-  'google/gemini-3.1-flash-lite',
+export const SKU_MODELS = [
   'openai/gpt-5-mini',
   'qwen/qwen3.7-plus',
+  'google/gemini-3.1-flash-lite',
 ];
 
 export interface CanonicalizerSkuLlmResult {

@@ -118,7 +118,7 @@ describe("groundSeoToProfile — unresolved supplier facts", () => {
 
     expect(out.description).not.toMatch(/аккумулятор|защит[а-яё]*\s+от\s+перегрев/i);
     expect(out.bullets.join("\n")).not.toMatch(/насадк|поток/i);
-    expect(out.bullets.join("\n")).toMatch(/сушки волос/i);
+    expect(out.bullets).toHaveLength(0);
   });
 
   it("treats sample and cargo checks as unresolved publication claims too", () => {

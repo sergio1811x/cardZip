@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keepUsableSkuTranslations } from './cnTranslate';
+import { keepUsableSkuTranslations, skuDisplayLabel } from './cnTranslate';
 
 describe('SKU translation safety', () => {
   it('keeps the supplier label when an LLM returns only a separator', () => {
@@ -20,5 +20,14 @@ describe('SKU translation safety', () => {
   it('separates adjacent colour values produced by dictionary substitution', () => {
     expect(keepUsableSkuTranslations(['蓝红'], ['синийкрасный']))
       .toEqual(['синий · красный']);
+  });
+
+  it('uses the supplier SKU instead of a punctuation-only translated button label', () => {
+    expect(skuDisplayLabel('+', '落日玫瑰单嘴+黑粉皮盒', 1))
+      .toBe('落日玫瑰单嘴+黑粉皮盒');
+  });
+
+  it('does not hide a meaningful supplier label behind a generated variant placeholder', () => {
+    expect(skuDisplayLabel('Вариант 3', '黑色+欧规', 2)).toBe('黑色+欧规');
   });
 });

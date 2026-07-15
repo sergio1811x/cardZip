@@ -101,6 +101,7 @@ export async function fetchFromRapidApi(productId: string): Promise<RawProduct16
 
     const skusRaw: ProductSku[] = skuBase.map((s) => ({
       name: resolveSkuName(s.propMap ?? ''),
+      sourceName: resolveSkuName(s.propMap ?? ''),
       price: s.promotionPrice ? parseFloat(s.promotionPrice) : s.price ? parseFloat(s.price) : undefined,
       stock: s.quantity ? parseInt(s.quantity) : undefined,
     })).filter((s) => s.name);

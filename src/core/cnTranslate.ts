@@ -91,6 +91,29 @@ export function keepUsableSkuTranslations(sourceNames: string[], translatedNames
   });
 }
 
+/**
+ * A Telegram SKU button must identify a real option. Prefer a readable
+ * translation, but show the supplier label rather than a punctuation fragment
+ * or generated placeholder when translation did not preserve the option.
+ */
+export function skuDisplayLabel(displayName: unknown, sourceName: unknown, index: number): string {
+  const cleanLabel = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const isRawCode = (value: string) => /^\d+:\d+(;\d+:\d+)*$/.test(value);
+  const meaningful = (value: string) => {
+    const atoms = value.match(/[A-Za-zА-Яа-яЁё0-9\u4e00-\u9fff]+/g) ?? [];
+    return atoms.some((atom) => atom.length >= 2 || /^\d+$/.test(atom));
+  };
+  const display = cleanLabel(displayName);
+  const source = cleanLabel(sourceName);
+  const isPlaceholder = /^вариант\s+\d+$/i.test(display);
+
+  if (meaningful(display) && !isRawCode(display) && !(isPlaceholder && meaningful(source) && !isRawCode(source))) {
+    return display;
+  }
+  if (meaningful(source) && !isRawCode(source)) return source;
+  return `Вариант ${index + 1}`;
+}
+
 
 function tryParseStringArray(raw: string): string[] | null {
   const cleaned = String(raw ?? '')
@@ -123,7 +146,7 @@ export async function translateSkuNamesViaLlm(names: string[]): Promise<string[]
 
   // LLM fallback for remaining Chinese names
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) return localTranslated;
+  if (!apiKey) return keepUsableSkuTranslations(names, localTranslated);
 
   const prompt = `Ты переводчик SKU-вариантов товаров с 1688 (CN→RU). Это цвета, размеры, модели, комплектации или их комбинации.
 Правила:

@@ -15,6 +15,8 @@ export interface ProductAttribute {
 
 export interface ProductSku {
   name: string;
+  /** Supplier-provided SKU label, retained when a Russian display translation is unsafe. */
+  sourceName?: string;
   price?: number;
   stock?: number;
   image?: string;
@@ -24,6 +26,7 @@ export type QuoteType = 'direct' | 'by_sku' | 'by_volume' | 'unknown';
 
 export interface NormalizedSkuVariant {
   name: string;
+  sourceName?: string;
   price?: number;
   stock?: number;
   image?: string;

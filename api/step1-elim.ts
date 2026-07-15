@@ -4,6 +4,7 @@ import { Telegraf } from 'telegraf';
 import { supabase } from '../src/db/supabase';
 import { productImporter } from '../src/providers/productImporter';
 import { normalizeCnText } from '../src/core/cnNormalize';
+import { skuDisplayLabel } from '../src/core/cnTranslate';
 import { createStepProgress } from '../src/core/progress';
 import { triggerPipelineStep } from '../src/lib/pipelineStep';
 import { acquireStepLock } from '../src/lib/stepLock';
@@ -92,8 +93,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (needSkuChoice && job.tg_message_id) {
       const { Markup } = require('telegraf');
       const buttons = skus.slice(0, 8).map((sku: any, i: number) => {
-        // Убираем китайские символы из названия для кнопки
-        let label = (sku.name ?? `Вариант ${i + 1}`).slice(0, 28);
+        const label = skuDisplayLabel(sku.name, sku.sourceName, i).slice(0, 28);
         const priceLabel = sku.price ? ` · ${sku.price} ¥` : '';
         return [Markup.button.callback(`${label}${priceLabel}`, `sku_${i}_${jobId}`)];
       });
