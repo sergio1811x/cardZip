@@ -8,7 +8,7 @@ import { trackQualityMetrics } from '../src/services/analyticsService';
 import { buildMainMessage, buildSafeSummary } from '../src/core/messageBuilder';
 
 import { buildDecisionContext } from '../src/core/decisionLayer';
-import { ensureProductProcurementProfile, buildSupplierQuestionsFromProfile, translateSupplierQuestionsRuToCn, formatSupplierQuestionsText, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildReadmeFromProfile, validateDocuments, validateMainReport, validateProfile, repairProcurementTexts } from '../src/core/procurementProfile';
+import { ensureProductProcurementProfile, buildSupplierQuestionsFromProfile, translateSupplierQuestionsRuToCn, formatSupplierQuestionsText, buildBuyerBriefFromProfile, buildCargoBriefFromProfile, buildSampleChecklistFromProfile, buildSeoDraftFromProfile, buildGroundedSeoDraftFromCandidate, buildReadmeFromProfile, validateDocuments, validateMainReport, validateProfile, repairProcurementTexts } from '../src/core/procurementProfile';
 import { validateProcurementResult } from '../src/core/validateProcurementResult';
 import { upsertProduct } from '../src/db/queries/products';
 import { buildCacheKey } from '../src/lib/cache';
@@ -360,9 +360,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         supplierText = formattedSupplierQuestions.text;
       }
       briefText = polishedPackage.package.buyerBrief;
-      cargoText = polishedPackage.package.cargoBrief;
-      sampleChecklistText = polishedPackage.package.sampleChecklist;
-      seoText = polishedPackage.package.seoText;
+      // Cargo, sample and SEO are evidence-sensitive operational documents. The
+      // LLM has already contributed structured domain rules upstream; never ship
+      // its free-form version directly, because it can duplicate logistics slots
+      // or turn an open product question into an operational fact. Re-project from
+      // the authoritative profile instead.
+      cargoText = buildCargoBriefFromProfile(product, { sourceUrl: job.input_url });
+      sampleChecklistText = buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url });
+      // The LLM offers wording only. Route it through profile-grounding so an
+      // unresolved supplier question can never reappear as an SEO fact.
+      seoText = buildGroundedSeoDraftFromCandidate(
+        product,
+        polishedPackage.package.seoText,
+        { sourceUrl: job.input_url },
+      );
       sampleRecommendationText = sampleChecklistText;
       console.log('[step5] package polisher review:', JSON.stringify(polishedPackage.review));
     }

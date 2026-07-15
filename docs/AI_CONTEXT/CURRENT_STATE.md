@@ -21,4 +21,8 @@ Step 5 now uses a package-level LLM editor after the factual profile and determi
 
 Downloads must use the reviewed `generatedFiles` saved by Step 5. Rebuilding documents from the profile at download time loses the editorial pass and is only a fallback for legacy or partial results. SEO uses structured JSON output, evidence-first copy, and no generic filler padding.
 
+LLM SEO is an untrusted language candidate: before delivery it is reprojected through `ProductProcurementProfile`. Product-specific terms in unresolved supplier questions are a deny-source for sales claims, so an open question about a capability, inclusion, power source, or mode cannot become an assertion in title, prose, bullets, keywords, or infographic ideas.
+
+Cargo and sample documents are also profile projections, not free-form LLM artifacts. The LLM may enrich structured domain rules, but the final operational document applies role separation and semantic slot deduplication from the profile.
+
 Update this file after a substantial architecture, workflow, priority, or known-state change. Do not record secrets or transient command output.

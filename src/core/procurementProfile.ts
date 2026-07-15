@@ -5109,6 +5109,55 @@ export function assertsClaimedFeatureWord(text: string, featureWords: string[]):
   return words.some((w) => featureWords.some((fw) => shares(w, fw)));
 }
 
+// Terms that merely express procurement workflow, not a product capability. This
+// is a language-level filter: it lets the profile turn any unresolved supplier
+// question into a claim firewall without enumerating products or categories.
+const OPEN_CLAIM_STOP_WORDS = new Set([
+  "подтвердите", "укажите", "уточните", "пришлите", "пожалуйста", "выбранного",
+  "выбранный", "поставщика", "карточки", "товара", "изделия", "фактический",
+  "фактическая", "точный", "точная", "точные", "какой", "какая", "какие",
+  "есть", "ли", "или", "также", "одной", "один", "сам", "самого",
+  "упаковкой", "упаковки", "фото", "видео", "цена", "sku", "вес",
+]);
+
+// Any fact requested from a supplier is unresolved. Its product-specific words
+// must not become marketing assertions until the profile is refreshed with a
+// supplier answer. The identity/use-case words are excluded so asking about the
+// product itself never suppresses its honest name or purpose.
+function openClaimFeatureWords(p: ProductProcurementProfile): string[] {
+  const identity = p.identity ?? ({} as ProductProcurementProfile["identity"]);
+  const procurement = p.procurement ?? ({} as ProductProcurementProfile["procurement"]);
+  const dataQuality = p.dataQuality ?? ({} as ProductProcurementProfile["dataQuality"]);
+  const identityWords = new Set(
+    [
+      identity.coreObject,
+      identity.shortTitle,
+      identity.titleForReport,
+      ...(identity.useCases ?? []),
+    ]
+      .flatMap((value) => clean(value).toLowerCase().replace(/ё/g, "е").split(/[^а-яёa-z0-9]+/i))
+      .filter((word) => word.length >= 4),
+  );
+  const unresolved = [
+    ...(identity.unconfirmedFeatures ?? []),
+    ...(procurement.leadQuestions ?? []),
+    ...(procurement.criticalConfirmations ?? []),
+    ...(procurement.mustAskSupplier ?? []),
+    ...(dataQuality.missingCriticalFields ?? []),
+  ];
+  return uniq(
+    unresolved
+      .flatMap((value) => clean(value).toLowerCase().replace(/ё/g, "е").split(/[^а-яёa-z0-9]+/i))
+      .filter(
+        (word) =>
+          word.length >= 4 &&
+          !OPEN_CLAIM_STOP_WORDS.has(word) &&
+          !identityWords.has(word),
+      ),
+    100,
+  );
+}
+
 /**
  * Projects the profile's fact confidence onto the SEO prose: contains materials to
  * the profile's set, hedges seller-claimed features, and — when the variant is
@@ -5130,6 +5179,7 @@ export function groundSeoToProfile(
   const featureStems = claimed
     .map(featureStemSet)
     .filter((s) => s.size >= 1);
+  const openClaims = openClaimFeatureWords(p);
   // Uniform firewall applied to EVERY description sentence and EVERY bullet: drop
   // effect/safety claims outright, and drop packaging/gift assertions when the
   // variant is unconfirmed. Same rule everywhere — no surface left ungoverned.
@@ -5137,7 +5187,11 @@ export function groundSeoToProfile(
   const dropUnit = (u: string) =>
     SAFETY_CLAIM_RE.test(u) ||
     hasUnsupportedSeoContext(u, p) ||
-    (packagingRisky && PACKAGING_RE.test(u));
+    (packagingRisky && PACKAGING_RE.test(u)) ||
+    // An unresolved question such as "есть ли аккумулятор" is negative
+    // evidence for sales copy: "без аккумулятора" must disappear, not be
+    // softened to "заявлено". Explicitly declared material remains allowed.
+    (!HEDGE_MARKER_RE.test(u) && assertsClaimedFeatureWord(u, openClaims));
   // Hedge a unit if it asserts a seller-claimed feature OR states an unconfirmed
   // physical measurement (power/size/weight). On 1688 a bare "1450 Вт" in prose is
   // an unverified spec — mark it "(заявлено)" so it can't read as a guaranteed fact.
@@ -5558,6 +5612,61 @@ export function buildSeoDraftFromProfile(
     .map((line) => fixGluedFallback(line))
     .join("\n");
   return sanitizeUserFacingText(out);
+}
+
+function markdownSection(source: string, heading: string): string {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(source ?? "").match(
+    new RegExp(`^##\\s+${escaped}\\s*$([\\s\\S]*?)(?=^##\\s+|\\s*$)`, "mi"),
+  );
+  return clean(match?.[1] ?? "");
+}
+
+function markdownList(section: string): string[] {
+  return section
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+    .filter(Boolean);
+}
+
+function markdownKeywords(section: string): string[] {
+  return section
+    .split(/[\n,;]+/)
+    .map((value) => clean(value))
+    .filter(Boolean);
+}
+
+/**
+ * Treat an LLM-written SEO document as a language candidate, never as a trusted
+ * artifact. Extract its editorial choices and send them through the same profile
+ * builder and claim firewall used by every deterministic SEO draft. This keeps the
+ * model's wording while making unresolved supplier questions impossible to sell as
+ * confirmed properties.
+ */
+export function buildGroundedSeoDraftFromCandidate(
+  product: any,
+  candidate: string,
+  opts: { sourceUrl?: string } = {},
+): string {
+  const title = markdownSection(candidate, "Название");
+  const description = markdownSection(candidate, "Описание");
+  const bullets = markdownList(markdownSection(candidate, "Буллеты"));
+  const keywords = markdownKeywords(markdownSection(candidate, "Ключевые слова"));
+  const basePolished = product?.polishedDocs ?? {};
+  const groundedProduct = {
+    ...product,
+    polishedDocs: {
+      ...basePolished,
+      seoProse: {
+        ...(basePolished.seoProse ?? {}),
+        ...(title ? { title } : {}),
+        ...(description ? { description } : {}),
+        ...(bullets.length ? { bullets } : {}),
+        ...(keywords.length ? { keywords } : {}),
+      },
+    },
+  };
+  return buildSeoDraftFromProfile(groundedProduct, opts);
 }
 
 // Soften bald material assertions into declared form. 1688 card material is a

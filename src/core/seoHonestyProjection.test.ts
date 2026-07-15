@@ -85,6 +85,43 @@ describe("groundSeoToProfile — claimed-feature hedging", () => {
   });
 });
 
+describe("groundSeoToProfile — unresolved supplier facts", () => {
+  it("removes claims that are still open supplier questions instead of merely hedging them", () => {
+    const p = {
+      identity: {
+        coreObject: "фен для волос",
+        shortTitle: "фен для волос",
+        titleForReport: "Фен для волос",
+        useCases: ["сушка волос", "укладка"],
+        materials: [],
+        claimedFeatures: [],
+        unconfirmedFeatures: [],
+      },
+      procurement: {
+        mustAskSupplier: [
+          "Есть ли встроенный аккумулятор или товар работает только от сети?",
+          "Есть ли защита от перегрева и как она реализована?",
+          "Какая комплектация выбранного SKU и сколько насадок входит в набор?",
+        ],
+      },
+      dataQuality: { missingCriticalFields: [] },
+      sku: { selectedSkuReliable: true },
+    } as any;
+    const out = groundSeoToProfile(
+      p,
+      "Фен работает без аккумулятора и поддерживает защиту от перегрева.",
+      [
+        "Насадка направляет поток воздуха для укладки.",
+        "Фен для сушки волос после мытья.",
+      ],
+    );
+
+    expect(out.description).not.toMatch(/аккумулятор|защит[а-яё]*\s+от\s+перегрев/i);
+    expect(out.bullets.join("\n")).not.toMatch(/насадк|поток/i);
+    expect(out.bullets.join("\n")).toMatch(/сушки волос/i);
+  });
+});
+
 describe("packaging guard — unconfirmed variant", () => {
   const unreliable = {
     identity: { materials: [], claimedFeatures: [], unconfirmedFeatures: [] },
