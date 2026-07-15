@@ -21,6 +21,7 @@ import {
   applyUniversalGaps,
   type GapEngineContext,
 } from "./gapEngine";
+import { translateQuestionsToCn } from "./cnTranslate";
 
 export type ProductKind =
   | "footwear"
@@ -4160,49 +4161,15 @@ export async function translateSupplierQuestionsRuToCn(
   // Deterministic fallback only if it fully covers every line; otherwise RU-only.
   const det = cleanRu.map(translateQuestionToCn);
   const fallback: string[] = det.every((s) => s.trim().length > 0) ? det : [];
-  const g: any = globalThis as any;
-  const apiKey = g.process?.env?.OPENROUTER_API_KEY;
-  if (!apiKey || typeof g.fetch !== "function" || !g.AbortSignal)
-    return fallback;
-
-  try {
-    const res = await g.fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model:
-          g.process?.env?.CARDZIP_CN_TRANSLATOR_MODEL ||
-          "google/gemini-2.5-flash",
-        max_tokens: 1200,
-        temperature: 0,
-        messages: [
-          {
-            role: "system",
-            content:
-              'Ты переводчик закупочных вопросов RU→CN для 1688. Верни строго JSON: {"questionsCn":[""]}. Не добавляй и не удаляй вопросы. Не используй русский. Десятичные числа пиши через точку: 12.5 元.',
-          },
-          { role: "user", content: JSON.stringify({ questionsRu: cleanRu }) },
-        ],
-      }),
-      signal: g.AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return fallback;
-    const data = (await res.json()) as any;
-    const raw = String(data.choices?.[0]?.message?.content ?? "")
-      .replace(/```json\s*/i, "")
-      .replace(/```/g, "")
-      .trim();
-    const parsed = JSON.parse(raw);
-    const cn = Array.isArray(parsed?.questionsCn)
-      ? parsed.questionsCn.map(String)
-      : [];
-    return validateCnQuestions(cleanRu, cn).ok ? cn : fallback;
-  } catch {
-    return fallback;
-  }
+  // Delegate to the robust multi-model chain (gemini-flash-lite → gemini-2.5-flash →
+  // qwen). The previous SINGLE-model 15s call timed out on the server and silently
+  // dropped the whole CN ("Китайская версия не сформирована") — the flash-lite head
+  // answers in ~2s and the retries cover a slow model. Validate before use; fall back
+  // to the deterministic/RU-only path only if the chain can't deliver.
+  const llm = await translateQuestionsToCn(cleanRu).catch(() => []);
+  if (llm.length === cleanRu.length && validateCnQuestions(cleanRu, llm).ok)
+    return llm;
+  return fallback;
 }
 
 export function validateSupplierQuestions(text: string): {

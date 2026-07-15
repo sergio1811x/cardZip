@@ -266,10 +266,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // No document builder is allowed to re-detect productKind or infer category from raw attributes.
     const supplierQuestionSet = buildSupplierQuestionsFromProfile(product, { sourceUrl: job.input_url });
     const gapPlan = result.gapPlan as { supplierQuestionsRu?: string[] } | null | undefined;
+    // Cap at 10 (CLAUDE.md §10): the CN translator caps at 10, so a 11–12 RU list
+    // would leave RU and CN mismatched in length and silently drop the whole CN.
     const mergedSupplierQuestionsRu = uniqueQuestions([
       ...(supplierQuestionSet.ru ?? []),
       ...((gapPlan?.supplierQuestionsRu ?? []) as string[]),
-    ]).slice(0, 12);
+    ]).slice(0, 10);
     const translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch(() => supplierQuestionSet.cn);
     const formattedSupplierQuestions = formatSupplierQuestionsText(mergedSupplierQuestionsRu, translatedCn);
     const profileForFiles = {
