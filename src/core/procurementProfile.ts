@@ -2985,11 +2985,24 @@ function buildLeadQuestions(
 // the gap engine too, so their slots (variant/price) aren't re-added generically.
 function assembleSupplierQuestions(
   lead: string[],
+  critical: string[],
   domainQuestions: string[],
   ctx: GapEngineContext,
   cap: number,
 ): string[] {
-  const merged = applyUniversalGaps([...lead, ...domainQuestions], ctx);
+  // Critical confirmations come from the structured Product Intelligence role.
+  // They are not another generic bucket: their explicit contract is to carry the
+  // cross-cutting risks of THIS product to every artifact.  Reserving generic
+  // slots before them made a capped supplier chat silently lose a distinct
+  // confirmation (for example, a document or compatibility check) even though it
+  // survived in the buyer brief.  Keep the whole bounded critical spine first;
+  // universal gaps fill only the remaining capacity.
+  const criticalUnique = uniq(critical, cap);
+  const criticalKeys = new Set(criticalUnique.map(questionKey));
+  const merged = applyUniversalGaps(
+    [...lead, ...criticalUnique, ...domainQuestions],
+    ctx,
+  );
   const leadKeys = new Set(lead.map(questionKey));
   // Cargo essentials (packed weight, individual-package dims, carton) are required
   // for any quote and the LLM almost never asks them; material grade likewise. They
@@ -3022,6 +3035,7 @@ function assembleSupplierQuestions(
   const body = merged.filter(
     (q) =>
       !leadKeys.has(questionKey(q)) &&
+      !criticalKeys.has(questionKey(q)) &&
       !(lead.length && /какой\s+именно\s+вариант\/sku\s+соответствует/i.test(q)),
   );
   const cargo = body.filter(isCargo);
@@ -3068,11 +3082,16 @@ function assembleSupplierQuestions(
     ].map(questionKey),
   );
   const rest = body.filter((q) => !reservedKeys.has(questionKey(q)));
-  // Order: hard gate → LLM's top product-specific questions → reserved
-  // slots at the end. Guarantees the basics survive the cap without
-  // pushing the LLM's own priorities (e.g. a knife's HRC) below them.
-  const keptRest = rest.slice(0, Math.max(0, cap - lead.length - reserved.length));
-  const composed = [...lead, ...keptRest, ...reserved];
+  // Order: hard gate → structured critical spine → reserved universal gaps →
+  // remaining product questions.  The critical list is itself capped by the
+  // canonicalizer prompt, so this preserves its complete, model-derived risk
+  // contract without raising the user-facing 10-question limit.
+  const remainingAfterPriority = Math.max(
+    0,
+    cap - lead.length - criticalUnique.length - reserved.length,
+  );
+  const keptRest = rest.slice(0, remainingAfterPriority);
+  const composed = [...lead, ...criticalUnique, ...reserved, ...keptRest];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const q of composed) {
@@ -3318,6 +3337,7 @@ export function buildProductProcurementProfile(
   // basics, so a long LLM list can't push logistics/compliance off the end.
   const mustAskSupplier = assembleSupplierQuestions(
     leadQuestions,
+    criticalConfirmations,
     domainQuestions,
     gapContextFromProfile(baseProfile, product),
     10,
@@ -5620,16 +5640,17 @@ export function buildSeoDraftFromProfile(
     "",
     "## Идеи для инфографики",
     ...p.content.infographicIdeas
-      // Unconfirmed variant → drop slides that sell packaging OR an unconfirmed
-      // feature (bare "бесщёточный двигатель", "функция ионизации") — a slide reads
-      // as an established selling point, so a soft "(по данным поставщика)" isn't
-      // enough; don't propose it as a ready idea until the SKU/feature is confirmed.
+      // A slide is publication copy, not an internal question.  Apply the same
+      // evidence boundary even when a SKU label itself is reliable: a reliable
+      // selection does not confirm its contents, a feature, or a usage scenario.
+      // This is driven entirely by unresolved words from the profile, never by a
+      // product/category allowlist.
       .filter(
         (idea) =>
-          p.sku.selectedSkuReliable ||
-          (!PACKAGING_RE.test(String(idea)) &&
-            !assertsClaimedFeatureWord(String(idea), featureWords) &&
-            !assertsClaimedFeatureWord(String(idea), openClaimFeatureWords(p))),
+          !hasUnsupportedSeoContext(String(idea), p) &&
+          !hasForeignPackagingClaim(String(idea), p) &&
+          !assertsClaimedFeatureWord(String(idea), featureWords) &&
+          !assertsClaimedFeatureWord(String(idea), openClaimFeatureWords(p)),
       )
       .slice(0, 6)
       .map((idea, i) => `${i + 1}. ${idea}`),

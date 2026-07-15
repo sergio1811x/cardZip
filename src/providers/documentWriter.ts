@@ -27,11 +27,12 @@ const CARGO_DOC_DEFAULT_MODELS = [
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 3000;
 const DEFAULT_TEMPERATURE = 0.3;
-// Для SEO держим отдельную цепочку: Grok первым, затем фолбэки.
+// SEO prose is stylistic only; start with the same instruction-following model
+// used for structured procurement roles, then use Chinese-market-aware Qwen and
+// the fast Gemini fallback. The profile projection remains the factual authority.
 const SEO_PROSE_DEFAULT_MODELS = [
-  "x-ai/grok-4.3",
+  "openai/gpt-5-mini",
   "qwen/qwen3.7-plus",
-  "google/gemini-2.5-flash",
   "google/gemini-3.1-flash-lite",
 ];
 

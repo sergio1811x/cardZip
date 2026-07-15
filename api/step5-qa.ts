@@ -18,6 +18,7 @@ import { createStepProgress } from '../src/core/progress';
 import { runQaGate } from '../src/providers/expertQaGate';
 import { runAutoFix } from '../src/providers/autoFix';
 import { runConsistencyAuditor } from '../src/providers/consistencyAuditor';
+import { writeSeoProse } from '../src/providers/documentWriter';
 import { buildProductFactSheet } from '../src/core/factSheet';
 import { buildQualityMetricsPayload, summarizeQualityMetrics } from '../src/core/qualityMetrics';
 import type { ProductWithContent } from '../src/types';
@@ -215,6 +216,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let briefText = buildBuyerBriefFromProfile(product, { sourceUrl: job.input_url });
     let cargoText = buildCargoBriefFromProfile(product, { sourceUrl: job.input_url });
     let sampleChecklistText = buildSampleChecklistFromProfile(product, { sourceUrl: job.input_url });
+    // SEO prose is a stylistic candidate only.  It receives the already-built
+    // canonical profile, cannot select facts, and buildSeoDraftFromProfile applies
+    // the same evidence projection afterwards.  On any model failure the
+    // deterministic draft is kept, so this call can improve readability but never
+    // becomes a second fact-authoring path.
+    const seoCandidate = await writeSeoProse({
+      titleRu: profileForFiles.identity.titleForSeo || profileForFiles.identity.titleForReport,
+      coreObject: profileForFiles.identity.coreObject,
+      categoryType: profileForFiles.identity.categoryType,
+      useCases: profileForFiles.identity.useCases,
+      materials: profileForFiles.identity.materials,
+      claimedFeatures: [
+        ...profileForFiles.identity.claimedFeatures,
+        ...profileForFiles.identity.unconfirmedFeatures,
+      ],
+      skuReliable: profileForFiles.sku.selectedSkuReliable,
+      // A marketplace listing is not supplier confirmation.  Explicitly keep the
+      // factual budget empty until evidence carries a confirmed status.
+      confirmedAttributes: [],
+      forbidden: profileForFiles.content.seoForbiddenClaims,
+    }).catch((e) => {
+      console.warn('[step5] SEO stylistic candidate failed:', e instanceof Error ? e.message : e);
+      return null;
+    });
+    if (seoCandidate) {
+      product.polishedDocs = {
+        ...(product.polishedDocs ?? {}),
+        seoProse: seoCandidate,
+      };
+    }
     let seoText = buildSeoDraftFromProfile(product, { sourceUrl: job.input_url });
     let readmeText = buildReadmeFromProfile(product, { sourceUrl: job.input_url });
     let infographicText = '';

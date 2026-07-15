@@ -7,7 +7,7 @@
     "build": "npm run clean && tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --config vitest.config.ts",
-    "clean": "rm -rf dist",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "test:quality": "vitest run src/core/cardzipQuality.test.ts src/core/procurementQuality.test.ts src/core/electricalQuality.test.ts src/core/reportRenderingQuality.test.ts src/core/textQuality.test.ts src/core/docValueQuality.test.ts src/core/knifeQuality.test.ts src/core/generatedDocQuality.test.ts --config vitest.config.ts"
   },
   "dependencies": {

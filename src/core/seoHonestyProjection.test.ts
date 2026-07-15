@@ -4,6 +4,7 @@ import {
   stripUnconfirmedPackaging,
   buildStructuredTitle,
   assertsClaimedFeatureWord,
+  buildSeoDraftFromProfile,
 } from "./procurementProfile";
 
 // The honesty projection is the architectural guarantee that SEO copy stays a
@@ -201,6 +202,38 @@ describe("packaging guard — unconfirmed variant", () => {
     );
     expect(out.description).not.toMatch(/футляр|подарочн/i);
     expect(out.description).toMatch(/фен для сушки/i);
+  });
+});
+
+describe("infographic ideas use the same evidence boundary as SEO copy", () => {
+  it("drops unresolved kit, handling, and usage ideas even for a reliable SKU", () => {
+    const product = {
+      titleRu: "Товар для ухода",
+      priceYuan: 50,
+      selectedSkuName: "основной вариант",
+      skus: [{ name: "основной вариант", priceYuan: 50 }],
+      productContext: {
+        procurementProfileDraft: {
+          identity: { coreObject: "товар для ухода" },
+          domainRules: {
+            buyerMustCheck: [
+              "Подтвердите точную комплектацию выбранного SKU и наличие кейса.",
+              "Проверьте удобство удержания товара.",
+              "Уточните сценарии хранения и перевозки.",
+            ],
+            infographicIdeas: [
+              "Комплектация выбранного SKU",
+              "Кейс и товар в одном наборе",
+              "Эргономика удержания",
+              "Сценарий хранения и перевозки",
+            ],
+          },
+        },
+      },
+    };
+    const seo = buildSeoDraftFromProfile(product).toLowerCase();
+    const ideas = seo.slice(seo.indexOf("## идеи для инфографики"));
+    expect(ideas).not.toMatch(/комплектац|кейс|эргономик|хранени|перевозк/);
   });
 });
 

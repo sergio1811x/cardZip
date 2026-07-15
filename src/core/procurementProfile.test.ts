@@ -398,6 +398,34 @@ describe('criticalConfirmations — one domain spine fanned into every surface',
     expect(buyer).toMatch(/CE, RoHS, EAC|аккумулятор|шнур/i);
   });
 
+  it('keeps every bounded critical confirmation in the capped supplier chat', () => {
+    const product = baseProduct({
+      titleRu: 'Устройство с вариантами',
+      skus: [{ name: 'вариант A', priceYuan: 50 }, { name: 'вариант B', priceYuan: 55 }],
+      productContext: {
+        procurementProfileDraft: {
+          domainRules: {
+            criticalConfirmations: [
+              'Какой стандарт подключения у выбранного SKU?',
+              'Какие разрешительные документы и маркировки доступны для выбранного SKU?',
+              'Подтвердите точную комплектацию выбранного SKU.',
+              'Какие параметры питания указаны на шильдике?',
+              'Есть ли встроенный источник питания?',
+              'Какой основной материал корпуса?',
+              'Как реализована защита при работе?',
+              'Каковы вес и габариты индивидуальной упаковки?',
+              'Каковы вес, габариты и количество в транспортной коробке?',
+            ],
+          },
+        },
+      },
+    });
+    const questions = buildSupplierQuestionsFromProfile(product).ru;
+    expect(questions).toHaveLength(10);
+    expect(questions.join('\n')).toMatch(/стандарт подключения/i);
+    expect(questions.join('\n')).toMatch(/документы и маркировки/i);
+  });
+
   it('keeps critical confirmations in the main report and cargo even when the supplier list is capped', () => {
     const product = dryer();
     const main = buildMainReportFromProfile(product);

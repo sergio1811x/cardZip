@@ -17,7 +17,7 @@ The MVP is a procurement assistant: a Chinese marketplace link becomes a usable 
 
 ## Package quality architecture
 
-Step 5 now uses a package-level LLM editor after the factual profile and deterministic baseline are built. The editor produces all five procurement artifacts from the same profile; an independent LLM reviewer scores each artifact and may request one bounded revision. Existing deterministic validators remain the final factual-safety firewall, and the baseline remains the fallback when the LLM is unavailable.
+Step 5 builds all procurement artifacts as deterministic projections of the factual profile. Existing validators remain the final factual-safety firewall and the deterministic baseline remains available when an optional stylistic model is unavailable.
 
 Downloads must use the reviewed `generatedFiles` saved by Step 5. Rebuilding documents from the profile at download time loses the editorial pass and is only a fallback for legacy or partial results. SEO uses structured JSON output, evidence-first copy, and no generic filler padding.
 
@@ -27,7 +27,9 @@ Cargo and sample documents are also profile projections, not free-form LLM artif
 
 The profile's `criticalConfirmations` are a cross-artifact spine. A package editor cannot replace the profile-derived supplier questions or buyer brief; the main report, buyer brief and cargo brief preserve applicable critical confirmations even when a short supplier chat is capped. SEO treats every unresolved supplier, sample, or cargo check as negative evidence for publication across prose, keywords, and infographic ideas.
 
-Step 5 does not run secondary fact-authoring generators or a package rewriter after Product Intelligence: their lossy input could overwrite the canonical profile with incompatible questions, cargo detail, or SEO claims. User-facing artifacts are projections of the canonical structured profile. Cargo prioritizes applicable critical confirmations before generic logistics lines; inferred use cases are blocked from SEO until confirmed.
+Step 5 does not run secondary fact-authoring generators or a package rewriter after Product Intelligence: their lossy input could overwrite the canonical profile with incompatible questions, cargo detail, or SEO claims. An optional SEO prose writer may receive only the canonical profile as a stylistic candidate; its output is always reprojected and may not create facts. User-facing artifacts remain projections of the canonical structured profile. Cargo prioritizes applicable critical confirmations before generic logistics lines; inferred use cases are blocked from SEO until confirmed.
+
+Supplier questions keep the 10-question bilingual limit. The model-produced bounded `criticalConfirmations` spine is ordered immediately after SKU hard gates, before generic gap slots, so no cross-cutting confirmation is silently displaced by a generic question. Infographic ideas use the same unresolved-evidence firewall as title, prose, bullets, and keywords; a selected SKU label alone never confirms a kit, capability, scenario, or ergonomic claim.
 
 For the structured classification, SKU-resolution, and policy-guard roles, the fallback order is GPT-5 mini, Qwen 3.7 Plus, then Gemini 3.1 Flash-Lite. These stages accept the first valid JSON response, so the strongest instruction-following models must be tried before the low-latency fallback. The multimodal canonicalizer keeps GPT-5.4 mini first, followed by Gemini 3.1 Flash-Lite and Gemini 2.5 Flash.
 
