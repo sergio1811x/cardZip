@@ -4532,18 +4532,33 @@ function cargoRequestSlot(line: string): string | null {
 }
 
 function dedupCargoRequestLines(lines: string[]): string[] {
-  const seenSlots = new Set<string>();
   const seenLines = new Set<string>();
+  const slotStems = new Map<string, Set<string>[]>();
   const out: string[] = [];
+  const overlap = (a: Set<string>, b: Set<string>): number => {
+    if (!a.size || !b.size) return 0;
+    let inter = 0;
+    for (const t of a) if (b.has(t)) inter += 1;
+    return inter / Math.min(a.size, b.size);
+  };
   for (const raw of lines) {
     const line = clean(raw);
     if (!line) continue;
     const key = questionKey(line);
     if (!key || seenLines.has(key)) continue;
     const slot = cargoRequestSlot(line);
-    if (slot && seenSlots.has(slot)) continue;
+    const stems = bulletStemSet(line);
+    if (slot) {
+      // Sharing a slot is NOT enough to drop a line: working voltage, plug standard
+      // and the nameplate photo all map to "electrical" yet ask different things —
+      // one-per-slot silently thinned the cargo brief down to a stub. Collapse only a
+      // genuine near-duplicate (the generic seed "вес одной единицы с упаковкой" vs
+      // the LLM's fuller weight question).
+      const kept = slotStems.get(slot) ?? [];
+      if (kept.some((k) => overlap(stems, k) >= 0.6)) continue;
+      slotStems.set(slot, [...kept, stems]);
+    }
     seenLines.add(key);
-    if (slot) seenSlots.add(slot);
     out.push(line);
     if (out.length >= 18) break;
   }
