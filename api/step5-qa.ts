@@ -272,8 +272,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...(supplierQuestionSet.ru ?? []),
       ...((gapPlan?.supplierQuestionsRu ?? []) as string[]),
     ]).slice(0, 10);
-    const translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch(() => supplierQuestionSet.cn);
+    const translatedCn = await translateSupplierQuestionsRuToCn(mergedSupplierQuestionsRu).catch((e) => {
+      console.warn('[cnQuestions] step5 translator threw:', e instanceof Error ? e.message : e);
+      return supplierQuestionSet.cn;
+    });
     const formattedSupplierQuestions = formatSupplierQuestionsText(mergedSupplierQuestionsRu, translatedCn);
+    // Pinpoints where CN dies: a length mismatch here (merged RU vs translated CN)
+    // silently drops the whole Chinese version.
+    console.log(
+      `[cnQuestions] step5: mergedRu=${mergedSupplierQuestionsRu.length} cn=${translatedCn.length} cnValid=${formattedSupplierQuestions.cnValid} setCn=${(supplierQuestionSet.cn ?? []).length} setCnValid=${supplierQuestionSet.cnValid}`,
+    );
     const profileForFiles = {
       ...profileValidation.fixedProfile,
       supplierQuestionsCn: formattedSupplierQuestions.cn,

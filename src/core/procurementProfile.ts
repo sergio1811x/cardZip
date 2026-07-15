@@ -4118,6 +4118,12 @@ export function formatSupplierQuestionsText(
 ): SupplierQuestionsProfileResult {
   const cleanRu = uniq(ru, 10).slice(0, 10);
   const cnCheck = validateCnQuestions(cleanRu, cn);
+  // This is the exact gate that prints "Китайская версия не сформирована" into the
+  // shipped file — log WHY, otherwise the live hard-fail is undiagnosable.
+  if (!cnCheck.ok)
+    console.warn(
+      `[cnQuestions] format: CN dropped — ${cnCheck.errors.join("; ")} (ru=${cleanRu.length} cn=${(cn ?? []).length})`,
+    );
   const lines = [
     "# Вопросы поставщику",
     "",
@@ -4166,10 +4172,28 @@ export async function translateSupplierQuestionsRuToCn(
   // dropped the whole CN ("Китайская версия не сформирована") — the flash-lite head
   // answers in ~2s and the retries cover a slow model. Validate before use; fall back
   // to the deterministic/RU-only path only if the chain can't deliver.
-  const llm = await translateQuestionsToCn(cleanRu).catch(() => []);
-  if (llm.length === cleanRu.length && validateCnQuestions(cleanRu, llm).ok)
-    return llm;
-  return fallback;
+  //
+  // Every exit is LOGGED: this path used to fail completely silently, which made the
+  // live CN hard-fail undiagnosable from the server logs.
+  const llm = await translateQuestionsToCn(cleanRu).catch((e) => {
+    console.warn("[cnQuestions] chain threw:", (e as Error)?.message);
+    return [] as string[];
+  });
+  if (llm.length !== cleanRu.length) {
+    console.warn(
+      `[cnQuestions] chain returned ${llm.length} lines for ${cleanRu.length} RU questions → fallback(${fallback.length})`,
+    );
+    return fallback;
+  }
+  const v = validateCnQuestions(cleanRu, llm);
+  if (!v.ok) {
+    console.warn(
+      `[cnQuestions] validator rejected LLM CN: ${v.errors.join("; ")} → fallback(${fallback.length})`,
+    );
+    return fallback;
+  }
+  console.log(`[cnQuestions] ok: ${llm.length} CN lines via LLM chain`);
+  return llm;
 }
 
 export function validateSupplierQuestions(text: string): {
